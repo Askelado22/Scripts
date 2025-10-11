@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.0
+// @version      1.0.1
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -21,9 +21,18 @@
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
     const LIST_LEAF_MARKER_COLOR = '#8a8a8a';
+    const LOG_PREFIX = '[GGSEL Explorer]';
 
     // --- Вспомогательные функции ---
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // --- Утилита логирования ---
+    const logger = {
+        debug: (...args) => console.debug(LOG_PREFIX, ...args),
+        info: (...args) => console.info(LOG_PREFIX, ...args),
+        warn: (...args) => console.warn(LOG_PREFIX, ...args),
+        error: (...args) => console.error(LOG_PREFIX, ...args),
+    };
 
     // --- Класс для определения типа запроса ---
     class QueryParser {
@@ -78,6 +87,7 @@
                     this._next();
                 });
                 this.queue.push(wrappedTask);
+                logger.debug('Постановка запроса в очередь', { active: this.activeCount, queued: this.queue.length });
                 this._next();
             });
         }
@@ -88,6 +98,7 @@
             const nextTask = this.queue.shift();
             if (!nextTask) return;
             this.activeCount++;
+            logger.debug('Старт задачи из очереди', { active: this.activeCount, queued: this.queue.length });
             nextTask();
         }
 
@@ -98,9 +109,13 @@
 
         async _fetchWithRetry(url, options, retries) {
             for (let attempt = 0; attempt <= retries; attempt++) {
+                logger.debug('Выполнение запроса', { url, attempt });
                 try {
-                    return await this._fetchWithTimeout(url, options);
+                    const result = await this._fetchWithTimeout(url, options);
+                    logger.debug('Успешный ответ', { url, attempt });
+                    return result;
                 } catch (err) {
+                    logger.warn('Ошибка запроса', { url, attempt, error: err && err.message });
                     if (attempt === retries) throw err;
                     await sleep(RETRY_DELAY_MS * (attempt + 1));
                 }
@@ -122,8 +137,10 @@
                 }).then(resolve).catch(err => {
                     clearTimeout(timeoutId);
                     if (typeof GM_xmlhttpRequest === 'function') {
+                        logger.warn('Переход на GM_xmlhttpRequest', { url, error: err && err.message });
                         this._fallbackRequest(url, options).then(resolve).catch(reject);
                     } else {
+                        logger.error('Запрос не удался', { url, error: err && err.message });
                         reject(err);
                     }
                 });
@@ -195,32 +212,61 @@
         parseListPage(html) {
             const doc = domParser.parseFromString(html, 'text/html');
             const tables = Array.from(doc.querySelectorAll('table'));
-            let targetTable = null;
-            for (const table of tables) {
-                const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim().toLowerCase());
-                if (headers.includes('id') && headers.some(text => text.includes('название') || text.includes('путь'))) {
-                    targetTable = table;
-                    break;
-                }
+            let targetTable = doc.querySelector('table#index_table_categories');
+            if (!targetTable) {
+                targetTable = tables.find(table => {
+                    const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim().toLowerCase());
+                    if (!headers.includes('id')) return false;
+                    const breadcrumbColumn = headers.find(text => text.includes('путь') || text.includes('название') || text.includes('категория'));
+                    if (!breadcrumbColumn) return false;
+                    return Array.from(table.querySelectorAll('tbody tr')).some(tr => tr.querySelectorAll('a[href*="/admin/categories/"]').length >= 2);
+                }) || null;
             }
-            if (!targetTable) return { items: [], nextPage: null };
+            if (!targetTable) {
+                logger.warn('Таблица со списком категорий не найдена');
+                return { items: [], nextPage: null };
+            }
 
             const rows = Array.from(targetTable.querySelectorAll('tbody tr'));
             const items = [];
+            logger.debug('Найдено строк в таблице', rows.length);
             for (const tr of rows) {
                 const cells = Array.from(tr.children);
                 if (cells.length < 2) continue;
                 const idLink = cells[0].querySelector('a[href*="/admin/categories/"]');
                 if (!idLink) continue;
                 const id = idLink.textContent.trim();
-                const nameCell = cells[cells.length - 2] || cells[cells.length - 1];
-                const pathCell = cells.find(td => td.querySelectorAll('a[href*="/admin/categories/"]').length >= 2) || nameCell;
+                const nameCell = cells.find((td, idx) => idx > 0 && td.querySelector('a[href*="/admin/categories/"]')) || cells[cells.length - 2] || cells[cells.length - 1] || cells[1] || cells[0];
+                const pathCellInfo = cells.slice(1).reduce((best, cell) => {
+                    const anchorCount = cell.querySelectorAll('a[href*="/admin/categories/"]').length;
+                    if (anchorCount > (best ? best.count : 0)) {
+                        return { cell, count: anchorCount };
+                    }
+                    return best;
+                }, null);
+                const pathCell = pathCellInfo ? pathCellInfo.cell : nameCell;
                 const pathAnchors = Array.from(pathCell.querySelectorAll('a[href*="/admin/categories/"]'));
-                const pathDepth = pathAnchors.length;
-                if (pathDepth !== 3) continue;
-                const name = pathAnchors[pathAnchors.length - 1].textContent.trim() || nameCell.textContent.trim();
+                let breadcrumbNames = pathAnchors.map(a => a.textContent.trim()).filter(Boolean);
+                let pathDepth = breadcrumbNames.length;
+                if (!pathDepth) {
+                    const rawText = pathCell.textContent || '';
+                    const parts = rawText.split(/[›>]/).map(part => part.trim()).filter(Boolean);
+                    if (parts.length) {
+                        breadcrumbNames = parts;
+                        pathDepth = parts.length;
+                    }
+                }
+                if (pathDepth !== 3) {
+                    logger.debug('Пропуск строки из-за глубины пути', { id, pathDepth, path: breadcrumbNames });
+                    continue;
+                }
+                const name = breadcrumbNames[breadcrumbNames.length - 1] || (nameCell.textContent || '').trim();
                 const href = idLink.getAttribute('href');
-                items.push({ id, name, pathDepth, href, pathAnchors: pathAnchors.map(a => a.textContent.trim()) });
+                items.push({ id, name, pathDepth, href, pathAnchors: breadcrumbNames });
+            }
+            logger.info('Распарсено элементов', items.length);
+            if (!items.length && rows.length) {
+                logger.warn('После фильтрации не осталось строк', { всего: rows.length });
             }
 
             const pagination = doc.querySelector('ul.pagination');
@@ -236,6 +282,7 @@
                 });
                 if (candidates.length) {
                     nextPage = new URL(candidates[0].getAttribute('href'), location.origin).toString();
+                    logger.debug('Обнаружена ссылка на следующую страницу', { nextPage });
                 }
             }
 
@@ -267,6 +314,7 @@
                     href: idLink ? idLink.getAttribute('href') : null,
                 };
             }).filter(item => item.id);
+            logger.debug('Распарсены дочерние категории', { count: items.length });
             return items;
         },
 
@@ -307,6 +355,7 @@
                 const statusRow = Array.from(doc.querySelectorAll('td')).find(td => td.textContent.trim().toLowerCase().includes('active'));
                 if (statusRow) stats.status = statusRow.textContent.trim();
             }
+            logger.debug('Распарсена карточка категории', stats);
             return stats;
         }
     };
@@ -567,6 +616,7 @@
                 this.render();
                 return;
             }
+            logger.info('Новый поиск', { type: info.type, value: info.value });
             SearchState.queryInfo = info;
             SearchState.results = [];
             SearchState.nextPage = null;
@@ -590,12 +640,20 @@
             const gathered = [];
             let nextPageUrl = null;
 
+            logger.info('Запуск поиска страниц', { loadMore, startUrl: url, alreadyFetched: SearchState.pageCount });
+
             try {
                 while (url && pagesFetched < maxPages) {
                     const cached = pageCache.get(url);
+                    if (cached) {
+                        logger.debug('Используем кэш страницы', { url });
+                    } else {
+                        logger.info('Загрузка страницы поиска', { url });
+                    }
                     const html = cached ? cached : await fetcher.fetchText(url);
                     if (!cached) pageCache.set(url, html);
                     const { items, nextPage } = Parser.parseListPage(html);
+                    logger.info('Получено элементов со страницы', { url, count: items.length, nextPage });
                     for (const item of items) {
                         if (!nodesMap.has(item.id)) {
                             const node = new CategoryNode(item);
@@ -613,8 +671,16 @@
                 SearchState.loading = false;
                 this.render();
                 this._prefetchVisible();
+                logger.info('Обновление результатов', {
+                    total: SearchState.results.length,
+                    nextPage: SearchState.nextPage,
+                    pagesFetched,
+                });
+                if (!SearchState.results.length) {
+                    logger.warn('Поиск не дал результатов', { query: SearchState.queryInfo, pagesFetched: SearchState.pageCount });
+                }
             } catch (err) {
-                console.error('search error', err);
+                logger.error('Ошибка поиска', { message: err && err.message, stack: err && err.stack });
                 SearchState.error = 'Не удалось загрузить результаты';
                 SearchState.loading = false;
                 this.render();
@@ -652,6 +718,7 @@
                 loadMore.className = 'load-more';
                 loadMore.textContent = LOAD_MORE_LABEL;
                 loadMore.addEventListener('click', () => {
+                    logger.info('Запрос догрузки результатов', { nextPage: SearchState.nextPage });
                     SearchState.loading = true;
                     this.render();
                     this._performSearch(true);
@@ -721,7 +788,9 @@
                 node.loading = true;
                 this.render();
                 try {
+                    logger.info('Загрузка дочерних категорий', { id: node.id });
                     const children = await loadChildren(node.id);
+                    logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
                     node.children = children.map(childData => {
                         if (nodesMap.has(childData.id)) {
                             return nodesMap.get(childData.id);
@@ -737,7 +806,7 @@
                         node.expanded = false;
                     }
                 } catch (err) {
-                    console.error('children load error', err);
+                    logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
                     node.error = 'Не удалось загрузить дочерние';
                     node.loading = false;
                 }
@@ -745,6 +814,7 @@
                 this._prefetchVisible();
             } else {
                 node.expanded = !node.expanded;
+                logger.debug('Переключение узла', { id: node.id, expanded: node.expanded });
                 this.render();
             }
         }
@@ -752,11 +822,13 @@
         _onRowHoverStart(event, node, row) {
             this._onRowHoverEnd();
             this.currentHoverRow = row;
+            logger.debug('Наведение на строку', { id: node.id });
             this.hoverTimer = setTimeout(async () => {
                 try {
                     const stats = await loadStats(node.id);
                     this._showPopover(row, stats);
                 } catch (err) {
+                    logger.error('Ошибка загрузки статистики', { id: node.id, error: err && err.message });
                     this._showPopover(row, { error: 'Не удалось получить данные' });
                 }
             }, HOVER_DELAY_MS);
@@ -805,6 +877,7 @@
             pop.style.top = `${rect.top + window.scrollY}px`;
             pop.style.left = `${rect.right + 8 + window.scrollX}px`;
             this.currentPopover = pop;
+            logger.debug('Показ поповера', { id: stats.id });
         }
 
         _prefetchVisible() {
@@ -825,12 +898,22 @@
     // --- Загрузка дочерних категорий ---
     async function loadChildren(categoryId) {
         const cached = childrenCache.get(categoryId);
-        if (cached) return cached;
+        if (cached) {
+            logger.debug('Дочерние категории из кэша', { id: categoryId });
+            return cached;
+        }
+        logger.debug('Запрос на загрузку дочерних категорий', { id: categoryId });
         const url = `/admin/categories/${categoryId}`;
         const cachedPage = pageCache.get(url);
+        if (cachedPage) {
+            logger.debug('Карточка категории из кэша', { url });
+        } else {
+            logger.info('Загрузка карточки категории', { url });
+        }
         const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
         if (!cachedPage) pageCache.set(url, html);
         const parsed = Parser.parseChildren(html);
+        logger.debug('Распарсено дочерних категорий', { id: categoryId, count: parsed.length });
         childrenCache.set(categoryId, parsed);
         return parsed;
     }
@@ -838,13 +921,23 @@
     // --- Загрузка статистики категории ---
     async function loadStats(categoryId) {
         const cached = statsCache.get(categoryId);
-        if (cached) return cached;
+        if (cached) {
+            logger.debug('Статистика из кэша', { id: categoryId });
+            return cached;
+        }
+        logger.debug('Запрос статистики категории', { id: categoryId });
         const url = `/admin/categories/${categoryId}`;
         const cachedPage = pageCache.get(url);
+        if (cachedPage) {
+            logger.debug('Карточка для статистики из кэша', { url });
+        } else {
+            logger.info('Загрузка карточки для статистики', { url });
+        }
         const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
         if (!cachedPage) pageCache.set(url, html);
         const stats = Parser.parseStats(html);
         stats.id = stats.id || categoryId;
+        logger.debug('Распарсена статистика', stats);
         statsCache.set(categoryId, stats);
         return stats;
     }
