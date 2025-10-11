@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.1.0
+// @version      1.1.1
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -847,6 +847,10 @@
                 gap: 2px;
                 scrollbar-width: thin;
                 scrollbar-color: rgba(59,130,246,.22) transparent;
+                overscroll-behavior: contain;
+                -webkit-overflow-scrolling: touch;
+                user-select: none;
+                -webkit-user-select: none;
             }
             .results::-webkit-scrollbar { width: 8px; }
             .results::-webkit-scrollbar-thumb {
@@ -870,24 +874,26 @@
                 transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
                 min-height: 32px;
                 overflow: hidden;
+                user-select: none;
+                -webkit-user-select: none;
             }
             .row:hover,
             .row.active {
-                background: rgba(59,130,246,.14);
-                border-color: rgba(59,130,246,.35);
-                box-shadow: inset 0 0 0 1px rgba(59,130,246,.18);
+                background: rgba(244,63,94,.12);
+                border-color: rgba(244,63,94,.32);
+                box-shadow: inset 0 0 0 1px rgba(244,63,94,.2);
                 color: var(--text);
             }
             .row .digi-badge {
                 flex: 0 0 auto;
-                font-weight: 600;
-                font-size: 11px;
-                letter-spacing: .02em;
-                color: #cfe0ff;
-                background: rgba(59,130,246,.16);
-                border: 1px solid rgba(59,130,246,.38);
-                border-radius: 999px;
-                padding: 2px 8px;
+                font-weight: 650;
+                font-size: 12px;
+                letter-spacing: .01em;
+                color: #38bdf8;
+                background: rgba(14,165,233,.18);
+                border: 1px solid rgba(14,165,233,.35);
+                border-radius: 8px;
+                padding: 4px 12px;
                 white-space: nowrap;
             }
             .row .name {
@@ -912,9 +918,9 @@
                 cursor: default;
             }
             .row.leaf .digi-badge {
-                background: rgba(59,130,246,.28);
-                border-color: rgba(59,130,246,.55);
-                color: #e8f1ff;
+                background: rgba(14,165,233,.26);
+                border-color: rgba(14,165,233,.45);
+                color: #e0f2ff;
             }
             .row.leaf:hover {
                 background: ${LIST_LEAF_HIGHLIGHT_BG};
@@ -925,6 +931,11 @@
                 background: rgba(244,63,94,.22);
                 border-color: rgba(244,63,94,.45);
                 box-shadow: inset 0 0 0 1px rgba(244,63,94,.3);
+            }
+            .row.gce-selected:hover {
+                background: rgba(244,63,94,.28);
+                border-color: rgba(244,63,94,.55);
+                box-shadow: inset 0 0 0 1px rgba(244,63,94,.35);
             }
             .row.gce-selected .digi-badge {
                 background: rgba(244,63,94,.2);
@@ -1119,7 +1130,56 @@
             this.copyDigiBtn.addEventListener('click', () => this._copySelectedDigis());
             this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
             window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
+            this._setupScrollIsolation();
             this.render();
+        }
+
+        _setupScrollIsolation() {
+            const container = this.resultsContainer;
+            if (!container) return;
+            const lineMode = typeof WheelEvent !== 'undefined' ? WheelEvent.DOM_DELTA_LINE : 1;
+            const pageMode = typeof WheelEvent !== 'undefined' ? WheelEvent.DOM_DELTA_PAGE : 2;
+            const toPixels = (delta, mode) => {
+                if (mode === lineMode) return delta * 16;
+                if (mode === pageMode) return delta * container.clientHeight;
+                return delta;
+            };
+            const onWheel = (event) => {
+                event.stopPropagation();
+                if (event.cancelable) {
+                    event.preventDefault();
+                }
+                const deltaY = toPixels(event.deltaY, event.deltaMode);
+                const deltaX = toPixels(event.deltaX, event.deltaMode);
+                if (deltaY) container.scrollTop += deltaY;
+                if (deltaX) container.scrollLeft += deltaX;
+            };
+            container.addEventListener('wheel', onWheel, { passive: false });
+
+            let lastTouchY = null;
+            let lastTouchX = null;
+            container.addEventListener('touchstart', (event) => {
+                if (event.touches.length === 1) {
+                    const touch = event.touches[0];
+                    lastTouchY = touch.clientY;
+                    lastTouchX = touch.clientX;
+                }
+            }, { passive: true });
+            container.addEventListener('touchmove', (event) => {
+                if (event.touches.length === 1) {
+                    const touch = event.touches[0];
+                    const deltaY = lastTouchY != null ? lastTouchY - touch.clientY : 0;
+                    const deltaX = lastTouchX != null ? lastTouchX - touch.clientX : 0;
+                    lastTouchY = touch.clientY;
+                    lastTouchX = touch.clientX;
+                    container.scrollTop += deltaY;
+                    container.scrollLeft += deltaX;
+                    event.stopPropagation();
+                    if (event.cancelable) {
+                        event.preventDefault();
+                    }
+                }
+            }, { passive: false });
         }
 
         _onInput() {
