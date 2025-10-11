@@ -26,7 +26,7 @@
     phase: 'idle',
     market: 'RU',
     gameNameRu: '',
-    gameNameEn: '',
+    cleanGameName: '',
     useNick: false,
     useRegion: false,
     offerId: null,
@@ -93,6 +93,16 @@
     el.blur();
   }
 
+  function setReactValueNoBlur(el, value){
+    if(!el) return;
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, value); else el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles:true }));
+    el.dispatchEvent(new Event('change', { bubbles:true }));
+    el.focus();
+  }
+
   function clickEl(el){
     if(!el) return;
     try{ if(typeof el.click==='function'){ el.click(); return; } }catch{}
@@ -133,14 +143,227 @@
     catch { navigator.clipboard?.writeText(text).catch(()=>{}); }
   }
 
+  const TITLE_CLEANUP_PATTERNS = [
+    /\bdeluxe edition\b/gi,
+    /\bdigital deluxe\b/gi,
+    /\bultimate edition\b/gi,
+    /\bcomplete edition\b/gi,
+    /\bdefinitive edition\b/gi,
+    /\bcollector'?s edition\b/gi,
+    /\bstandard edition\b/gi,
+    /\bgold edition\b/gi,
+    /\bplatinum edition\b/gi,
+    /\bpremium edition\b/gi,
+    /\banniversary edition\b/gi,
+    /\bgame of the year\b/gi,
+    /\bgoty edition\b/gi,
+    /\bиздание\b/gi,
+    /\bколлекционное издание\b/gi,
+    /\bделюкс\b/gi,
+    /\bультимейт\b/gi,
+    /\bполное издание\b/gi,
+    /\bцифровое издание\b/gi,
+    /\bпремиум издание\b/gi
+  ];
+
+  function sanitizeGameTitle(raw){
+    if(!raw) return '';
+    let title = String(raw);
+    TITLE_CLEANUP_PATTERNS.forEach(re => { title = title.replace(re, ' '); });
+    title = title.replace(/\(([^)]*(edition|издание|deluxe|ultimate)[^)]*)\)/gi, ' ');
+    title = title.replace(/[-–—_:]+/g, ' ');
+    title = title.replace(/\s{2,}/g, ' ');
+    return title.trim();
+  }
+
+  function normalizeForCompare(str){
+    return (str||'').toString().toLowerCase().replace(/[^a-z0-9а-яё]+/gi, ' ').replace(/\s+/g,'').trim();
+  }
+
+  function levenshtein(a, b){
+    const s = a || '';
+    const t = b || '';
+    const m = s.length;
+    const n = t.length;
+    if (!m) return n;
+    if (!n) return m;
+    const dp = new Array(n + 1);
+    for (let j = 0; j <= n; j++) dp[j] = j;
+    for (let i = 1; i <= m; i++){
+      let prev = dp[0];
+      dp[0] = i;
+      for (let j = 1; j <= n; j++){
+        const tmp = dp[j];
+        const cost = s[i-1] === t[j-1] ? 0 : 1;
+        dp[j] = Math.min(
+          dp[j] + 1,
+          dp[j-1] + 1,
+          prev + cost
+        );
+        prev = tmp;
+      }
+    }
+    return dp[n];
+  }
+
+  function similarityRatio(a, b){
+    const na = normalizeForCompare(a);
+    const nb = normalizeForCompare(b);
+    if (!na || !nb) return 0;
+    if (na === nb) return 1;
+    const dist = levenshtein(na, nb);
+    return 1 - dist / Math.max(na.length, nb.length);
+  }
+
+  function findCategoryInput(){
+    const selectors = [
+      'input[placeholder="Категория размещения"]',
+      '.style_input__IXltP input.ant-input',
+      '.style_input__IXltP input'
+    ];
+    for (const sel of selectors){
+      const el = document.querySelector(sel);
+      if (el && isVisible(el)) return el;
+    }
+    return null;
+  }
+
+  function findCategoryDropdown(){
+    const nodes = [...document.querySelectorAll('div')];
+    for (const node of nodes){
+      const cls = node.className||'';
+      if (!/dropdown/i.test(cls)) continue;
+      if (!node.querySelector('ul')) continue;
+      if (!isVisible(node)) continue;
+      return node;
+    }
+    return null;
+  }
+
+  async function waitForCategoryDropdown(timeout=4000){
+    return await waitFor(()=>findCategoryDropdown(), timeout);
+  }
+
+  function collectCategoryOptions(dropdown){
+    if (!dropdown) return [];
+    return [...dropdown.querySelectorAll('li .style_option__xDscX, .style_option__xDscX')].filter(isVisible);
+  }
+
+  function extractOptionName(opt){
+    if (!opt) return '';
+    const pathSpan = opt.querySelector('.style_searchResultPath__Ep0Ky');
+    if (pathSpan){
+      const items = [...pathSpan.querySelectorAll('span')].map(s=>s.textContent?.trim()).filter(Boolean);
+      if (items.length) return items[items.length-1];
+      return (pathSpan.textContent||'').trim();
+    }
+    const span = opt.querySelector('span');
+    return (span?.textContent || opt.textContent || '').trim();
+  }
+
+  function findOptionByExactText(root, text){
+    if (!root) return null;
+    const target = findByText('.style_option__xDscX span, .style_option__xDscX', text, { root, exact:true });
+    return target ? target.closest('.style_option__xDscX') : null;
+  }
+
+  let findPathRunning = false;
+
+  async function onFindCategoryPath(){
+    if (findPathRunning){ log('Поиск пути уже выполняется.'); return; }
+    if (!isCreatePage()){ log('❗ Кнопка «Найти путь» работает только на этапе создания оффера.'); return; }
+
+    const clean = sanitizeGameTitle(state.gameNameRu||'');
+    if (!clean){ log('❗ Введите название игры (RU/KZ), чтобы найти путь.'); return; }
+    if (state.cleanGameName !== clean){ state.cleanGameName = clean; saveState(); }
+    const cleanInput = document.querySelector('#vibe-game-clean');
+    if (cleanInput) cleanInput.value = clean;
+
+    findPathRunning = true;
+    try {
+      log(`🔍 Ищу путь для «${clean}»...`);
+      const input = await waitFor(()=>findCategoryInput(), 5000);
+      if (!input){ log('❗ Не удалось найти поле «Категория размещения».'); return; }
+
+      const wrapper = input.closest('.ant-input-affix-wrapper') || input;
+      for (let i=0; i<3; i++){
+        realisticClick(wrapper);
+        await sleep(200);
+        if (findCategoryDropdown()) break;
+      }
+
+      let dropdown = await waitForCategoryDropdown(4000);
+      if (!dropdown){ log('❗ Список категорий не открылся.'); return; }
+
+      setReactValueNoBlur(input, clean);
+      input.setSelectionRange?.(input.value.length, input.value.length);
+      await sleep(350);
+
+      const options = await waitFor(()=>{
+        const items = collectCategoryOptions(dropdown);
+        return items.length ? items : null;
+      }, 4000);
+      if (!options){ log('❗ Подходящие результаты в списке категорий не найдены.'); return; }
+
+      let best = null;
+      for (const opt of options){
+        if (!isVisible(opt)) continue;
+        const name = extractOptionName(opt);
+        const score = similarityRatio(name, clean);
+        if (!best || score > best.score){
+          best = { opt, name, score };
+        }
+      }
+
+      if (!best || best.score < 0.85){
+        const bestPercent = Math.round((best?.score||0) * 100);
+        log(`❗ Не найдено совпадение ≥85%. Лучший результат: ${bestPercent}% (${best?.name||'—'}).`);
+        return;
+      }
+
+      realisticClick(best.opt);
+      log(`✅ Категория по игре: «${best.name}» (совпадение ${(best.score*100).toFixed(1)}%).`);
+
+      await waitFor(()=>!findCategoryDropdown(), 3000);
+      await sleep(150);
+
+      setReactValueNoBlur(input, '');
+      for (let i=0; i<3; i++){
+        realisticClick(wrapper);
+        await sleep(200);
+        dropdown = findCategoryDropdown();
+        if (dropdown) break;
+      }
+
+      dropdown = await waitForCategoryDropdown(4000);
+      if (!dropdown){ log('❗ Не удалось открыть дочерние категории.'); return; }
+
+      const keysOption = await waitFor(()=>findOptionByExactText(dropdown, 'Ключи и гифты'), 4000);
+      if (!keysOption){ log('❗ Пункт «Ключи и гифты» не найден.'); return; }
+      realisticClick(keysOption);
+      log('✅ Выбрана категория «Ключи и гифты».');
+
+      const steamOption = await waitFor(()=>findOptionByExactText(dropdown, 'Steam'), 4000);
+      if (!steamOption){ log('❗ Не найден пункт «Steam».'); return; }
+      realisticClick(steamOption);
+      log('✅ Платформа «Steam» выбрана.');
+    } catch(err){
+      log(`❌ Ошибка поиска пути: ${err?.message||err}`);
+      console.error(err);
+    } finally {
+      findPathRunning = false;
+    }
+  }
+
   // ==========================
   // 🎛️ Панель
   // ==========================
-  const css = `
 #vibe-panel{position:fixed;right:16px;top:96px;width:360px;z-index:999999;background:#0d0f12;color:#e7e7e7;border:1px solid #2a2f36;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;}
 #vibe-panel .hd{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #242933;font-weight:700;}
 #vibe-panel .bd{padding:10px 12px;}
 #vibe-panel .row{margin-bottom:10px;}
+#vibe-panel .inline-wrap{display:flex;gap:8px;align-items:center;}
+#vibe-panel .inline-wrap input{flex:1;}
 #vibe-panel label{display:block;font-size:12px;opacity:.9;margin-bottom:4px;}
 #vibe-panel input[type="text"],#vibe-panel textarea{width:100%;background:#12161c;color:#eee;border:1px solid #2d3440;border-radius:8px;padding:8px 10px;outline:none;}
 #vibe-panel input[type="text"]:focus,#vibe-panel textarea:focus{border-color:#5a9cff;}
@@ -148,6 +371,7 @@
 #vibe-panel .chip{padding:4px 8px;background:#151a21;border:1px solid #2d3440;border-radius:999px;cursor:pointer;user-select:none;font-size:12px;}
 #vibe-panel .chip.active{border-color:#5a9cff;background:rgba(90,156,255,.15);}
 #vibe-panel .btn{width:100%;padding:10px 12px;background:#0e7a29;border:1px solid #19923a;color:#fff;border-radius:10px;cursor:pointer;font-weight:700;}
+#vibe-panel .btn.inline{width:auto;white-space:nowrap;padding:8px 14px;}
 #vibe-panel .btn.secondary{background:#19202a;border-color:#2e3a4a;color:#eaeef5;}
 #vibe-panel .btn.warn{background:#3a1b1b;border-color:#6b2a2a;}
 #vibe-panel .tabs{display:flex;gap:6px;margin-bottom:8px;}
@@ -168,7 +392,7 @@
       <div class="hd"><div>Auto Offer Wizard</div><div class="small">phase: <span id="vibe-phase">${state.phase}</span></div></div>
       <div class="bd">
         <div class="row"><label>Название игры (RU/KZ)</label><input id="vibe-game-ru" type="text" placeholder="Напр.: ARK: Survival Evolved"></div>
-        <div class="row"><label>Название (EN) — опционально</label><input id="vibe-game-en" type="text" placeholder="If blank — will use RU"></div>
+        <div class="row"><label>Название для поиска пути</label><div class="inline-wrap"><input id="vibe-game-clean" type="text" placeholder="Автоочистка" readonly><button class="btn inline" id="vibe-find-path" type="button">Найти путь</button></div></div>
         <div class="row"><label>Рынок</label><div class="chips"><div class="chip" data-market="RU">RU</div><div class="chip" data-market="KZ">KZ</div></div></div>
         <div class="row">
           <label>Описание (кэшируется)</label>
@@ -183,22 +407,32 @@
     document.body.appendChild(host);
 
     const gameRu = host.querySelector('#vibe-game-ru');
-    const gameEn = host.querySelector('#vibe-game-en');
+    const gameClean = host.querySelector('#vibe-game-clean');
+    const findPathBtn = host.querySelector('#vibe-find-path');
     const descArea = host.querySelector('#vibe-desc');
     const tabs=[...host.querySelectorAll('.tab')];
     const chipsMarket=[...host.querySelectorAll('.chip[data-market]')];
     const chipsFlags=[...host.querySelectorAll('.chip[data-flag]')];
 
     gameRu.value=state.gameNameRu||'';
-    gameEn.value=state.gameNameEn||'';
+    const initialClean = sanitizeGameTitle(state.gameNameRu||'');
+    if (state.cleanGameName !== initialClean){ state.cleanGameName = initialClean; saveState(); }
+    if (gameClean) gameClean.value = state.cleanGameName || '';
 
     let activeDTab = persist.get('activeDTab','ru');
     function renderDescTab(){ tabs.forEach(t=>t.classList.toggle('active', t.getAttribute('data-dtab')===activeDTab)); descArea.value = state.desc[activeDTab] || ''; }
     function renderMarket(){ chipsMarket.forEach(c=>c.classList.toggle('active', c.getAttribute('data-market')===state.market)); }
     function renderFlags(){ chipsFlags.forEach(c=>c.classList.toggle('active', !!state[c.getAttribute('data-flag')])); }
 
-    gameRu.addEventListener('input', ()=>{ state.gameNameRu=gameRu.value; saveState(); });
-    gameEn.addEventListener('input', ()=>{ state.gameNameEn=gameEn.value; saveState(); });
+    gameRu.addEventListener('input', ()=>{
+      state.gameNameRu=gameRu.value;
+      const clean = sanitizeGameTitle(state.gameNameRu||'');
+      const changed = state.cleanGameName !== clean;
+      state.cleanGameName = clean;
+      if (gameClean) gameClean.value = clean;
+      saveState();
+      if (changed) log(`Очищенное название обновлено: ${clean||'—'}`);
+    });
     descArea.addEventListener('input', ()=>{ state.desc[activeDTab]=descArea.value; saveState(); });
     tabs.forEach(t=>t.addEventListener('click', ()=>{ activeDTab=t.getAttribute('data-dtab'); persist.set('activeDTab', activeDTab); renderDescTab(); }));
     chipsMarket.forEach(c=>c.addEventListener('click', ()=>{ state.market=c.getAttribute('data-market'); saveState(); renderMarket(); log(`Рынок переключен на ${state.market}`); }));
@@ -209,7 +443,8 @@
     host.querySelector('#vibe-reset').addEventListener('click', ()=>{
       state = Object.assign({}, DEF_STATE, { logs:[] });
       saveState(); renderMarket(); renderFlags(); renderDescTab();
-      gameRu.value=''; gameEn.value='';
+      gameRu.value='';
+      if (gameClean) gameClean.value='';
       host.querySelector('#vibe-phase').textContent = state.phase;
       host.querySelector('#vibe-log-box').innerHTML='';
       document.querySelector('#vibe-id-badge').style.display='none';
@@ -218,6 +453,8 @@
     host.querySelector('#vibe-copy-id').addEventListener('click', ()=>{ if(state.offerId){ copyToClipboard(state.offerId); log(`ID ${state.offerId} скопирован.`); } });
 
     (state.logs||[]).forEach(l=>{ const d=document.createElement('div'); d.textContent=l; host.querySelector('#vibe-log-box').appendChild(d); });
+    if (findPathBtn) findPathBtn.addEventListener('click', ()=>{ onFindCategoryPath(); });
+
     renderMarket(); renderFlags(); renderDescTab(); refreshIdBadge();
   }
 
@@ -390,7 +627,7 @@
     if(!titleEn || !descEnEl){ realisticClick(enTab); await sleep(250); titleEn = await waitForSelector('#titleEn'); descEnEl = await waitForSelector('#descriptionEn'); }
     if(!titleEn || !descEnEl){ log('❗ Не найдены EN поля (#titleEn / #descriptionEn)'); scheduleNext(500); return; }
 
-    const gameEn = state.gameNameEn?.trim() || state.gameNameRu?.trim();
+    const gameEn = (state.cleanGameName && state.cleanGameName.trim()) || state.gameNameRu?.trim();
     const enTitle = `${gameEn} – Steam – ${state.market} – auto`;
     setReactValue(titleEn, enTitle); log(`Название EN → ${enTitle}`);
 
