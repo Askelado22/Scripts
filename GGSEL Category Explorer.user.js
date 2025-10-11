@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.2
+// @version      1.0.3
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -205,6 +205,7 @@
     const pageCache = new LRUCache(50);
     const statsCache = new LRUCache(100);
     const childrenCache = new LRUCache(100);
+    const pendingChildrenPromises = new Map();
 
     // --- Парсер HTML ---
     const Parser = {
@@ -411,6 +412,7 @@
             this.status = data.status || '';
             this.kind = data.kind || '';
             this.digi = data.digi || '';
+            this.hasChildren = typeof data.hasChildren === 'boolean' ? data.hasChildren : null;
         }
     }
 
@@ -771,17 +773,20 @@
             if (node.loading) row.classList.add('loading');
             row.dataset.id = node.id;
             row.dataset.depth = String(depth);
-            row.dataset.state = node.expanded ? 'expanded' : (node.childrenLoaded && node.children.length === 0 ? 'leaf' : 'collapsed');
+            const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
+            row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
             row.title = new URL(node.href, location.origin).toString();
             row.style.paddingLeft = `${10 + depth * 16}px`;
 
-            if (!node.childrenLoaded) {
+            if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
             }
             const marker = document.createElement('span');
             marker.className = 'marker';
             if (node.childrenLoaded) {
                 marker.textContent = node.children.length ? (node.expanded ? '▼' : '▶') : '•';
+            } else if (node.hasChildren === false) {
+                marker.textContent = '•';
             } else {
                 marker.textContent = node.expanded ? '▼' : '▶';
             }
@@ -829,18 +834,25 @@
                     logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
                     node.children = children.map(childData => {
                         if (nodesMap.has(childData.id)) {
-                            return nodesMap.get(childData.id);
+                            const existing = nodesMap.get(childData.id);
+                            existing.parentId = node.id;
+                            if (typeof childData.hasChildren === 'boolean') {
+                                existing.hasChildren = childData.hasChildren;
+                            }
+                            return existing;
                         }
                         const childNode = new CategoryNode(childData, node.id);
                         nodesMap.set(childNode.id, childNode);
                         return childNode;
                     });
                     node.childrenLoaded = true;
+                    node.hasChildren = node.children.length > 0;
                     node.expanded = true;
                     node.loading = false;
                     if (!node.children.length) {
                         node.expanded = false;
                     }
+                    this._ensureChildrenLeafInfo(node);
                 } catch (err) {
                     logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
                     node.error = 'Не удалось загрузить дочерние';
@@ -852,7 +864,20 @@
                 node.expanded = !node.expanded;
                 logger.debug('Переключение узла', { id: node.id, expanded: node.expanded });
                 this.render();
+                if (node.expanded && node.childrenLoaded) {
+                    this._ensureChildrenLeafInfo(node);
+                }
             }
+        }
+
+        _ensureChildrenLeafInfo(node) {
+            const candidates = node.children.filter(child => child.hasChildren === null);
+            if (!candidates.length) return;
+            logger.debug('Префетч дочерних уровней', { parentId: node.id, count: candidates.length });
+            Promise.allSettled(candidates.map(child => ensureLeafState(child))).then(() => {
+                logger.debug('Актуализированы флаги листьев', { parentId: node.id });
+                this.render();
+            });
         }
 
         _onRowHoverStart(event, node, row) {
@@ -933,25 +958,37 @@
 
     // --- Загрузка дочерних категорий ---
     async function loadChildren(categoryId) {
+        if (pendingChildrenPromises.has(categoryId)) {
+            return pendingChildrenPromises.get(categoryId);
+        }
         const cached = childrenCache.get(categoryId);
         if (cached) {
             logger.debug('Дочерние категории из кэша', { id: categoryId });
             return cached;
         }
-        logger.debug('Запрос на загрузку дочерних категорий', { id: categoryId });
-        const url = `/admin/categories/${categoryId}`;
-        const cachedPage = pageCache.get(url);
-        if (cachedPage) {
-            logger.debug('Карточка категории из кэша', { url });
-        } else {
-            logger.info('Загрузка карточки категории', { url });
+        const promise = (async () => {
+            logger.debug('Запрос на загрузку дочерних категорий', { id: categoryId });
+            const url = `/admin/categories/${categoryId}`;
+            const cachedPage = pageCache.get(url);
+            if (cachedPage) {
+                logger.debug('Карточка категории из кэша', { url });
+            } else {
+                logger.info('Загрузка карточки категории', { url });
+            }
+            const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
+            if (!cachedPage) pageCache.set(url, html);
+            const parsed = Parser.parseChildren(html).map(child => ({ ...child }));
+            logger.debug('Распарсено дочерних категорий', { id: categoryId, count: parsed.length });
+            childrenCache.set(categoryId, parsed);
+            return parsed;
+        })();
+        pendingChildrenPromises.set(categoryId, promise);
+        try {
+            const result = await promise;
+            return result;
+        } finally {
+            pendingChildrenPromises.delete(categoryId);
         }
-        const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
-        if (!cachedPage) pageCache.set(url, html);
-        const parsed = Parser.parseChildren(html);
-        logger.debug('Распарсено дочерних категорий', { id: categoryId, count: parsed.length });
-        childrenCache.set(categoryId, parsed);
-        return parsed;
     }
 
     // --- Загрузка статистики категории ---
@@ -976,6 +1013,18 @@
         logger.debug('Распарсена статистика', stats);
         statsCache.set(categoryId, stats);
         return stats;
+    }
+
+    // --- Определение, является ли узел листом ---
+    async function ensureLeafState(node) {
+        if (!node || node.hasChildren !== null) return;
+        try {
+            const children = await loadChildren(node.id);
+            node.hasChildren = children.length > 0;
+            logger.debug('Флаг листа обновлён', { id: node.id, hasChildren: node.hasChildren });
+        } catch (err) {
+            logger.warn('Не удалось определить наличие дочерних', { id: node.id, error: err && err.message });
+        }
     }
 
     // --- Запуск ---
