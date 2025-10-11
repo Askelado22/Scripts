@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.1
+// @version      1.2.2
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -959,6 +959,12 @@
                 user-select: none;
                 -webkit-user-select: none;
             }
+            .results[hidden] {
+                display: none !important;
+                padding: 0;
+                margin: 0;
+                max-height: 0;
+            }
             .results::-webkit-scrollbar { width: 8px; }
             .results::-webkit-scrollbar-thumb {
                 background: rgba(59,130,246,.22);
@@ -1113,6 +1119,10 @@
                 flex-direction: column;
                 gap: 6px;
                 margin: 4px 2px 0;
+            }
+            .toast-stack[hidden] {
+                display: none !important;
+                margin: 0;
             }
             .toast {
                 background: rgba(21,24,36,.94);
