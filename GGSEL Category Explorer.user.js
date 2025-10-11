@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.5
+// @version      1.0.6
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -665,9 +665,9 @@
             }
             .search-input:focus {
                 outline: none;
-                border-color: var(--blue);
-                box-shadow: 0 0 0 3px rgba(59,130,246,.20);
-                background: rgba(21,24,36,.95);
+                border-color: var(--rose);
+                box-shadow: 0 0 0 3px rgba(251,113,133,.25);
+                background: rgba(21,24,36,.96);
             }
             .results {
                 max-height: 520px;
@@ -790,48 +790,49 @@
             }
             .popover {
                 position: fixed;
-                background: var(--panel-2);
+                background: linear-gradient(155deg, rgba(21,24,36,.96), rgba(16,19,32,.92));
                 color: var(--text);
-                border-radius: var(--radius-sm);
-                padding: 12px 14px;
+                border-radius: var(--radius);
+                padding: 14px 16px;
                 font-size: 12px;
-                max-width: 240px;
+                max-width: 260px;
                 box-shadow: var(--shadow-2);
                 pointer-events: none;
-                border: 1px solid var(--border);
+                border: 1px solid rgba(39,48,70,.8);
                 z-index: 1000000;
+                backdrop-filter: blur(6px);
             }
             .popover.status-active {
-                border-color: rgba(59,130,246,.45);
-                box-shadow: 0 12px 32px rgba(59,130,246,.25);
-                background: linear-gradient(135deg, rgba(59,130,246,.18), var(--panel-2));
+                border-color: rgba(59,130,246,.5);
+                box-shadow: 0 16px 40px rgba(59,130,246,.24);
+                background: linear-gradient(160deg, rgba(59,130,246,.22), rgba(16,19,32,.92));
             }
             .popover.status-inactive {
-                border-color: rgba(251,113,133,.45);
-                box-shadow: 0 12px 32px rgba(251,113,133,.22);
-                background: linear-gradient(135deg, rgba(251,113,133,.18), var(--panel-2));
+                border-color: rgba(251,113,133,.5);
+                box-shadow: 0 16px 40px rgba(251,113,133,.24);
+                background: linear-gradient(160deg, rgba(251,113,133,.24), rgba(16,19,32,.92));
             }
             .popover .status-line {
                 font-weight: 600;
                 text-transform: uppercase;
-                letter-spacing: .04em;
-                margin-bottom: 8px;
+                letter-spacing: .05em;
+                margin-bottom: 10px;
                 font-size: 11px;
-                color: rgba(232,234,242,.82);
+                color: rgba(232,234,242,.88);
             }
             .popover .grid {
                 display: grid;
                 grid-template-columns: auto 1fr;
-                gap: 6px 12px;
+                gap: 6px 14px;
             }
             .popover .label {
                 color: rgba(169,176,198,.85);
                 white-space: nowrap;
             }
             .popover .value {
-                color: rgba(232,234,242,.95);
+                color: rgba(232,234,242,.96);
                 text-align: right;
-                font-weight: 500;
+                font-weight: 600;
             }
         `;
         shadow.appendChild(style);
