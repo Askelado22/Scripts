@@ -295,23 +295,38 @@
       let dropdown = await waitForCategoryDropdown(4000);
       if (!dropdown){ log('❗ Список категорий не открылся.'); return; }
 
-      setReactValueNoBlur(input, clean);
-      input.setSelectionRange?.(input.value.length, input.value.length);
-      await sleep(350);
-
-      const options = await waitFor(()=>{
-        const items = collectCategoryOptions(dropdown);
-        return items.length ? items : null;
-      }, 4000);
-      if (!options){ log('❗ Подходящие результаты в списке категорий не найдены.'); return; }
-
+      const MAX_SEARCH_ATTEMPTS = 5;
       let best = null;
-      for (const opt of options){
-        if (!isVisible(opt)) continue;
-        const name = extractOptionName(opt);
-        const score = similarityRatio(name, clean);
-        if (!best || score > best.score){
-          best = { opt, name, score };
+      for (let attempt=1; attempt<=MAX_SEARCH_ATTEMPTS; attempt++){
+        setReactValueNoBlur(input, clean);
+        input.setSelectionRange?.(input.value.length, input.value.length);
+        const waitMs = 300 + attempt * 200;
+        await sleep(waitMs);
+
+        const options = await waitFor(()=>{
+          const items = collectCategoryOptions(dropdown);
+          return items.length ? items : null;
+        }, 1200 + attempt * 600);
+
+        if (options){
+          for (const opt of options){
+            if (!isVisible(opt)) continue;
+            const name = extractOptionName(opt);
+            const score = similarityRatio(name, clean);
+            if (!best || score > best.score){
+              best = { opt, name, score };
+            }
+          }
+        }
+
+        if (best?.score >= 0.85) break;
+
+        if (attempt < MAX_SEARCH_ATTEMPTS){
+          log(`⏳ Результаты ещё загружаются (попытка ${attempt}/${MAX_SEARCH_ATTEMPTS}).`);
+          await sleep(250 + attempt * 200);
+          realisticClick(wrapper);
+          dropdown = await waitForCategoryDropdown(4000);
+          if (!dropdown){ log('❗ Список категорий закрылся во время ожидания.'); return; }
         }
       }
 
