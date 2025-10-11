@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.1.1
+// @version      1.2.0
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -29,6 +29,8 @@
     const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
     const SUBLIST_BASE_INDENT = 24;
     const SUBLIST_INDENT_STEP = 14;
+    const STORAGE_KEY = 'ggsel-category-explorer:last-state';
+    const STORAGE_SCHEMA_VERSION = 1;
     const POPOVER_HIDE_DELAY_MS = 220;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
@@ -41,6 +43,45 @@
         info: (...args) => console.info(LOG_PREFIX, ...args),
         warn: (...args) => console.warn(LOG_PREFIX, ...args),
         error: (...args) => console.error(LOG_PREFIX, ...args),
+    };
+
+    const storage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return null;
+                }
+                return parsed.payload;
+            } catch (err) {
+                logger.warn('Не удалось прочитать состояние', { error: err && err.message });
+                return null;
+            }
+        },
+        save(payload) {
+            try {
+                if (!payload || !payload.query || !payload.query.trim()) {
+                    localStorage.removeItem(STORAGE_KEY);
+                    return;
+                }
+                const data = {
+                    version: STORAGE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить состояние', { error: err && err.message });
+            }
+        },
+        clear() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+            } catch (err) {
+                logger.warn('Не удалось очистить состояние', { error: err && err.message });
+            }
+        },
     };
 
     const PATH_SEPARATOR_RE = /[>›→]/;
@@ -906,7 +947,7 @@
             .results {
                 max-height: 520px;
                 overflow-y: auto;
-                padding: 2px 0 6px;
+                padding: 2px 6px 6px 0;
                 margin: 0;
                 display: flex;
                 flex-direction: column;
@@ -982,9 +1023,9 @@
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
-                margin: 6px 0 10px var(--sublist-indent, 24px);
+                margin: 0 0 0 var(--sublist-indent, 15px);
                 padding: 6px 0 6px 12px;
-                border-left: 2px solid rgba(59,130,246,.45);
+                border-left: 2px solid rgba(244,63,94,.45);
                 contain: content;
             }
             .sublist > .row {
@@ -1200,17 +1241,147 @@
             this.selectedIds = new Set();
             this.lastFocusedId = null;
             this.navigationInProgress = false;
+            this.pendingRestoreState = null;
+            this.persistTimer = null;
+            this.restoring = false;
         }
 
         init() {
             this.inputEl.addEventListener('input', () => this._onInput());
             this.inputEl.addEventListener('keydown', (e) => this._onKeyDown(e));
-            this.resultsContainer.addEventListener('scroll', () => this._prefetchVisible());
+            this.resultsContainer.addEventListener('scroll', () => {
+                this._prefetchVisible();
+                this._schedulePersist();
+            });
             this.copyDigiBtn.addEventListener('click', () => this._copySelectedDigis());
             this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
             window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
             this._setupScrollIsolation();
             this.render();
+            this._restoreState().catch((err) => {
+                logger.warn('Не удалось восстановить состояние', { error: err && err.message });
+            });
+        }
+
+        _schedulePersist(immediate = false) {
+            if (this.restoring && !immediate) {
+                return;
+            }
+            if (this.persistTimer) {
+                clearTimeout(this.persistTimer);
+                this.persistTimer = null;
+            }
+            if (immediate) {
+                this._persistState();
+                return;
+            }
+            this.persistTimer = setTimeout(() => {
+                this.persistTimer = null;
+                this._persistState();
+            }, 160);
+        }
+
+        _persistState() {
+            if (this.restoring) return;
+            const query = this.inputEl ? this.inputEl.value || '' : '';
+            if (!query.trim()) {
+                storage.clear();
+                return;
+            }
+            const expandedNodes = [];
+            for (const node of nodesMap.values()) {
+                if (node && node.expanded) {
+                    const depth = getNodePathSegments(node).length;
+                    expandedNodes.push({ id: node.id, depth });
+                }
+            }
+            expandedNodes.sort((a, b) => {
+                if (a.depth !== b.depth) return a.depth - b.depth;
+                return String(a.id).localeCompare(String(b.id), undefined, { numeric: true, sensitivity: 'base' });
+            });
+            const expandedIds = expandedNodes.map((item) => item.id);
+            const payload = {
+                query,
+                selectedIds: Array.from(this.selectedIds),
+                expandedIds,
+                lastFocusedId: this.lastFocusedId || null,
+                scrollTop: this.resultsContainer ? this.resultsContainer.scrollTop : 0,
+            };
+            storage.save(payload);
+        }
+
+        async _restoreState() {
+            const saved = storage.load();
+            if (!saved || !saved.query || !saved.query.trim()) {
+                return;
+            }
+            this.restoring = true;
+            this.pendingRestoreState = {
+                expandedIds: Array.isArray(saved.expandedIds) ? saved.expandedIds.slice() : [],
+                selectedIds: Array.isArray(saved.selectedIds) ? saved.selectedIds.slice() : [],
+                lastFocusedId: saved.lastFocusedId || null,
+                scrollTop: typeof saved.scrollTop === 'number' ? saved.scrollTop : 0,
+            };
+            this.selectedIds = new Set(this.pendingRestoreState.selectedIds);
+            this.lastFocusedId = this.pendingRestoreState.lastFocusedId;
+            if (this.inputEl) {
+                this.inputEl.value = saved.query;
+            }
+            const result = this.startSearch(saved.query, { preserveSelection: true });
+            if (result && typeof result.then === 'function') {
+                await result;
+            }
+            await this._applyPendingRestore();
+            this.restoring = false;
+            this._schedulePersist(true);
+        }
+
+        async _applyPendingRestore() {
+            const state = this.pendingRestoreState;
+            if (!state) {
+                this._updateSelectionUI();
+                return;
+            }
+            const uniqueExpanded = Array.from(new Set(state.expandedIds || []));
+            const idsWithDepth = uniqueExpanded
+                .map((id) => {
+                    const node = nodesMap.get(id);
+                    if (!node) return null;
+                    const depth = getNodePathSegments(node).length;
+                    return { id, depth };
+                })
+                .filter(Boolean)
+                .sort((a, b) => {
+                    if (a.depth !== b.depth) return a.depth - b.depth;
+                    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true, sensitivity: 'base' });
+                });
+            let needsRender = false;
+            for (const { id } of idsWithDepth) {
+                const node = nodesMap.get(id);
+                if (!node || node.hasChildren === false) continue;
+                if (!node.childrenLoaded) {
+                    const expanded = await this._loadChildrenForNode(node, { expand: true });
+                    if (expanded) {
+                        needsRender = true;
+                    }
+                } else if (!node.expanded) {
+                    node.expanded = true;
+                    needsRender = true;
+                    this._ensureChildrenLeafInfo(node);
+                }
+            }
+            if (needsRender) {
+                this.render();
+            } else {
+                this._updateSelectionUI();
+            }
+            this.selectedIds = new Set(state.selectedIds || []);
+            this.lastFocusedId = state.lastFocusedId;
+            this._updateSelectionUI();
+            if (this.resultsContainer && typeof state.scrollTop === 'number') {
+                this.resultsContainer.scrollTop = state.scrollTop;
+            }
+            this.pendingRestoreState = null;
         }
 
         _setupScrollIsolation() {
@@ -1338,6 +1509,7 @@
                     this.lastFocusedId = null;
                 }
                 this.render();
+                this._schedulePersist(true);
                 return Promise.resolve();
             }
             logger.info('Новый поиск', { type: info.type, value: info.value });
@@ -1353,6 +1525,7 @@
                 this.lastFocusedId = null;
             }
             this.render();
+            this._schedulePersist();
             return this._performSearch();
         }
 
@@ -1400,6 +1573,7 @@
                 SearchState.loading = false;
                 this.render();
                 this._prefetchVisible();
+                this._schedulePersist();
                 logger.info('Обновление результатов', {
                     total: SearchState.results.length,
                     nextPage: SearchState.nextPage,
@@ -1413,6 +1587,7 @@
                 SearchState.error = 'Не удалось загрузить результаты';
                 SearchState.loading = false;
                 this.render();
+                this._schedulePersist();
             }
         }
 
@@ -1569,6 +1744,7 @@
                 node.expanded = false;
                 reorderSiblingsForNode(node);
                 this.render();
+                this._schedulePersist();
                 return;
             } else {
                 node.expanded = !node.expanded;
@@ -1577,6 +1753,7 @@
                 if (node.expanded) {
                     this._ensureChildrenLeafInfo(node);
                 }
+                this._schedulePersist();
             }
         }
 
@@ -1598,6 +1775,7 @@
             }
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _selectRange(node, row) {
@@ -1630,6 +1808,7 @@
             }
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _clearSelection() {
@@ -1639,6 +1818,7 @@
                 row.classList.remove('gce-selected');
             }
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _updateSelectionUI() {
@@ -1740,12 +1920,14 @@
                 }
                 this.render();
                 this._prefetchVisible();
+                this._schedulePersist();
                 return node.hasChildren;
             } catch (err) {
                 logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
                 node.error = 'Не удалось загрузить дочерние';
                 node.loading = false;
                 this.render();
+                this._schedulePersist();
                 return false;
             }
         }
@@ -1763,11 +1945,13 @@
                 node.expanded = false;
                 reorderSiblingsForNode(node);
                 this.render();
+                this._schedulePersist();
                 return false;
             }
             if (!node.expanded) {
                 node.expanded = true;
                 this.render();
+                this._schedulePersist();
             }
             this._ensureChildrenLeafInfo(node);
             return true;
