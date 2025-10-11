@@ -27,6 +27,8 @@
     const TOAST_HIDE_MS = 4500;
     const LIST_LEAF_HIGHLIGHT_BG = 'rgba(59,130,246,.18)';
     const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
+    const SUBLIST_BASE_INDENT = 24;
+    const SUBLIST_INDENT_STEP = 14;
     const POPOVER_HIDE_DELAY_MS = 220;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
@@ -916,9 +918,9 @@
                 font-weight: 650;
                 font-size: 12px;
                 letter-spacing: .01em;
-                color: #38bdf8;
+                color: #e0f2ff;
                 background: rgba(59,130,246,.16);
-                border: 1px solid rgba(59,130,246,.35);
+                border: 1px solid rgba(59,130,246,.45);
                 border-radius: 8px;
                 padding: 4px 12px;
                 white-space: nowrap;
@@ -942,12 +944,10 @@
                 position: relative;
                 display: flex;
                 flex-direction: column;
-                gap: 8px;
-                margin: -10px 0 6px var(--sublist-indent, 34px);
-                padding: 10px 0 8px 13px;
-                border-left: 2.5px solid rgba(255,227,122,.35);
-                background: linear-gradient(90deg, rgba(35,34,36,.82) 70%, rgba(255,227,122,.08) 140%);
-                border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+                gap: 6px;
+                margin: 6px 0 10px var(--sublist-indent, 24px);
+                padding: 6px 0 6px 12px;
+                border-left: 2px solid rgba(59,130,246,.45);
                 contain: content;
             }
             .sublist > .row {
@@ -1501,7 +1501,8 @@
                 sublist.className = 'sublist CATologies-acc-sublist';
                 sublist.dataset.parentId = node.id;
                 sublist.dataset.depth = String(depth + 1);
-                sublist.style.setProperty('--sublist-indent', `${34 + depth * 16}px`);
+                const indent = SUBLIST_BASE_INDENT + depth * SUBLIST_INDENT_STEP;
+                sublist.style.setProperty('--sublist-indent', `${indent}px`);
                 parentContainer.appendChild(sublist);
                 for (const child of node.children) {
                     this._renderNode(sublist, child, depth + 1);
