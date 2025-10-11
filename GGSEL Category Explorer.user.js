@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.6
+// @version      1.0.7
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -790,27 +790,28 @@
             }
             .popover {
                 position: fixed;
-                background: linear-gradient(155deg, rgba(21,24,36,.96), rgba(16,19,32,.92));
+                background: linear-gradient(160deg, rgba(10,13,22,.98), rgba(21,24,36,.94));
                 color: var(--text);
                 border-radius: var(--radius);
-                padding: 14px 16px;
+                padding: 16px 18px;
                 font-size: 12px;
-                max-width: 260px;
+                max-width: 280px;
                 box-shadow: var(--shadow-2);
-                pointer-events: none;
-                border: 1px solid rgba(39,48,70,.8);
+                pointer-events: auto;
+                border: 1px solid rgba(39,48,70,.9);
                 z-index: 1000000;
-                backdrop-filter: blur(6px);
+                backdrop-filter: blur(10px) saturate(130%);
+                user-select: text;
             }
             .popover.status-active {
-                border-color: rgba(59,130,246,.5);
-                box-shadow: 0 16px 40px rgba(59,130,246,.24);
-                background: linear-gradient(160deg, rgba(59,130,246,.22), rgba(16,19,32,.92));
+                border-color: rgba(59,130,246,.55);
+                box-shadow: 0 18px 44px rgba(59,130,246,.28);
+                background: linear-gradient(165deg, rgba(59,130,246,.26), rgba(10,13,22,.95));
             }
             .popover.status-inactive {
-                border-color: rgba(251,113,133,.5);
-                box-shadow: 0 16px 40px rgba(251,113,133,.24);
-                background: linear-gradient(160deg, rgba(251,113,133,.24), rgba(16,19,32,.92));
+                border-color: rgba(251,113,133,.55);
+                box-shadow: 0 18px 44px rgba(251,113,133,.28);
+                background: linear-gradient(165deg, rgba(251,113,133,.28), rgba(10,13,22,.95));
             }
             .popover .status-line {
                 font-weight: 600;
@@ -860,6 +861,7 @@
             this.resultsContainer = resultsContainer;
             this.hoverTimer = null;
             this.currentPopover = null;
+            this.currentPopoverAnchor = null;
             this.currentHoverRow = null;
             this.debounceTimer = null;
             this.visibleNodes = [];
@@ -1088,7 +1090,7 @@
                 }
             });
             row.addEventListener('mouseenter', (e) => this._onRowHoverStart(e, node, row));
-            row.addEventListener('mouseleave', () => this._onRowHoverEnd());
+            row.addEventListener('mouseleave', (e) => this._onRowHoverEnd(e));
 
             parentFragment.appendChild(row);
             this.visibleNodes.push({ node, row });
@@ -1175,19 +1177,23 @@
             }, HOVER_DELAY_MS);
         }
 
-        _onRowHoverEnd() {
+        _onRowHoverEnd(event) {
             clearTimeout(this.hoverTimer);
             this.hoverTimer = null;
-            this.currentHoverRow = null;
-            if (this.currentPopover) {
-                this.currentPopover.remove();
-                this.currentPopover = null;
+            if (event && this.currentPopover) {
+                const related = event.relatedTarget;
+                if (related && (related === this.currentPopover || this.currentPopover.contains(related))) {
+                    this.currentHoverRow = null;
+                    return;
+                }
             }
+            this.currentHoverRow = null;
+            this._hidePopover();
         }
 
         _showPopover(row, node, stats) {
             if (this.currentHoverRow !== row) return;
-            if (this.currentPopover) this.currentPopover.remove();
+            this._hidePopover();
             const pop = document.createElement('div');
             pop.className = 'popover';
             if (stats.error) {
@@ -1229,19 +1235,40 @@
             }
             this.shadowRoot.appendChild(pop);
             const rect = row.getBoundingClientRect();
-            const top = rect.top + window.scrollY;
-            let left = rect.right + 8 + window.scrollX;
             const popRect = pop.getBoundingClientRect();
-            if (left + popRect.width > window.innerWidth - 8) {
-                left = rect.left + window.scrollX - popRect.width - 8;
+            const verticalCenter = rect.top + rect.height / 2;
+            let top = verticalCenter + window.scrollY - popRect.height / 2;
+            const minTop = window.scrollY + 8;
+            const maxTop = window.scrollY + window.innerHeight - popRect.height - 8;
+            if (top < minTop) top = minTop;
+            if (top > maxTop) top = Math.max(minTop, maxTop);
+            let left = rect.right + 12 + window.scrollX;
+            if (left + popRect.width > window.innerWidth - 12) {
+                left = rect.left + window.scrollX - popRect.width - 12;
             }
-            if (left < 8) {
-                left = 8;
+            if (left < 12) {
+                left = 12;
             }
             pop.style.top = `${top}px`;
             pop.style.left = `${left}px`;
+            pop.addEventListener('mouseleave', (e) => {
+                const related = e.relatedTarget;
+                if (related && (related === row || row.contains(related))) {
+                    return;
+                }
+                this._hidePopover();
+            });
             this.currentPopover = pop;
+            this.currentPopoverAnchor = row;
             logger.debug('Показ поповера', { id: stats.id });
+        }
+
+        _hidePopover() {
+            if (this.currentPopover) {
+                this.currentPopover.remove();
+                this.currentPopover = null;
+                this.currentPopoverAnchor = null;
+            }
         }
 
         _prefetchVisible() {
