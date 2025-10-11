@@ -189,7 +189,6 @@
                 throw new DOMException('Aborted', 'AbortError');
             }
             outerSignal.addEventListener('abort', () => controller.abort(outerSignal.reason), { once: true });
-            signals.push(outerSignal);
         }
         try {
             const response = await fetch(url, {
