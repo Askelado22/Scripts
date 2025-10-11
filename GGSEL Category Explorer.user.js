@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.0
+// @version      1.2.1
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -1244,6 +1244,12 @@
             this.pendingRestoreState = null;
             this.persistTimer = null;
             this.restoring = false;
+            if (this.resultsContainer) {
+                this.resultsContainer.hidden = true;
+            }
+            if (this.toastStackEl) {
+                this.toastStackEl.hidden = true;
+            }
         }
 
         init() {
@@ -1595,6 +1601,7 @@
             const container = this.resultsContainer;
             container.innerHTML = '';
             this.visibleNodes = [];
+            this._setResultsVisibility(false);
 
             if (!SearchState.queryInfo) {
                 this._updateSelectionUI();
@@ -1602,16 +1609,19 @@
             }
             if (SearchState.loading && SearchState.results.length === 0) {
                 container.innerHTML = `<div class="loading-state">Загрузка...</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (SearchState.error) {
                 container.innerHTML = `<div class="error-state">${SearchState.error}</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (!SearchState.results.length) {
                 container.innerHTML = `<div class="empty-state">Ничего не найдено.</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
@@ -1633,7 +1643,13 @@
                 fragment.appendChild(loadMore);
             }
             container.appendChild(fragment);
+            this._setResultsVisibility(true);
             this._updateSelectionUI();
+        }
+
+        _setResultsVisibility(visible) {
+            if (!this.resultsContainer) return;
+            this.resultsContainer.hidden = !visible;
         }
 
         _renderNode(parentContainer, node, depth) {
@@ -1882,6 +1898,7 @@
             toast.className = `toast toast--${type}`;
             toast.textContent = message;
             this.toastStackEl.appendChild(toast);
+            this._setToastVisibility(true);
             requestAnimationFrame(() => {
                 toast.classList.add('show');
             });
@@ -1889,8 +1906,14 @@
                 toast.classList.remove('show');
                 setTimeout(() => {
                     toast.remove();
-                }, 200);
+                    this._setToastVisibility(this.toastStackEl.children.length > 0);
+                }, 220);
             }, TOAST_HIDE_MS);
+        }
+
+        _setToastVisibility(visible) {
+            if (!this.toastStackEl) return;
+            this.toastStackEl.hidden = !visible;
         }
 
         async _loadChildrenForNode(node, { expand = false } = {}) {
