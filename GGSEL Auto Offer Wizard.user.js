@@ -355,9 +355,10 @@
     }
   }
 
-  // ==========================
-  // 🎛️ Панель
-  // ==========================
+    // ==========================
+    // 🎛️ Панель
+    // ==========================
+    const css = `
 #vibe-panel{position:fixed;right:16px;top:96px;width:360px;z-index:999999;background:#0d0f12;color:#e7e7e7;border:1px solid #2a2f36;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;}
 #vibe-panel .hd{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #242933;font-weight:700;}
 #vibe-panel .bd{padding:10px 12px;}
