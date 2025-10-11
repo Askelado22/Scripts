@@ -711,6 +711,33 @@
         return childNode;
     };
 
+    const orderChildrenForDisplay = (children) => {
+        if (!Array.isArray(children) || children.length < 2) {
+            return Array.isArray(children) ? children : [];
+        }
+        const categories = [];
+        const sections = [];
+        for (const child of children) {
+            if (!child) continue;
+            const isCategory = child.hasChildren !== false || (child.childrenLoaded && child.children.length > 0);
+            if (isCategory) {
+                categories.push(child);
+            } else {
+                sections.push(child);
+            }
+        }
+        return categories.concat(sections);
+    };
+
+    const assignChildrenToNode = (node, childrenData) => {
+        const mapped = Array.isArray(childrenData)
+            ? childrenData.map(childData => upsertChildNode(childData, node))
+            : [];
+        const ordered = orderChildrenForDisplay(mapped);
+        node.children = ordered;
+        return ordered;
+    };
+
     // --- Управление состоянием поиска ---
     const SearchState = {
         queryInfo: null,
@@ -890,8 +917,8 @@
                 font-size: 12px;
                 letter-spacing: .01em;
                 color: #38bdf8;
-                background: rgba(14,165,233,.18);
-                border: 1px solid rgba(14,165,233,.35);
+                background: rgba(59,130,246,.16);
+                border: 1px solid rgba(59,130,246,.35);
                 border-radius: 8px;
                 padding: 4px 12px;
                 white-space: nowrap;
@@ -911,6 +938,21 @@
                 margin-left: 6px;
                 color: var(--muted);
             }
+            .sublist {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin: -10px 0 6px var(--sublist-indent, 34px);
+                padding: 10px 0 8px 13px;
+                border-left: 2.5px solid rgba(255,227,122,.35);
+                background: linear-gradient(90deg, rgba(35,34,36,.82) 70%, rgba(255,227,122,.08) 140%);
+                border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+                contain: content;
+            }
+            .sublist > .row {
+                margin: 0;
+            }
             .row.leaf {
                 background: ${LIST_LEAF_HIGHLIGHT_BG};
                 border-color: ${LIST_LEAF_HIGHLIGHT_BORDER};
@@ -918,8 +960,8 @@
                 cursor: default;
             }
             .row.leaf .digi-badge {
-                background: rgba(14,165,233,.26);
-                border-color: rgba(14,165,233,.45);
+                background: rgba(59,130,246,.16);
+                border-color: rgba(59,130,246,.45);
                 color: #e0f2ff;
             }
             .row.leaf:hover {
@@ -1342,7 +1384,6 @@
             this.visibleNodes = [];
 
             if (!SearchState.queryInfo) {
-                container.innerHTML = `<div class="empty-state">Введите запрос для поиска категорий.</div>`;
                 this._updateSelectionUI();
                 return;
             }
@@ -1382,9 +1423,10 @@
             this._updateSelectionUI();
         }
 
-        _renderNode(parentFragment, node, depth) {
+        _renderNode(parentContainer, node, depth) {
             const row = document.createElement('div');
             row.className = 'row';
+            row.classList.add('CATologies-acc-row');
             if (node.error) row.classList.add('error');
             if (node.loading) row.classList.add('loading');
             row.dataset.id = node.id;
@@ -1397,11 +1439,16 @@
             const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
             row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
             row.dataset.hasChildren = isLeaf ? 'false' : (hasChildrenKnown ? 'true' : 'unknown');
+            if (row.dataset.hasChildren === 'false') {
+                row.classList.add('CATologies-type-section');
+            } else {
+                row.classList.add('CATologies-type-category');
+            }
             const nodeHref = new URL(node.href, location.origin).toString();
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
-            row.style.paddingLeft = `${10 + depth * 16}px`;
+            row.style.paddingLeft = '12px';
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
@@ -1446,12 +1493,18 @@
             row.addEventListener('mouseenter', (e) => this._onRowHoverStart(e, node, row));
             row.addEventListener('mouseleave', (e) => this._onRowHoverEnd(e));
 
-            parentFragment.appendChild(row);
+            parentContainer.appendChild(row);
             this.visibleNodes.push({ node, row });
 
             if (node.expanded && node.childrenLoaded && node.children.length) {
+                const sublist = document.createElement('div');
+                sublist.className = 'sublist CATologies-acc-sublist';
+                sublist.dataset.parentId = node.id;
+                sublist.dataset.depth = String(depth + 1);
+                sublist.style.setProperty('--sublist-indent', `${34 + depth * 16}px`);
+                parentContainer.appendChild(sublist);
                 for (const child of node.children) {
-                    this._renderNode(parentFragment, child, depth + 1);
+                    this._renderNode(sublist, child, depth + 1);
                 }
             }
         }
@@ -1630,9 +1683,9 @@
                 logger.info('Загрузка дочерних категорий', { id: node.id });
                 const children = await loadChildren(node.id);
                 logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
-                node.children = children.map(childData => upsertChildNode(childData, node));
+                const mappedChildren = assignChildrenToNode(node, children);
                 node.childrenLoaded = true;
-                node.hasChildren = node.children.length > 0;
+                node.hasChildren = mappedChildren.length > 0;
                 node.loading = false;
                 if (expand && node.hasChildren) {
                     node.expanded = true;
@@ -1997,9 +2050,9 @@
         if (!node || node.childrenLoaded) return;
         try {
             const children = await loadChildren(node.id);
-            node.children = children.map(childData => upsertChildNode(childData, node));
+            const mappedChildren = assignChildrenToNode(node, children);
             node.childrenLoaded = true;
-            node.hasChildren = node.children.length > 0;
+            node.hasChildren = mappedChildren.length > 0;
             if (!node.hasChildren) {
                 node.expanded = false;
             }
