@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.8
+// @version      1.1.0
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -20,7 +20,13 @@
     const RETRY_COUNT = 2;
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
-    const LIST_LEAF_MARKER_COLOR = '#a9b0c6';
+    const INPUT_DEBOUNCE_MS = 380;
+    const WAIT_FOR_TIMEOUT_MS = 6500;
+    const WAIT_FOR_INTERVAL_MS = 120;
+    const FOCUSED_HIGHLIGHT_MS = 1600;
+    const TOAST_HIDE_MS = 4500;
+    const LIST_LEAF_HIGHLIGHT_BG = 'rgba(59,130,246,.18)';
+    const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
     const POPOVER_HIDE_DELAY_MS = 220;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
@@ -33,6 +39,75 @@
         info: (...args) => console.info(LOG_PREFIX, ...args),
         warn: (...args) => console.warn(LOG_PREFIX, ...args),
         error: (...args) => console.error(LOG_PREFIX, ...args),
+    };
+
+    const PATH_SEPARATOR_RE = /[>›→]/;
+
+    const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+    const normalizeText = (value) => collapseSpaces(value).toLowerCase();
+
+    const parsePathSegments = (rawInput) => {
+        if (!rawInput || !PATH_SEPARATOR_RE.test(rawInput)) return null;
+        const parts = rawInput
+            .split(PATH_SEPARATOR_RE)
+            .map(part => collapseSpaces(part))
+            .filter(Boolean);
+        if (!parts.length) return null;
+        if (parts.length && normalizeText(parts[0]) === 'ggsel.net') {
+            parts.shift();
+        }
+        return parts.length >= 2 ? parts : null;
+    };
+
+    const waitFor = (conditionFn, { timeout = WAIT_FOR_TIMEOUT_MS, interval = WAIT_FOR_INTERVAL_MS } = {}) => {
+        const started = Date.now();
+        return new Promise((resolve, reject) => {
+            const check = () => {
+                try {
+                    const result = conditionFn();
+                    if (result) {
+                        resolve(result);
+                        return;
+                    }
+                } catch (err) {
+                    logger.debug('waitFor: ошибка проверки условия', { message: err && err.message });
+                }
+                if (Date.now() - started >= timeout) {
+                    reject(new Error('waitFor timeout'));
+                    return;
+                }
+                setTimeout(check, interval);
+            };
+            check();
+        });
+    };
+
+    const copyTextToClipboard = async (text) => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (err) {
+            logger.warn('Clipboard API недоступен', { error: err && err.message });
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        let success = false;
+        try {
+            success = document.execCommand('copy');
+        } catch (err) {
+            logger.error('Не удалось скопировать текст', { error: err && err.message });
+        }
+        document.body.removeChild(textarea);
+        return success;
     };
 
     // --- Форматирование числовых данных для интерфейса ---
@@ -567,7 +642,7 @@
     class CategoryNode {
         constructor(data, parentId = null) {
             this.id = data.id;
-            this.name = data.name;
+            this.name = (data.name || '').trim();
             this.href = data.href || `/admin/categories/${this.id}`;
             this.parentId = parentId;
             this.children = [];
@@ -577,12 +652,64 @@
             this.error = null;
             this.status = data.status || '';
             this.kind = data.kind || '';
-            this.digi = data.digi || '';
+            this.digi = (data.digi || '').trim();
             this.hasChildren = typeof data.hasChildren === 'boolean' ? data.hasChildren : null;
+            const rawSegments = Array.isArray(data.pathAnchors) && data.pathAnchors.length
+                ? data.pathAnchors.slice()
+                : (Array.isArray(data.pathSegments) ? data.pathSegments.slice() : []);
+            if (!rawSegments.length && this.name) {
+                rawSegments.push(this.name);
+            }
+            if (this.name && rawSegments[rawSegments.length - 1] !== this.name) {
+                rawSegments.push(this.name);
+            }
+            this.pathSegments = rawSegments.filter(Boolean);
         }
     }
 
     const nodesMap = new Map();
+
+    const getNodePathSegments = (node) => {
+        if (!node) return [];
+        if (Array.isArray(node.pathSegments) && node.pathSegments.length) {
+            return node.pathSegments.slice();
+        }
+        const chain = [];
+        const visited = new Set();
+        let current = node;
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            chain.unshift(current.name);
+            if (!current.parentId) break;
+            current = nodesMap.get(current.parentId);
+        }
+        return chain.filter(Boolean);
+    };
+
+    const updateNodePathFromParent = (node, parentNode) => {
+        const parentPath = getNodePathSegments(parentNode);
+        const newPath = parentPath.concat(node.name).filter(Boolean);
+        node.pathSegments = newPath;
+    };
+
+    const upsertChildNode = (childData, parentNode) => {
+        let childNode = nodesMap.get(childData.id);
+        if (childNode) {
+            childNode.name = (childData.name || childNode.name || '').trim();
+            childNode.status = childData.status || childNode.status;
+            childNode.kind = childData.kind || childNode.kind;
+            childNode.digi = (childData.digi || childNode.digi || '').trim();
+            if (typeof childData.hasChildren === 'boolean') {
+                childNode.hasChildren = childData.hasChildren;
+            }
+        } else {
+            childNode = new CategoryNode(childData, parentNode.id);
+            nodesMap.set(childNode.id, childNode);
+        }
+        childNode.parentId = parentNode.id;
+        updateNodePathFromParent(childNode, parentNode);
+        return childNode;
+    };
 
     // --- Управление состоянием поиска ---
     const SearchState = {
@@ -651,6 +778,42 @@
                 gap: 6px;
                 z-index: 999999;
             }
+            .search-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .selection-actions {
+                display: none;
+                flex: 0 0 auto;
+                align-items: center;
+                gap: 6px;
+            }
+            .selection-actions.visible {
+                display: flex;
+            }
+            .selection-button {
+                background: rgba(21,24,36,.92);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                padding: 9px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--text);
+                cursor: pointer;
+                transition: transform var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
+                white-space: nowrap;
+            }
+            .selection-button:hover {
+                background: rgba(59,130,246,.14);
+                border-color: rgba(59,130,246,.45);
+                color: #cfe0ff;
+                box-shadow: 0 8px 18px rgba(59,130,246,.18);
+                transform: translateY(-1px);
+            }
+            .selection-button:active {
+                transform: translateY(1px);
+            }
             .search-input {
                 width: 100%;
                 border: 1px solid var(--border);
@@ -691,7 +854,7 @@
                 position: relative;
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
                 padding: 7px 12px;
                 border-radius: var(--radius-sm);
                 border: 1px solid transparent;
@@ -699,11 +862,10 @@
                 font-size: 13px;
                 line-height: 1.35;
                 cursor: pointer;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                overflow: hidden;
                 color: var(--text);
                 transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
+                min-height: 32px;
+                overflow: hidden;
             }
             .row:hover,
             .row.active {
@@ -712,42 +874,64 @@
                 box-shadow: inset 0 0 0 1px rgba(59,130,246,.18);
                 color: var(--text);
             }
-            .row.leaf::before {
-                content: '';
-                width: 6px;
-                height: 6px;
-                border-radius: 999px;
-                background: ${LIST_LEAF_MARKER_COLOR};
-                opacity: 0.85;
+            .row .digi-badge {
                 flex: 0 0 auto;
-            }
-            .row .marker {
+                font-weight: 600;
                 font-size: 11px;
-                width: 18px;
-                flex: 0 0 18px;
-                text-align: center;
-                color: var(--muted);
-                opacity: 0.85;
-            }
-            .row[data-state="expanded"] .marker {
-                color: var(--blue);
-            }
-            .row.potential .marker {
-                color: rgba(59,130,246,.75);
-            }
-            .row.error .marker {
-                color: var(--rose);
+                letter-spacing: .02em;
+                color: #cfe0ff;
+                background: rgba(59,130,246,.16);
+                border: 1px solid rgba(59,130,246,.38);
+                border-radius: 999px;
+                padding: 2px 8px;
+                white-space: nowrap;
             }
             .row .name {
                 flex: 1;
                 overflow: hidden;
                 text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .row.potential {
+                border-color: rgba(59,130,246,.22);
             }
             .row.loading::after {
                 content: '…';
                 font-size: 12px;
                 margin-left: 6px;
                 color: var(--muted);
+            }
+            .row.leaf {
+                background: ${LIST_LEAF_HIGHLIGHT_BG};
+                border-color: ${LIST_LEAF_HIGHLIGHT_BORDER};
+                color: #dbeafe;
+                cursor: default;
+            }
+            .row.leaf .digi-badge {
+                background: rgba(59,130,246,.28);
+                border-color: rgba(59,130,246,.55);
+                color: #e8f1ff;
+            }
+            .row.leaf:hover {
+                background: ${LIST_LEAF_HIGHLIGHT_BG};
+                color: #e8f1ff;
+                box-shadow: inset 0 0 0 1px rgba(59,130,246,.2);
+            }
+            .row.gce-selected {
+                background: rgba(251,113,133,.22);
+                border-color: rgba(251,113,133,.45);
+                box-shadow: inset 0 0 0 1px rgba(251,113,133,.3);
+            }
+            .row.gce-selected .digi-badge {
+                background: rgba(251,113,133,.2);
+                border-color: rgba(251,113,133,.45);
+                color: #ffe1e6;
+            }
+            .row.gce-focused {
+                box-shadow: 0 0 0 2px rgba(251,113,133,.35);
+            }
+            .row[data-has-children="false"] {
+                cursor: default;
             }
             .row.error {
                 color: var(--rose);
@@ -788,6 +972,43 @@
             }
             .load-more:active {
                 transform: translateY(1px);
+            }
+            .toast-stack {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                margin: 4px 2px 0;
+            }
+            .toast {
+                background: rgba(21,24,36,.94);
+                border: 1px solid rgba(39,48,70,.85);
+                border-radius: var(--radius-sm);
+                padding: 10px 12px;
+                font-size: 12px;
+                color: var(--text);
+                box-shadow: var(--shadow-1);
+                opacity: 0;
+                transform: translateY(-6px);
+                transition: opacity var(--dur-2), transform var(--dur-2);
+            }
+            .toast.show {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            .toast--info {
+                border-color: rgba(59,130,246,.38);
+                background: rgba(59,130,246,.18);
+                color: #dbeafe;
+            }
+            .toast--error {
+                border-color: rgba(251,113,133,.55);
+                background: rgba(251,113,133,.18);
+                color: #ffe1e6;
+            }
+            .toast--success {
+                border-color: rgba(34,197,94,.45);
+                background: rgba(34,197,94,.18);
+                color: #dcfce7;
             }
             .popover {
                 position: fixed;
@@ -842,24 +1063,39 @@
         const panel = document.createElement('div');
         panel.className = 'panel';
         panel.innerHTML = `
-            <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+            <div class="search-row">
+                <div class="selection-actions" hidden>
+                    <button type="button" class="selection-button selection-copy-digi">Копировать DIGI</button>
+                    <button type="button" class="selection-button selection-copy-paths">Копировать пути</button>
+                </div>
+                <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+            </div>
             <div class="results"></div>
+            <div class="toast-stack" aria-live="polite"></div>
         `;
         shadow.appendChild(panel);
 
         const input = panel.querySelector('.search-input');
         const resultsEl = panel.querySelector('.results');
+        const selectionActionsEl = panel.querySelector('.selection-actions');
+        const copyDigiBtn = panel.querySelector('.selection-copy-digi');
+        const copyPathsBtn = panel.querySelector('.selection-copy-paths');
+        const toastStackEl = panel.querySelector('.toast-stack');
 
-        const ui = new UIPanel(shadow, input, resultsEl);
+        const ui = new UIPanel(shadow, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl);
         ui.init();
     }
 
     // --- Управление UI ---
     class UIPanel {
-        constructor(shadowRoot, inputEl, resultsContainer) {
+        constructor(shadowRoot, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl) {
             this.shadowRoot = shadowRoot;
             this.inputEl = inputEl;
             this.resultsContainer = resultsContainer;
+            this.selectionActionsEl = selectionActionsEl;
+            this.copyDigiBtn = copyDigiBtn;
+            this.copyPathsBtn = copyPathsBtn;
+            this.toastStackEl = toastStackEl;
             this.hoverTimer = null;
             this.currentPopover = null;
             this.currentPopoverAnchor = null;
@@ -867,20 +1103,43 @@
             this.popoverHideTimer = null;
             this.debounceTimer = null;
             this.visibleNodes = [];
+            this.selectedIds = new Set();
+            this.lastFocusedId = null;
+            this.navigationInProgress = false;
         }
 
         init() {
             this.inputEl.addEventListener('input', () => this._onInput());
             this.inputEl.addEventListener('keydown', (e) => this._onKeyDown(e));
             this.resultsContainer.addEventListener('scroll', () => this._prefetchVisible());
+            this.copyDigiBtn.addEventListener('click', () => this._copySelectedDigis());
+            this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
+            window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
             this.render();
         }
 
         _onInput() {
             clearTimeout(this.debounceTimer);
             this.debounceTimer = setTimeout(() => {
-                this.startSearch(this.inputEl.value);
-            }, 250);
+                this._handleInputValue(this.inputEl.value);
+            }, INPUT_DEBOUNCE_MS);
+        }
+
+        async _handleInputValue(rawValue) {
+            if (this.navigationInProgress) return;
+            const pathSegments = parsePathSegments(rawValue);
+            if (pathSegments) {
+                this.navigationInProgress = true;
+                try {
+                    await this._followPath(pathSegments);
+                } catch (err) {
+                    logger.error('Ошибка автонавигации', { error: err && err.message });
+                } finally {
+                    this.navigationInProgress = false;
+                }
+                return;
+            }
+            this.startSearch(rawValue);
         }
 
         _onKeyDown(e) {
@@ -921,7 +1180,7 @@
             }
         }
 
-        startSearch(query) {
+        startSearch(query, { preserveSelection = false } = {}) {
             const info = QueryParser.parse(query);
             if (info.type === 'empty') {
                 SearchState.queryInfo = null;
@@ -930,8 +1189,13 @@
                 SearchState.pageCount = 0;
                 SearchState.loading = false;
                 SearchState.error = null;
+                nodesMap.clear();
+                if (!preserveSelection) {
+                    this._clearSelection();
+                    this.lastFocusedId = null;
+                }
                 this.render();
-                return;
+                return Promise.resolve();
             }
             logger.info('Новый поиск', { type: info.type, value: info.value });
             SearchState.queryInfo = info;
@@ -941,8 +1205,12 @@
             SearchState.loading = true;
             SearchState.error = null;
             nodesMap.clear();
+            if (!preserveSelection) {
+                this._clearSelection();
+                this.lastFocusedId = null;
+            }
             this.render();
-            this._performSearch();
+            return this._performSearch();
         }
 
         async _performSearch(loadMore = false) {
@@ -1011,18 +1279,22 @@
 
             if (!SearchState.queryInfo) {
                 container.innerHTML = `<div class="empty-state">Введите запрос для поиска категорий.</div>`;
+                this._updateSelectionUI();
                 return;
             }
             if (SearchState.loading && SearchState.results.length === 0) {
                 container.innerHTML = `<div class="loading-state">Загрузка...</div>`;
+                this._updateSelectionUI();
                 return;
             }
             if (SearchState.error) {
                 container.innerHTML = `<div class="error-state">${SearchState.error}</div>`;
+                this._updateSelectionUI();
                 return;
             }
             if (!SearchState.results.length) {
                 container.innerHTML = `<div class="empty-state">Ничего не найдено.</div>`;
+                this._updateSelectionUI();
                 return;
             }
 
@@ -1043,6 +1315,7 @@
                 fragment.appendChild(loadMore);
             }
             container.appendChild(fragment);
+            this._updateSelectionUI();
         }
 
         _renderNode(parentFragment, node, depth) {
@@ -1054,37 +1327,49 @@
             row.dataset.depth = String(depth);
             row.dataset.status = node.status || '';
             row.dataset.digi = node.digi || '';
+            row.dataset.name = node.name;
+            row.dataset.parentId = node.parentId || 'root';
+            const hasChildrenKnown = node.childrenLoaded ? node.children.length > 0 : (node.hasChildren === false ? false : null);
             const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
             row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
+            row.dataset.hasChildren = isLeaf ? 'false' : (hasChildrenKnown ? 'true' : 'unknown');
             row.title = new URL(node.href, location.origin).toString();
             row.style.paddingLeft = `${10 + depth * 16}px`;
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
             }
-            const marker = document.createElement('span');
-            marker.className = 'marker';
-            if (node.childrenLoaded) {
-                marker.textContent = node.children.length ? (node.expanded ? '▼' : '▶') : '•';
-            } else if (node.hasChildren === false) {
-                marker.textContent = '•';
-            } else {
-                marker.textContent = node.expanded ? '▼' : '▶';
-            }
+            const digiBadge = document.createElement('span');
+            digiBadge.className = 'digi-badge';
+            digiBadge.textContent = node.digi ? `[${node.digi}]` : '[—]';
             const nameEl = document.createElement('span');
             nameEl.className = 'name';
             nameEl.textContent = node.name;
 
-            row.appendChild(marker);
+            row.appendChild(digiBadge);
             row.appendChild(nameEl);
 
             if (row.dataset.state === 'leaf') {
                 row.classList.add('leaf');
             }
 
+            if (this.selectedIds.has(node.id)) {
+                row.classList.add('gce-selected');
+            }
+
             row.addEventListener('click', (e) => {
                 if (e.button === 1) return;
-                this._toggleNode(node, row);
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    this._toggleSelection(node, row);
+                    return;
+                }
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    this._selectRange(node, row);
+                    return;
+                }
+                this._handlePrimaryClick(node, row);
             });
             row.addEventListener('auxclick', (e) => {
                 if (e.button === 1) {
@@ -1106,52 +1391,313 @@
 
         async _toggleNode(node, row) {
             if (node.loading) return;
+            if (node.childrenLoaded && node.children.length === 0) {
+                node.hasChildren = false;
+            }
+            if (node.hasChildren === false && node.childrenLoaded) {
+                logger.debug('Игнорируем клик по листу', { id: node.id });
+                return;
+            }
             if (!node.childrenLoaded) {
-                node.loading = true;
-                this.render();
-                try {
-                    logger.info('Загрузка дочерних категорий', { id: node.id });
-                    const children = await loadChildren(node.id);
-                    logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
-                    node.children = children.map(childData => {
-                        if (nodesMap.has(childData.id)) {
-                            const existing = nodesMap.get(childData.id);
-                            existing.parentId = node.id;
-                            if (typeof childData.hasChildren === 'boolean') {
-                                existing.hasChildren = childData.hasChildren;
-                            }
-                            if (childData.status) existing.status = childData.status;
-                            if (childData.kind) existing.kind = childData.kind;
-                            if (childData.digi) existing.digi = childData.digi;
-                            return existing;
-                        }
-                        const childNode = new CategoryNode(childData, node.id);
-                        nodesMap.set(childNode.id, childNode);
-                        return childNode;
-                    });
-                    node.childrenLoaded = true;
-                    node.hasChildren = node.children.length > 0;
-                    node.expanded = true;
-                    node.loading = false;
-                    if (!node.children.length) {
-                        node.expanded = false;
-                    }
-                    this._ensureChildrenLeafInfo(node);
-                } catch (err) {
-                    logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
-                    node.error = 'Не удалось загрузить дочерние';
-                    node.loading = false;
+                const hasChildren = await this._loadChildrenForNode(node, { expand: true });
+                if (!hasChildren) {
+                    logger.debug('Узел оказался листом после загрузки', { id: node.id });
+                    return;
                 }
+            } else if (!node.children.length) {
+                node.hasChildren = false;
+                node.expanded = false;
                 this.render();
-                this._prefetchVisible();
+                return;
             } else {
                 node.expanded = !node.expanded;
                 logger.debug('Переключение узла', { id: node.id, expanded: node.expanded });
                 this.render();
-                if (node.expanded && node.childrenLoaded) {
+                if (node.expanded) {
                     this._ensureChildrenLeafInfo(node);
                 }
             }
+        }
+
+        _handlePrimaryClick(node, row) {
+            this.lastFocusedId = node.id;
+            if (row.dataset.hasChildren === 'false') {
+                return;
+            }
+            this._toggleNode(node, row);
+        }
+
+        _toggleSelection(node, row) {
+            if (this.selectedIds.has(node.id)) {
+                this.selectedIds.delete(node.id);
+                row.classList.remove('gce-selected');
+            } else {
+                this.selectedIds.add(node.id);
+                row.classList.add('gce-selected');
+            }
+            this.lastFocusedId = node.id;
+            this._updateSelectionUI();
+        }
+
+        _selectRange(node, row) {
+            if (!this.lastFocusedId || this.lastFocusedId === node.id) {
+                this._toggleSelection(node, row);
+                return;
+            }
+            const parentKey = row.dataset.parentId || 'root';
+            const depth = row.dataset.depth;
+            const siblings = Array.from(this.resultsContainer.querySelectorAll(`.row[data-parent-id="${parentKey}"][data-depth="${depth}"]`));
+            const currentIndex = siblings.indexOf(row);
+            const anchorRow = siblings.find(r => r.dataset.id === this.lastFocusedId);
+            if (currentIndex === -1 || !anchorRow) {
+                this._toggleSelection(node, row);
+                return;
+            }
+            const anchorIndex = siblings.indexOf(anchorRow);
+            const [start, end] = anchorIndex < currentIndex ? [anchorIndex, currentIndex] : [currentIndex, anchorIndex];
+            this.selectedIds.clear();
+            for (let i = start; i <= end; i++) {
+                const siblingRow = siblings[i];
+                if (!siblingRow) continue;
+                siblingRow.classList.add('gce-selected');
+                this.selectedIds.add(siblingRow.dataset.id);
+            }
+            for (const otherRow of Array.from(this.resultsContainer.querySelectorAll('.row.gce-selected'))) {
+                if (!this.selectedIds.has(otherRow.dataset.id)) {
+                    otherRow.classList.remove('gce-selected');
+                }
+            }
+            this.lastFocusedId = node.id;
+            this._updateSelectionUI();
+        }
+
+        _clearSelection() {
+            if (!this.selectedIds.size) return;
+            this.selectedIds.clear();
+            for (const row of Array.from(this.resultsContainer.querySelectorAll('.row.gce-selected'))) {
+                row.classList.remove('gce-selected');
+            }
+            this._updateSelectionUI();
+        }
+
+        _updateSelectionUI() {
+            if (!this.selectionActionsEl) return;
+            if (this.selectedIds.size > 0) {
+                this.selectionActionsEl.hidden = false;
+                this.selectionActionsEl.classList.add('visible');
+            } else {
+                this.selectionActionsEl.hidden = true;
+                this.selectionActionsEl.classList.remove('visible');
+            }
+        }
+
+        async _copySelectedDigis() {
+            if (!this.selectedIds.size) return;
+            const lines = [];
+            for (const id of this.selectedIds) {
+                const node = nodesMap.get(id);
+                if (!node) continue;
+                lines.push((node.digi || '').trim());
+            }
+            if (!lines.length) {
+                this._showToast('Нет выбранных элементов для копирования DIGI', 'error');
+                return;
+            }
+            const text = lines.join('\n');
+            const success = await copyTextToClipboard(text);
+            this._showToast(success ? 'DIGI скопированы' : 'Не удалось скопировать DIGI', success ? 'success' : 'error');
+        }
+
+        async _copySelectedPaths() {
+            if (!this.selectedIds.size) return;
+            const lines = [];
+            for (const id of this.selectedIds) {
+                const node = nodesMap.get(id);
+                if (!node) continue;
+                lines.push(this._buildPathForNode(node));
+            }
+            if (!lines.length) {
+                this._showToast('Нет путей для копирования', 'error');
+                return;
+            }
+            const success = await copyTextToClipboard(lines.join('\n'));
+            this._showToast(success ? 'Пути скопированы' : 'Не удалось скопировать пути', success ? 'success' : 'error');
+        }
+
+        _buildPathForNode(node) {
+            const segments = getNodePathSegments(node).map(part => collapseSpaces(part)).filter(Boolean);
+            if (segments.length && normalizeText(segments[0]) === 'ggsel.net') {
+                segments.shift();
+            }
+            if (!segments.length) {
+                segments.push(node.name);
+            }
+            return segments.join(' > ');
+        }
+
+        _showToast(message, type = 'info') {
+            if (!this.toastStackEl) return;
+            const toast = document.createElement('div');
+            toast.className = `toast toast--${type}`;
+            toast.textContent = message;
+            this.toastStackEl.appendChild(toast);
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => {
+                    toast.remove();
+                }, 200);
+            }, TOAST_HIDE_MS);
+        }
+
+        async _loadChildrenForNode(node, { expand = false } = {}) {
+            if (node.loading) {
+                logger.debug('Узел уже загружается', { id: node.id });
+                return node.children && node.children.length > 0;
+            }
+            node.loading = true;
+            this.render();
+            try {
+                logger.info('Загрузка дочерних категорий', { id: node.id });
+                const children = await loadChildren(node.id);
+                logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
+                node.children = children.map(childData => upsertChildNode(childData, node));
+                node.childrenLoaded = true;
+                node.hasChildren = node.children.length > 0;
+                node.loading = false;
+                if (expand && node.hasChildren) {
+                    node.expanded = true;
+                    this._ensureChildrenLeafInfo(node);
+                } else {
+                    node.expanded = expand && node.hasChildren;
+                }
+                if (!node.hasChildren) {
+                    node.expanded = false;
+                }
+                this.render();
+                this._prefetchVisible();
+                return node.hasChildren;
+            } catch (err) {
+                logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
+                node.error = 'Не удалось загрузить дочерние';
+                node.loading = false;
+                this.render();
+                return false;
+            }
+        }
+
+        async _ensureNodeExpanded(node) {
+            if (!node) return false;
+            if (node.hasChildren === false && node.childrenLoaded) {
+                return false;
+            }
+            if (!node.childrenLoaded) {
+                return await this._loadChildrenForNode(node, { expand: true });
+            }
+            if (!node.children.length) {
+                node.hasChildren = false;
+                node.expanded = false;
+                this.render();
+                return false;
+            }
+            if (!node.expanded) {
+                node.expanded = true;
+                this.render();
+            }
+            this._ensureChildrenLeafInfo(node);
+            return true;
+        }
+
+        async _focusRow(nodeId) {
+            try {
+                const row = await waitFor(() => this.resultsContainer.querySelector(`.row[data-id="${nodeId}"]`), {
+                    timeout: WAIT_FOR_TIMEOUT_MS,
+                });
+                if (!row) return;
+                row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                row.classList.add('gce-focused');
+                setTimeout(() => {
+                    const fresh = this.resultsContainer.querySelector(`.row[data-id="${nodeId}"]`);
+                    if (fresh) {
+                        fresh.classList.remove('gce-focused');
+                    }
+                }, FOCUSED_HIGHLIGHT_MS);
+            } catch (err) {
+                logger.warn('Не удалось сфокусировать строку', { id: nodeId, error: err && err.message });
+            }
+        }
+
+        _onGlobalKeyDown(event) {
+            if (event.key === 'Escape') {
+                this._clearSelection();
+            }
+        }
+
+        _findBestMatch(candidates, segment) {
+            if (!Array.isArray(candidates) || !candidates.length) return null;
+            const target = normalizeText(segment);
+            const exact = candidates.find(item => normalizeText(item.name) === target);
+            if (exact) return exact;
+            for (const item of candidates) {
+                if (Array.isArray(item.pathSegments) && item.pathSegments.some(seg => normalizeText(seg) === target)) {
+                    return item;
+                }
+            }
+            let best = null;
+            let bestScore = 0;
+            for (const item of candidates) {
+                const nameNorm = normalizeText(item.name);
+                if (!nameNorm) continue;
+                let score = 0;
+                if (nameNorm.includes(target)) {
+                    score = target.length / nameNorm.length + 0.2;
+                } else if (target.includes(nameNorm)) {
+                    score = nameNorm.length / target.length + 0.2;
+                } else {
+                    const diff = Math.abs(nameNorm.length - target.length);
+                    score = 1 / (1 + diff);
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = item;
+                }
+            }
+            return best;
+        }
+
+        async _followPath(segments) {
+            if (!segments.length) return;
+            logger.info('Автонавигация по пути', { segments });
+            await this.startSearch(segments[0], { preserveSelection: true });
+            const rootNode = this._findBestMatch(SearchState.results, segments[0]);
+            if (!rootNode) {
+                const message = `Не найден сегмент "${segments[0]}"`;
+                this._showToast(message, 'error');
+                throw new Error(message);
+            }
+            let currentNode = rootNode;
+            for (let index = 1; index < segments.length; index++) {
+                const segment = segments[index];
+                const expanded = await this._ensureNodeExpanded(currentNode);
+                if (!expanded) {
+                    const message = `"${currentNode.name}" не имеет дочерних для сегмента "${segment}"`;
+                    this._showToast(message, 'error');
+                    throw new Error(message);
+                }
+                const match = this._findBestMatch(currentNode.children, segment);
+                if (!match) {
+                    const message = `Не удалось найти сегмент "${segment}"`;
+                    this._showToast(message, 'error');
+                    throw new Error(message);
+                }
+                currentNode = match;
+            }
+            await this._focusRow(currentNode.id);
+            this.lastFocusedId = currentNode.id;
+            ensureLeafState(currentNode).catch(() => {});
+            this._showToast(`Перешли к «${currentNode.name}»`, 'success');
         }
 
         _ensureChildrenLeafInfo(node) {
@@ -1381,10 +1927,15 @@
 
     // --- Определение, является ли узел листом ---
     async function ensureLeafState(node) {
-        if (!node || node.hasChildren !== null) return;
+        if (!node || node.childrenLoaded) return;
         try {
             const children = await loadChildren(node.id);
-            node.hasChildren = children.length > 0;
+            node.children = children.map(childData => upsertChildNode(childData, node));
+            node.childrenLoaded = true;
+            node.hasChildren = node.children.length > 0;
+            if (!node.hasChildren) {
+                node.expanded = false;
+            }
             logger.debug('Флаг листа обновлён', { id: node.id, hasChildren: node.hasChildren });
         } catch (err) {
             logger.warn('Не удалось определить наличие дочерних', { id: node.id, error: err && err.message });
