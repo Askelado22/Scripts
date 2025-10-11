@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.1
+// @version      1.0.2
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -212,14 +212,35 @@
         parseListPage(html) {
             const doc = domParser.parseFromString(html, 'text/html');
             const tables = Array.from(doc.querySelectorAll('table'));
-            let targetTable = doc.querySelector('table#index_table_categories');
+            let targetTable = null;
+
+            // Пытаемся найти таблицу внутри бокса с заголовком «Category» (основной список)
+            const categoryBox = Array.from(doc.querySelectorAll('.box'))
+                .find(box => {
+                    const title = box.querySelector('.box-header .box-title, .box-header h3, h3');
+                    if (!title) return false;
+                    const text = title.textContent.trim().toLowerCase();
+                    return text === 'category' || text.includes('category');
+                });
+            if (categoryBox) {
+                targetTable = categoryBox.querySelector('table');
+                logger.debug('Используем таблицу из блока Category', { found: Boolean(targetTable) });
+            }
+
+            if (!targetTable) {
+                targetTable = doc.querySelector('table#index_table_categories');
+            }
+
             if (!targetTable) {
                 targetTable = tables.find(table => {
-                    const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim().toLowerCase());
-                    if (!headers.includes('id')) return false;
+                    const headerCells = Array.from(table.querySelectorAll('thead th, tr th'));
+                    if (!headerCells.length) return false;
+                    const headers = headerCells.map(th => th.textContent.trim().toLowerCase());
+                    if (!headers.some(text => text === 'id' || text.includes('id'))) return false;
                     const breadcrumbColumn = headers.find(text => text.includes('путь') || text.includes('название') || text.includes('категория'));
                     if (!breadcrumbColumn) return false;
-                    return Array.from(table.querySelectorAll('tbody tr')).some(tr => tr.querySelectorAll('a[href*="/admin/categories/"]').length >= 2);
+                    return Array.from(table.querySelectorAll('tbody tr, tr'))
+                        .some(tr => tr.querySelectorAll('a[href*="/admin/categories/"]').length >= 2);
                 }) || null;
             }
             if (!targetTable) {
@@ -227,9 +248,20 @@
                 return { items: [], nextPage: null };
             }
 
-            const rows = Array.from(targetTable.querySelectorAll('tbody tr'));
+            const allRows = Array.from(targetTable.querySelectorAll('tbody tr'));
+            let rows = allRows.filter(tr => !tr.querySelector('th'));
+            if (!rows.length) {
+                const fallbackRows = Array.from(targetTable.querySelectorAll('tr')).filter(tr => !tr.querySelector('th'));
+                if (allRows.length) {
+                    logger.debug('Все строки оказались заголовками, пробуем использовать все tr без thead', { fallback: fallbackRows.length });
+                }
+                rows = fallbackRows;
+            }
             const items = [];
             logger.debug('Найдено строк в таблице', rows.length);
+            if (!rows.length) {
+                logger.warn('В таблице не найдено ни одной строки с данными');
+            }
             for (const tr of rows) {
                 const cells = Array.from(tr.children);
                 if (cells.length < 2) continue;
@@ -255,6 +287,10 @@
                         breadcrumbNames = parts;
                         pathDepth = parts.length;
                     }
+                }
+                if (!pathDepth) {
+                    logger.debug('Не удалось определить путь строки', { id, text: pathCell.textContent });
+                    continue;
                 }
                 if (pathDepth !== 3) {
                     logger.debug('Пропуск строки из-за глубины пути', { id, pathDepth, path: breadcrumbNames });
