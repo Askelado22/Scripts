@@ -731,11 +731,30 @@
         return categories.concat(sections);
     };
 
+    const applyDisplayOrder = (items) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+        if (items.length < 2) {
+            return items;
+        }
+        const ordered = orderChildrenForDisplay(items);
+        if (ordered.length !== items.length) {
+            return ordered;
+        }
+        for (let index = 0; index < ordered.length; index++) {
+            if (ordered[index] !== items[index]) {
+                return ordered;
+            }
+        }
+        return items;
+    };
+
     const assignChildrenToNode = (node, childrenData) => {
         const mapped = Array.isArray(childrenData)
             ? childrenData.map(childData => upsertChildNode(childData, node))
             : [];
-        const ordered = orderChildrenForDisplay(mapped);
+        const ordered = applyDisplayOrder(mapped);
         node.children = ordered;
         return ordered;
     };
@@ -749,6 +768,24 @@
         loading: false,
         error: null,
     };
+
+    function reorderSiblingsForNode(node) {
+        if (!node) return;
+        if (node.parentId) {
+            const parent = nodesMap.get(node.parentId);
+            if (parent && Array.isArray(parent.children) && parent.children.length > 1) {
+                const ordered = applyDisplayOrder(parent.children);
+                if (ordered !== parent.children) {
+                    parent.children = ordered;
+                }
+            }
+        } else if (Array.isArray(SearchState.results) && SearchState.results.length > 1) {
+            const orderedRoots = applyDisplayOrder(SearchState.results);
+            if (orderedRoots !== SearchState.results) {
+                SearchState.results = orderedRoots;
+            }
+        }
+    }
 
     // --- Инициализация панели ---
     function initPanel() {
@@ -1358,7 +1395,8 @@
                 }
                 SearchState.nextPage = nextPageUrl;
                 SearchState.pageCount += pagesFetched;
-                SearchState.results = loadMore ? SearchState.results.concat(gathered) : gathered;
+                const combined = loadMore ? SearchState.results.concat(gathered) : gathered;
+                SearchState.results = applyDisplayOrder(combined);
                 SearchState.loading = false;
                 this.render();
                 this._prefetchVisible();
@@ -1514,6 +1552,7 @@
             if (node.loading) return;
             if (node.childrenLoaded && node.children.length === 0) {
                 node.hasChildren = false;
+                reorderSiblingsForNode(node);
             }
             if (node.hasChildren === false && node.childrenLoaded) {
                 logger.debug('Игнорируем клик по листу', { id: node.id });
@@ -1528,6 +1567,7 @@
             } else if (!node.children.length) {
                 node.hasChildren = false;
                 node.expanded = false;
+                reorderSiblingsForNode(node);
                 this.render();
                 return;
             } else {
@@ -1687,6 +1727,7 @@
                 const mappedChildren = assignChildrenToNode(node, children);
                 node.childrenLoaded = true;
                 node.hasChildren = mappedChildren.length > 0;
+                reorderSiblingsForNode(node);
                 node.loading = false;
                 if (expand && node.hasChildren) {
                     node.expanded = true;
@@ -1720,6 +1761,7 @@
             if (!node.children.length) {
                 node.hasChildren = false;
                 node.expanded = false;
+                reorderSiblingsForNode(node);
                 this.render();
                 return false;
             }
@@ -2054,6 +2096,7 @@
             const mappedChildren = assignChildrenToNode(node, children);
             node.childrenLoaded = true;
             node.hasChildren = mappedChildren.length > 0;
+            reorderSiblingsForNode(node);
             if (!node.hasChildren) {
                 node.expanded = false;
             }
