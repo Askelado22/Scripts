@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.1.1
+// @version      1.1.2
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -851,6 +851,7 @@
                 -webkit-overflow-scrolling: touch;
                 user-select: none;
                 -webkit-user-select: none;
+                position: relative;
             }
             .results::-webkit-scrollbar { width: 8px; }
             .results::-webkit-scrollbar-thumb {
@@ -860,10 +861,11 @@
             .results::-webkit-scrollbar-thumb:hover { background: rgba(59,130,246,.35); }
             .row {
                 position: relative;
-                display: flex;
+                display: grid;
+                grid-template-columns: 80px minmax(0, 1fr);
                 align-items: center;
                 gap: 10px;
-                padding: 7px 12px;
+                padding: 7px 12px 7px 10px;
                 border-radius: var(--radius-sm);
                 border: 1px solid transparent;
                 margin: 0 2px;
@@ -871,12 +873,56 @@
                 line-height: 1.35;
                 cursor: pointer;
                 color: var(--text);
-                transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
+                transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2), opacity var(--dur-2);
                 min-height: 32px;
-                overflow: hidden;
+                overflow: visible;
                 user-select: none;
                 -webkit-user-select: none;
+                --indent-offset: 0px;
+                --rail-color: rgba(59,130,246,.42);
+                --rail-opacity: .7;
             }
+            .row::before {
+                content: '';
+                position: absolute;
+                left: 80px;
+                top: 6px;
+                bottom: 6px;
+                width: var(--indent-offset);
+                background: repeating-linear-gradient(
+                    to right,
+                    rgba(39,48,70,.45) 0,
+                    rgba(39,48,70,.45) 1px,
+                    transparent 1px,
+                    transparent 18px
+                );
+                opacity: 0.45;
+                pointer-events: none;
+            }
+            .row::after {
+                content: '';
+                position: absolute;
+                left: calc(80px + var(--indent-offset));
+                top: 6px;
+                bottom: 6px;
+                width: 3px;
+                border-radius: 999px;
+                background: var(--rail-color);
+                opacity: var(--rail-opacity);
+                pointer-events: none;
+            }
+            .row[data-depth="0"]::before {
+                width: 0;
+            }
+            .row[data-depth="0"]::after {
+                opacity: 0;
+            }
+            .row[data-depth="1"] { --rail-color: rgba(244,63,94,.55); }
+            .row[data-depth="2"] { --rail-color: rgba(59,130,246,.55); }
+            .row[data-depth="3"] { --rail-color: rgba(34,197,94,.55); }
+            .row[data-depth="4"] { --rail-color: rgba(250,204,21,.55); }
+            .row[data-depth="5"] { --rail-color: rgba(192,132,252,.55); }
+            .row[data-depth="6"] { --rail-color: rgba(56,189,248,.55); }
             .row:hover,
             .row.active {
                 background: rgba(244,63,94,.12);
@@ -885,7 +931,14 @@
                 color: var(--text);
             }
             .row .digi-badge {
-                flex: 0 0 auto;
+                justify-self: start;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: auto;
+                min-width: 56px;
+                max-width: 72px;
+                min-height: 24px;
                 font-weight: 650;
                 font-size: 12px;
                 letter-spacing: .01em;
@@ -895,17 +948,19 @@
                 border-radius: 8px;
                 padding: 4px 12px;
                 white-space: nowrap;
+                font-variant-numeric: tabular-nums;
             }
             .row .name {
-                flex: 1;
+                position: relative;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+                padding-left: calc(var(--indent-offset) + 14px);
             }
             .row.potential {
                 border-color: rgba(59,130,246,.22);
             }
-            .row.loading::after {
+            .row.loading .name::after {
                 content: '…';
                 font-size: 12px;
                 margin-left: 6px;
@@ -916,6 +971,7 @@
                 border-color: ${LIST_LEAF_HIGHLIGHT_BORDER};
                 color: #dbeafe;
                 cursor: default;
+                --rail-opacity: 0;
             }
             .row.leaf .digi-badge {
                 background: rgba(14,165,233,.26);
@@ -930,17 +986,36 @@
             .row.gce-selected {
                 background: rgba(244,63,94,.22);
                 border-color: rgba(244,63,94,.45);
-                box-shadow: inset 0 0 0 1px rgba(244,63,94,.3);
+                box-shadow: inset 4px 0 0 rgba(244,63,94,.75), inset 0 0 0 1px rgba(244,63,94,.3);
             }
             .row.gce-selected:hover {
                 background: rgba(244,63,94,.28);
                 border-color: rgba(244,63,94,.55);
-                box-shadow: inset 0 0 0 1px rgba(244,63,94,.35);
+                box-shadow: inset 4px 0 0 rgba(244,63,94,.82), inset 0 0 0 1px rgba(244,63,94,.35);
             }
             .row.gce-selected .digi-badge {
-                background: rgba(244,63,94,.2);
-                border-color: rgba(244,63,94,.45);
-                color: #ffe1e6;
+                background: rgba(14,165,233,.26);
+                border-color: rgba(14,165,233,.45);
+                color: #38bdf8;
+            }
+            .row.scope-current:not(.gce-selected):not(.leaf) {
+                background: rgba(244,63,94,.18);
+                border-color: rgba(244,63,94,.42);
+                box-shadow: inset 0 0 0 1px rgba(244,63,94,.32);
+            }
+            .row.scope-ancestor:not(.scope-current):not(.gce-selected):not(.leaf) {
+                background: rgba(59,130,246,.16);
+                border-color: rgba(59,130,246,.32);
+            }
+            .row.scope-muted {
+                opacity: .38;
+                --rail-opacity: .18;
+            }
+            .row.scope-muted:hover {
+                opacity: .65;
+            }
+            .row.scope-muted.gce-selected {
+                opacity: .75;
             }
             .row.gce-focused {
                 box-shadow: 0 0 0 2px rgba(244,63,94,.35);
@@ -1121,6 +1196,9 @@
             this.selectedIds = new Set();
             this.lastFocusedId = null;
             this.navigationInProgress = false;
+            this.scopeChain = new Set();
+            this.scopeCurrentId = null;
+            this.collator = typeof Intl !== 'undefined' && Intl.Collator ? new Intl.Collator('ru', { sensitivity: 'base', numeric: true }) : null;
         }
 
         init() {
@@ -1241,6 +1319,13 @@
             if (target) {
                 target.classList.add('active');
                 target.scrollIntoView({ block: 'nearest' });
+                const node = nodesMap.get(target.dataset.id);
+                if (node) {
+                    this.lastFocusedId = node.id;
+                    this._setScope(node);
+                } else {
+                    this._clearScope();
+                }
             }
         }
 
@@ -1257,6 +1342,7 @@
                 if (!preserveSelection) {
                     this._clearSelection();
                     this.lastFocusedId = null;
+                    this._clearScope();
                 }
                 this.render();
                 return Promise.resolve();
@@ -1272,6 +1358,7 @@
             if (!preserveSelection) {
                 this._clearSelection();
                 this.lastFocusedId = null;
+                this._clearScope();
             }
             this.render();
             return this._performSearch();
@@ -1380,6 +1467,7 @@
             }
             container.appendChild(fragment);
             this._updateSelectionUI();
+            this._applyScopeVisuals();
         }
 
         _renderNode(parentFragment, node, depth) {
@@ -1401,7 +1489,8 @@
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
-            row.style.paddingLeft = `${10 + depth * 16}px`;
+            const indentOffset = depth > 0 ? depth * 18 : 0;
+            row.style.setProperty('--indent-offset', `${indentOffset}px`);
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
@@ -1450,6 +1539,7 @@
             this.visibleNodes.push({ node, row });
 
             if (node.expanded && node.childrenLoaded && node.children.length) {
+                this._sortChildrenInPlace(node);
                 for (const child of node.children) {
                     this._renderNode(parentFragment, child, depth + 1);
                 }
@@ -1488,6 +1578,7 @@
 
         _handlePrimaryClick(node, row) {
             this.lastFocusedId = node.id;
+            this._setScope(node);
             if (row.dataset.hasChildren === 'false') {
                 return;
             }
@@ -1503,6 +1594,7 @@
                 row.classList.add('gce-selected');
             }
             this.lastFocusedId = node.id;
+            this._setScope(node);
             this._updateSelectionUI();
         }
 
@@ -1535,6 +1627,7 @@
                 }
             }
             this.lastFocusedId = node.id;
+            this._setScope(node);
             this._updateSelectionUI();
         }
 
@@ -1545,6 +1638,7 @@
                 row.classList.remove('gce-selected');
             }
             this._updateSelectionUI();
+            this._applyScopeVisuals();
         }
 
         _updateSelectionUI() {
@@ -1556,6 +1650,67 @@
                 this.selectionActionsEl.hidden = true;
                 this.selectionActionsEl.classList.remove('visible');
             }
+        }
+
+        _setScope(node) {
+            if (!node) {
+                this._clearScope();
+                return;
+            }
+            const chain = new Set();
+            const visited = new Set();
+            let current = node;
+            while (current && !visited.has(current.id)) {
+                chain.add(current.id);
+                visited.add(current.id);
+                if (!current.parentId) break;
+                current = nodesMap.get(current.parentId);
+            }
+            this.scopeChain = chain;
+            this.scopeCurrentId = node.id;
+            this._applyScopeVisuals();
+        }
+
+        _clearScope() {
+            this.scopeChain = new Set();
+            this.scopeCurrentId = null;
+            this._applyScopeVisuals();
+        }
+
+        _applyScopeVisuals() {
+            if (!this.resultsContainer) return;
+            const rows = Array.from(this.resultsContainer.querySelectorAll('.row'));
+            if (!rows.length) return;
+            const hasScope = this.scopeChain && this.scopeChain.size;
+            for (const row of rows) {
+                row.classList.remove('scope-current', 'scope-ancestor', 'scope-muted');
+                if (!hasScope) continue;
+                const id = row.dataset.id;
+                if (!id) continue;
+                if (id === this.scopeCurrentId) {
+                    row.classList.add('scope-current');
+                    continue;
+                }
+                if (this.scopeChain.has(id)) {
+                    row.classList.add('scope-ancestor');
+                    continue;
+                }
+                if (this.selectedIds.has(id)) continue;
+                row.classList.add('scope-muted');
+            }
+        }
+
+        _sortChildrenInPlace(node) {
+            if (!node || !Array.isArray(node.children) || node.children.length < 2) return;
+            node.children.sort((a, b) => {
+                const aLeaf = a.hasChildren === false || (a.childrenLoaded && a.children.length === 0);
+                const bLeaf = b.hasChildren === false || (b.childrenLoaded && b.children.length === 0);
+                if (aLeaf !== bLeaf) return aLeaf ? 1 : -1;
+                const aName = (a.name || '').trim();
+                const bName = (b.name || '').trim();
+                if (this.collator) return this.collator.compare(aName, bName);
+                return aName.localeCompare(bName);
+            });
         }
 
         async _copySelectedDigis() {
@@ -1633,6 +1788,7 @@
                 node.children = children.map(childData => upsertChildNode(childData, node));
                 node.childrenLoaded = true;
                 node.hasChildren = node.children.length > 0;
+                this._sortChildrenInPlace(node);
                 node.loading = false;
                 if (expand && node.hasChildren) {
                     node.expanded = true;
@@ -1684,6 +1840,11 @@
                 });
                 if (!row) return;
                 row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                const node = nodesMap.get(nodeId);
+                if (node) {
+                    this.lastFocusedId = node.id;
+                    this._setScope(node);
+                }
                 row.classList.add('gce-focused');
                 setTimeout(() => {
                     const fresh = this.resultsContainer.querySelector(`.row[data-id="${nodeId}"]`);
@@ -1699,6 +1860,7 @@
         _onGlobalKeyDown(event) {
             if (event.key === 'Escape') {
                 this._clearSelection();
+                this._clearScope();
             }
         }
 
@@ -1745,6 +1907,8 @@
                 throw new Error(message);
             }
             let currentNode = rootNode;
+            this.lastFocusedId = rootNode.id;
+            this._setScope(rootNode);
             for (let index = 1; index < segments.length; index++) {
                 const segment = segments[index];
                 const expanded = await this._ensureNodeExpanded(currentNode);
@@ -1760,6 +1924,8 @@
                     throw new Error(message);
                 }
                 currentNode = match;
+                this.lastFocusedId = currentNode.id;
+                this._setScope(currentNode);
             }
             await this._focusRow(currentNode.id);
             this.lastFocusedId = currentNode.id;
@@ -1773,6 +1939,7 @@
             logger.debug('Префетч дочерних уровней', { parentId: node.id, count: candidates.length });
             Promise.allSettled(candidates.map(child => ensureLeafState(child))).then(() => {
                 logger.debug('Актуализированы флаги листьев', { parentId: node.id });
+                this._sortChildrenInPlace(node);
                 this.render();
             });
         }
