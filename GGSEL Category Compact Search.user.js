@@ -67,17 +67,6 @@
     }
 
     /**
-     * Простой дебаунс, чтобы не спамить запросами при быстром вводе.
-     */
-    function debounce(fn, wait) {
-        let timeout;
-        return function (...args) {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => fn.apply(this, args), wait);
-        };
-    }
-
-    /**
      * Проверяет, что строка состоит только из цифр.
      */
     function isNumericQuery(value) {
@@ -720,7 +709,7 @@
                 this.hidePopover();
             });
 
-            this.input.addEventListener('input', debounce(onSearchInput, 250));
+            this.input.addEventListener('input', onSearchInputChange);
             this.input.addEventListener('keydown', onInputKeyDown);
             this.list.addEventListener('click', onRowClick);
             this.list.addEventListener('pointerenter', onRowPointerEnter, { capture: true });
@@ -812,16 +801,45 @@
     // =============================
 
     let searchAbortController = null;
+    let searchDebounceTimer = null;
 
-    async function onSearchInput(event) {
-        const value = event.target.value.trim();
+    function onSearchInputChange(event) {
+        const target = event && event.target;
+        const value = target && typeof target.value === 'string' ? target.value : '';
+        scheduleSearch(value);
+    }
+
+    /**
+     * Планирует запуск поиска: либо сразу (по Enter), либо спустя секунду после последнего ввода.
+     */
+    function scheduleSearch(rawValue, immediate = false) {
+        const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+        clearTimeout(searchDebounceTimer);
         if (!value) {
+            if (searchAbortController) {
+                searchAbortController.abort();
+                searchAbortController = null;
+            }
             ui.setStatus('Введите название или ID категории.');
             state.nodes.clear();
             state.visibleIds = [];
             ui.render();
             return;
         }
+        if (immediate) {
+            void runSearch(value);
+            return;
+        }
+        searchDebounceTimer = setTimeout(() => {
+            void runSearch(value);
+        }, 1000);
+    }
+
+    async function runSearch(value) {
+        if (!value) {
+            return;
+        }
+        clearTimeout(searchDebounceTimer);
         if (searchAbortController) {
             searchAbortController.abort();
         }
@@ -993,17 +1011,14 @@
     }
 
     function onInputKeyDown(event) {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (event.key === 'Enter') {
+            if (event.target === ui.input) {
+                event.preventDefault();
+                scheduleSearch(ui.input.value, true);
+            }
+        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault();
             moveSelection(event.key === 'ArrowDown' ? 1 : -1);
-        } else if (event.key === 'Enter') {
-            const selected = ui.list.querySelector('.row.selected');
-            if (selected) {
-                const id = parseInt(selected.dataset.id, 10);
-                if (Number.isFinite(id)) {
-                    toggleNode(id);
-                }
-            }
         }
     }
 
