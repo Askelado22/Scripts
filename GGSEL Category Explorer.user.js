@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.2
+// @version      1.2.3
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -874,7 +874,7 @@
                 top: 16px;
                 right: 16px;
                 width: 348px;
-                padding: 14px 14px 10px;
+                padding: 14px;
                 background: var(--panel);
                 color: var(--text);
                 border-radius: var(--radius);
