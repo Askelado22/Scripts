@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.7
+// @version      1.0.8
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -21,6 +21,7 @@
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
     const LIST_LEAF_MARKER_COLOR = '#a9b0c6';
+    const POPOVER_HIDE_DELAY_MS = 220;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
     // --- Вспомогательные функции ---
@@ -863,6 +864,7 @@
             this.currentPopover = null;
             this.currentPopoverAnchor = null;
             this.currentHoverRow = null;
+            this.popoverHideTimer = null;
             this.debounceTimer = null;
             this.visibleNodes = [];
         }
@@ -1163,6 +1165,7 @@
         }
 
         _onRowHoverStart(event, node, row) {
+            this._cancelPopoverHide();
             this._onRowHoverEnd();
             this.currentHoverRow = row;
             logger.debug('Наведение на строку', { id: node.id });
@@ -1180,6 +1183,7 @@
         _onRowHoverEnd(event) {
             clearTimeout(this.hoverTimer);
             this.hoverTimer = null;
+            this._cancelPopoverHide();
             if (event && this.currentPopover) {
                 const related = event.relatedTarget;
                 if (related && (related === this.currentPopover || this.currentPopover.contains(related))) {
@@ -1188,12 +1192,17 @@
                 }
             }
             this.currentHoverRow = null;
-            this._hidePopover();
+            if (event && this.currentPopover) {
+                this._schedulePopoverHide();
+            } else {
+                this._hidePopover();
+            }
         }
 
         _showPopover(row, node, stats) {
             if (this.currentHoverRow !== row) return;
             this._hidePopover();
+            this._cancelPopoverHide();
             const pop = document.createElement('div');
             pop.className = 'popover';
             if (stats.error) {
@@ -1242,21 +1251,24 @@
             const maxTop = window.scrollY + window.innerHeight - popRect.height - 8;
             if (top < minTop) top = minTop;
             if (top > maxTop) top = Math.max(minTop, maxTop);
-            let left = rect.right + 12 + window.scrollX;
+            let left = rect.right + 6 + window.scrollX;
             if (left + popRect.width > window.innerWidth - 12) {
-                left = rect.left + window.scrollX - popRect.width - 12;
+                left = rect.left + window.scrollX - popRect.width - 6;
             }
             if (left < 12) {
                 left = 12;
             }
             pop.style.top = `${top}px`;
             pop.style.left = `${left}px`;
+            pop.addEventListener('mouseenter', () => {
+                this._cancelPopoverHide();
+            });
             pop.addEventListener('mouseleave', (e) => {
                 const related = e.relatedTarget;
                 if (related && (related === row || row.contains(related))) {
                     return;
                 }
-                this._hidePopover();
+                this._schedulePopoverHide();
             });
             this.currentPopover = pop;
             this.currentPopoverAnchor = row;
@@ -1264,10 +1276,26 @@
         }
 
         _hidePopover() {
+            this._cancelPopoverHide();
             if (this.currentPopover) {
                 this.currentPopover.remove();
                 this.currentPopover = null;
                 this.currentPopoverAnchor = null;
+            }
+        }
+
+        _schedulePopoverHide() {
+            this._cancelPopoverHide();
+            this.popoverHideTimer = setTimeout(() => {
+                this.popoverHideTimer = null;
+                this._hidePopover();
+            }, POPOVER_HIDE_DELAY_MS);
+        }
+
+        _cancelPopoverHide() {
+            if (this.popoverHideTimer) {
+                clearTimeout(this.popoverHideTimer);
+                this.popoverHideTimer = null;
             }
         }
 
