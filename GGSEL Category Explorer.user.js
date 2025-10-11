@@ -34,6 +34,43 @@
         error: (...args) => console.error(LOG_PREFIX, ...args),
     };
 
+    // --- Форматирование числовых данных для интерфейса ---
+    const trimTrailingZeros = (value) => String(value).replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1');
+
+    const formatNumber = (num, fractionDigits = 2) => {
+        if (num == null || Number.isNaN(Number(num))) return '';
+        const fixed = Number(num).toFixed(fractionDigits);
+        return trimTrailingZeros(fixed);
+    };
+
+    const formatPercent = (value) => {
+        if (value == null || Number.isNaN(Number(value))) return null;
+        const amount = Number(value);
+        const digits = amount >= 10 ? 1 : 2;
+        return `${formatNumber(amount, digits)}%`;
+    };
+
+    const formatAutoFinish = (hours, rawValue) => {
+        if (hours == null || Number.isNaN(Number(hours))) {
+            return rawValue || '—';
+        }
+        const hoursValue = Number(hours);
+        const daysValue = hoursValue / 24;
+        const hoursText = formatNumber(hoursValue, hoursValue % 1 === 0 ? 0 : 1);
+        const daysText = formatNumber(daysValue, daysValue >= 10 ? 1 : 2);
+        return `${hoursText} ч · ${daysText} дн.`;
+    };
+
+    const getStatusClass = (status) => {
+        if (!status) return '';
+        const text = status.toLowerCase();
+        if (text.includes('active') || text.includes('актив')) return 'status-active';
+        if (text.includes('pause') || text.includes('inactive') || text.includes('неактив') || text.includes('останов') || text.includes('disabled')) {
+            return 'status-inactive';
+        }
+        return '';
+    };
+
     // --- Класс для определения типа запроса ---
     class QueryParser {
         // Определяем, состоит ли запрос только из цифр
@@ -250,6 +287,22 @@
             }
 
             const allRows = Array.from(targetTable.querySelectorAll('tbody tr'));
+            let headerCells = Array.from(targetTable.querySelectorAll('thead th'));
+            if (!headerCells.length) {
+                const headerRow = Array.from(targetTable.querySelectorAll('tbody tr'))
+                    .find(tr => Array.from(tr.children).some(cell => cell.tagName === 'TH'));
+                if (headerRow) {
+                    headerCells = Array.from(headerRow.children);
+                }
+            }
+            const columnIndex = { status: null, kind: null, digi: null };
+            headerCells.forEach((cell, idx) => {
+                const text = (cell.textContent || '').trim().toLowerCase();
+                if (!text) return;
+                if (text.includes('статус') || text.includes('status')) columnIndex.status = idx;
+                if (text.includes('kind') || text.includes('тип')) columnIndex.kind = idx;
+                if (text.includes('digi') || text.includes('catalog') || text.includes('каталог')) columnIndex.digi = idx;
+            });
             let rows = allRows.filter(tr => !tr.querySelector('th'));
             if (!rows.length) {
                 const fallbackRows = Array.from(targetTable.querySelectorAll('tr')).filter(tr => !tr.querySelector('th'));
@@ -297,9 +350,18 @@
                     logger.debug('Пропуск строки из-за глубины пути', { id, pathDepth, path: breadcrumbNames });
                     continue;
                 }
+                const pickCellText = (idx, fallbackIdx) => {
+                    const targetIdx = typeof idx === 'number' && idx >= 0 ? idx : fallbackIdx;
+                    if (typeof targetIdx !== 'number') return '';
+                    const cell = cells[targetIdx];
+                    return cell ? cell.textContent.trim() : '';
+                };
+                const status = pickCellText(columnIndex.status, 1);
+                const kind = pickCellText(columnIndex.kind, 2);
+                const digi = pickCellText(columnIndex.digi, 3);
                 const name = breadcrumbNames[breadcrumbNames.length - 1] || (nameCell.textContent || '').trim();
                 const href = idLink.getAttribute('href');
-                items.push({ id, name, pathDepth, href, pathAnchors: breadcrumbNames });
+                items.push({ id, name, pathDepth, href, pathAnchors: breadcrumbNames, status, kind, digi });
             }
             logger.info('Распарсено элементов', items.length);
             if (!items.length && rows.length) {
@@ -359,39 +421,142 @@
         parseStats(html) {
             const doc = domParser.parseFromString(html, 'text/html');
             const stats = {};
-            const infoRows = Array.from(doc.querySelectorAll('.box .box-body .row .col-sm-6, .box .box-body .col-md-6'));
-            for (const block of infoRows) {
-                const labelEl = block.querySelector('strong, span');
-                if (!labelEl) continue;
-                const label = labelEl.textContent.trim().toLowerCase();
-                const value = block.textContent.replace(labelEl.textContent, '').trim();
-                if (label.includes('статус')) stats.status = value;
-                if (label.includes('тип') && !stats.kind) stats.kind = value;
-                if (label.includes('content type')) stats.contentType = value;
-                if (label.includes('digi') || label.includes('catalog')) stats.digi = value;
+
+            const labelPairs = [];
+
+            const pushPair = (label, value) => {
+                const cleanLabel = label.trim();
+                const cleanValue = value.trim();
+                if (!cleanLabel || !cleanValue) return;
+                labelPairs.push({
+                    label: cleanLabel.toLowerCase(),
+                    value: cleanValue,
+                });
+            };
+
+            const categoryBox = Array.from(doc.querySelectorAll('div.box'))
+                .find(box => {
+                    const header = box.querySelector('.box-header .box-title, h3');
+                    if (!header) return false;
+                    const text = header.textContent.trim().toLowerCase();
+                    return text.includes('category') || text.includes('категор');
+                });
+
+            const collectFromTables = (scope) => {
+                const tables = scope ? scope.querySelectorAll('table') : doc.querySelectorAll('table');
+                for (const table of tables) {
+                    for (const row of Array.from(table.querySelectorAll('tr'))) {
+                        const cells = Array.from(row.children).filter(Boolean);
+                        if (cells.length < 2) continue;
+                        const labelCell = cells[0];
+                        const valueCell = cells[1];
+                        if (labelCell.tagName === 'TH' && valueCell.tagName === 'TH') continue;
+                        const labelText = labelCell.textContent || '';
+                        const valueText = valueCell.textContent || '';
+                        if (!labelText.trim() || !valueText.trim()) continue;
+                        pushPair(labelText, valueText);
+                    }
+                }
+            };
+
+            const collectDefinitionLists = (scope) => {
+                const dls = scope ? scope.querySelectorAll('dl') : doc.querySelectorAll('dl');
+                for (const dl of dls) {
+                    const dts = Array.from(dl.querySelectorAll('dt'));
+                    for (const dt of dts) {
+                        const dd = dt.nextElementSibling;
+                        if (!dd) continue;
+                        pushPair(dt.textContent || '', dd.textContent || '');
+                    }
+                }
+            };
+
+            const collectInfoBlocks = (scope) => {
+                const selectors = ['.row .col-sm-6', '.row .col-md-6', '.form-group'];
+                for (const selector of selectors) {
+                    for (const block of Array.from((scope || doc).querySelectorAll(selector))) {
+                        const labelEl = block.querySelector('strong, span, label');
+                        if (!labelEl) continue;
+                        const labelText = labelEl.textContent || '';
+                        const fullText = block.textContent || '';
+                        const valueText = fullText.replace(labelText, '').trim();
+                        pushPair(labelText, valueText);
+                    }
+                }
+            };
+
+            if (categoryBox) {
+                collectFromTables(categoryBox);
+                collectDefinitionLists(categoryBox);
+                collectInfoBlocks(categoryBox);
+            } else {
+                collectFromTables(null);
+                collectDefinitionLists(null);
+                collectInfoBlocks(null);
             }
-            const idMatch = doc.querySelector('.content-header h1');
-            if (idMatch) {
-                const text = idMatch.textContent;
-                const id = (text.match(/#(\d+)/) || [])[1];
-                if (id) stats.id = id;
-            }
-            const infoTable = doc.querySelector('table');
-            if (infoTable) {
-                const rows = Array.from(infoTable.querySelectorAll('tr'));
-                for (const tr of rows) {
-                    const cells = Array.from(tr.children);
-                    if (cells.length < 2) continue;
-                    const label = cells[0].textContent.trim().toLowerCase();
-                    const value = cells[1].textContent.trim();
-                    if (label.includes('создан')) stats.createdAt = value;
-                    if (label.includes('обновл')) stats.updatedAt = value;
+
+            const setIfEmpty = (key, value) => {
+                if (value == null || value === '') return;
+                if (stats[key] == null || stats[key] === '') {
+                    stats[key] = value;
+                }
+            };
+
+            for (const { label, value } of labelPairs) {
+                if (label.includes('статус') || label.includes('status')) {
+                    setIfEmpty('status', value);
+                }
+                if ((label.includes('тип') || label.includes('kind')) && !label.includes('контент')) {
+                    setIfEmpty('kind', value);
+                }
+                if (label.includes('content type')) {
+                    setIfEmpty('contentType', value);
+                }
+                if (label.includes('digi') || label.includes('catalog') || label.includes('каталог')) {
+                    if (/[\d\-]+/.test(value)) {
+                        setIfEmpty('digi', value.replace(/[^\d]/g, ''));
+                    } else {
+                        setIfEmpty('digi', value);
+                    }
+                }
+                if (label.includes('комис')) {
+                    const numeric = parseFloat(value.replace(',', '.'));
+                    if (!Number.isNaN(numeric)) {
+                        const percent = numeric <= 1 ? numeric * 100 : numeric;
+                        stats.commissionPercent = Math.round(percent * 100) / 100;
+                    } else {
+                        stats.commissionRaw = value;
+                    }
+                }
+                if (label.includes('автозаверш') || label.includes('autofinish') || label.includes('auto finish')) {
+                    const numeric = parseFloat(value.replace(',', '.'));
+                    if (!Number.isNaN(numeric)) {
+                        stats.autoFinishHours = numeric;
+                    } else {
+                        stats.autoFinishRaw = value;
+                    }
+                }
+                if (label.includes('создан')) {
+                    setIfEmpty('createdAt', value);
+                }
+                if (label.includes('обновл')) {
+                    setIfEmpty('updatedAt', value);
+                }
+                if (label.includes('id') && !stats.id) {
+                    const match = value.match(/\d+/);
+                    if (match) {
+                        stats.id = match[0];
+                    }
                 }
             }
-            if (!stats.status) {
-                const statusRow = Array.from(doc.querySelectorAll('td')).find(td => td.textContent.trim().toLowerCase().includes('active'));
-                if (statusRow) stats.status = statusRow.textContent.trim();
+
+            const header = doc.querySelector('.content-header h1');
+            if (header && !stats.id) {
+                const text = header.textContent || '';
+                const match = text.match(/#(\d+)/);
+                if (match) stats.id = match[1];
             }
+
             logger.debug('Распарсена карточка категории', stats);
             return stats;
         }
@@ -535,29 +700,47 @@
             }
             .popover {
                 position: fixed;
-                background: rgba(20,20,28,0.98);
+                background: rgba(20,20,28,0.96);
                 color: #fff;
                 border-radius: 6px;
-                padding: 10px;
+                padding: 10px 12px;
                 font-size: 12px;
-                max-width: 260px;
-                box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+                max-width: 240px;
+                box-shadow: 0 8px 20px rgba(0,0,0,0.45);
                 pointer-events: none;
-                border: 1px solid rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.12);
                 z-index: 1000000;
             }
-            .popover dl {
+            .popover.status-active {
+                border-color: rgba(90, 149, 255, 0.85);
+                box-shadow: 0 10px 28px rgba(60, 110, 220, 0.35);
+                background: rgba(24, 36, 64, 0.95);
+            }
+            .popover.status-inactive {
+                border-color: rgba(255, 120, 120, 0.8);
+                box-shadow: 0 10px 28px rgba(200, 60, 60, 0.28);
+                background: rgba(54, 18, 24, 0.95);
+            }
+            .popover .status-line {
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+                margin-bottom: 6px;
+                font-size: 11px;
+                opacity: 0.85;
+            }
+            .popover .grid {
                 display: grid;
                 grid-template-columns: auto 1fr;
-                gap: 4px 8px;
-                margin: 0;
+                gap: 4px 10px;
             }
-            .popover dt {
-                font-weight: 600;
-                color: rgba(255,255,255,0.7);
+            .popover .label {
+                color: rgba(255,255,255,0.6);
+                white-space: nowrap;
             }
-            .popover dd {
-                margin: 0;
+            .popover .value {
+                color: rgba(255,255,255,0.92);
+                text-align: right;
             }
         `;
         shadow.appendChild(style);
@@ -773,6 +956,8 @@
             if (node.loading) row.classList.add('loading');
             row.dataset.id = node.id;
             row.dataset.depth = String(depth);
+            row.dataset.status = node.status || '';
+            row.dataset.digi = node.digi || '';
             const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
             row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
             row.title = new URL(node.href, location.origin).toString();
@@ -839,6 +1024,9 @@
                             if (typeof childData.hasChildren === 'boolean') {
                                 existing.hasChildren = childData.hasChildren;
                             }
+                            if (childData.status) existing.status = childData.status;
+                            if (childData.kind) existing.kind = childData.kind;
+                            if (childData.digi) existing.digi = childData.digi;
                             return existing;
                         }
                         const childNode = new CategoryNode(childData, node.id);
@@ -887,10 +1075,10 @@
             this.hoverTimer = setTimeout(async () => {
                 try {
                     const stats = await loadStats(node.id);
-                    this._showPopover(row, stats);
+                    this._showPopover(row, node, stats);
                 } catch (err) {
                     logger.error('Ошибка загрузки статистики', { id: node.id, error: err && err.message });
-                    this._showPopover(row, { error: 'Не удалось получить данные' });
+                    this._showPopover(row, node, { error: 'Не удалось получить данные' });
                 }
             }, HOVER_DELAY_MS);
         }
@@ -905,38 +1093,61 @@
             }
         }
 
-        _showPopover(row, stats) {
+        _showPopover(row, node, stats) {
             if (this.currentHoverRow !== row) return;
             if (this.currentPopover) this.currentPopover.remove();
             const pop = document.createElement('div');
             pop.className = 'popover';
-            const fields = [
-                ['ID', stats.id || row.dataset.id],
-                ['Статус', stats.status || '—'],
-                ['Тип', stats.kind || '—'],
-                ['Content type', stats.contentType || '—'],
-                ['digi_catalog', stats.digi || '—'],
-                ['Создано', stats.createdAt || '—'],
-                ['Обновлено', stats.updatedAt || '—'],
-            ];
             if (stats.error) {
                 pop.textContent = stats.error;
             } else {
-                const dl = document.createElement('dl');
-                for (const [label, value] of fields) {
-                    const dt = document.createElement('dt');
-                    dt.textContent = label;
-                    const dd = document.createElement('dd');
-                    dd.textContent = value;
-                    dl.appendChild(dt);
-                    dl.appendChild(dd);
-                }
-                pop.appendChild(dl);
+                const effectiveStatus = stats.status || node.status || row.dataset.status || '—';
+                const statusClass = getStatusClass(effectiveStatus);
+                if (statusClass) pop.classList.add(statusClass);
+                const title = document.createElement('div');
+                title.className = 'status-line';
+                const idText = stats.id || node.id || row.dataset.id;
+                title.textContent = `#${idText || '—'} · ${effectiveStatus}`;
+                const grid = document.createElement('div');
+                grid.className = 'grid';
+
+                const appendRow = (label, value) => {
+                    const labelEl = document.createElement('span');
+                    labelEl.className = 'label';
+                    labelEl.textContent = label;
+                    const valueEl = document.createElement('span');
+                    valueEl.className = 'value';
+                    valueEl.textContent = value;
+                    grid.appendChild(labelEl);
+                    grid.appendChild(valueEl);
+                };
+
+                const digiValue = stats.digi || node.digi || row.dataset.digi || '—';
+                const commissionValue = stats.commissionPercent != null
+                    ? formatPercent(stats.commissionPercent)
+                    : (stats.commissionRaw || '—');
+                const autoFinishValue = formatAutoFinish(stats.autoFinishHours, stats.autoFinishRaw);
+
+                appendRow('Каталог', digiValue);
+                appendRow('Комиссия', commissionValue || '—');
+                appendRow('Автозавершение', autoFinishValue);
+
+                pop.appendChild(title);
+                pop.appendChild(grid);
             }
             this.shadowRoot.appendChild(pop);
             const rect = row.getBoundingClientRect();
-            pop.style.top = `${rect.top + window.scrollY}px`;
-            pop.style.left = `${rect.right + 8 + window.scrollX}px`;
+            const top = rect.top + window.scrollY;
+            let left = rect.right + 8 + window.scrollX;
+            const popRect = pop.getBoundingClientRect();
+            if (left + popRect.width > window.innerWidth - 8) {
+                left = rect.left + window.scrollX - popRect.width - 8;
+            }
+            if (left < 8) {
+                left = 8;
+            }
+            pop.style.top = `${top}px`;
+            pop.style.left = `${left}px`;
             this.currentPopover = pop;
             logger.debug('Показ поповера', { id: stats.id });
         }
@@ -1011,6 +1222,12 @@
         const stats = Parser.parseStats(html);
         stats.id = stats.id || categoryId;
         logger.debug('Распарсена статистика', stats);
+        const relatedNode = nodesMap.get(categoryId);
+        if (relatedNode) {
+            if (stats.status) relatedNode.status = stats.status;
+            if (stats.kind) relatedNode.kind = stats.kind;
+            if (stats.digi) relatedNode.digi = stats.digi;
+        }
         statsCache.set(categoryId, stats);
         return stats;
     }
