@@ -752,7 +752,7 @@
                 --ring:#8ab4ff;
                 --blue:#3B82F6;
                 --blue-600:#2563eb;
-                --rose:#FB7185;
+                --rose:#f43f5e;
                 --rose-600:#e11d48;
                 --accent-danger:#f43f5e;
                 --success:#22c55e;
@@ -777,6 +777,8 @@
                 flex-direction: column;
                 gap: 6px;
                 z-index: 999999;
+                user-select: none;
+                -webkit-user-select: none;
             }
             .search-row {
                 display: flex;
@@ -823,6 +825,8 @@
                 color: var(--text);
                 background: var(--panel-2);
                 transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1);
+                user-select: text;
+                -webkit-user-select: text;
             }
             .search-input::placeholder {
                 color: rgba(169,176,198,.65);
@@ -830,7 +834,7 @@
             .search-input:focus {
                 outline: none;
                 border-color: var(--rose);
-                box-shadow: 0 0 0 3px rgba(251,113,133,.25);
+                box-shadow: 0 0 0 3px rgba(244,63,94,.25);
                 background: rgba(21,24,36,.96);
             }
             .results {
@@ -918,24 +922,24 @@
                 box-shadow: inset 0 0 0 1px rgba(59,130,246,.2);
             }
             .row.gce-selected {
-                background: rgba(251,113,133,.22);
-                border-color: rgba(251,113,133,.45);
-                box-shadow: inset 0 0 0 1px rgba(251,113,133,.3);
+                background: rgba(244,63,94,.22);
+                border-color: rgba(244,63,94,.45);
+                box-shadow: inset 0 0 0 1px rgba(244,63,94,.3);
             }
             .row.gce-selected .digi-badge {
-                background: rgba(251,113,133,.2);
-                border-color: rgba(251,113,133,.45);
+                background: rgba(244,63,94,.2);
+                border-color: rgba(244,63,94,.45);
                 color: #ffe1e6;
             }
             .row.gce-focused {
-                box-shadow: 0 0 0 2px rgba(251,113,133,.35);
+                box-shadow: 0 0 0 2px rgba(244,63,94,.35);
             }
             .row[data-has-children="false"] {
                 cursor: default;
             }
             .row.error {
                 color: var(--rose);
-                border-color: rgba(251,113,133,.35);
+                border-color: rgba(244,63,94,.35);
             }
             .empty-state,
             .error-state,
@@ -1001,8 +1005,8 @@
                 color: #dbeafe;
             }
             .toast--error {
-                border-color: rgba(251,113,133,.55);
-                background: rgba(251,113,133,.18);
+                border-color: rgba(244,63,94,.55);
+                background: rgba(244,63,94,.18);
                 color: #ffe1e6;
             }
             .toast--success {
@@ -1031,9 +1035,9 @@
                 background: linear-gradient(165deg, rgba(59,130,246,.26), rgba(10,13,22,.95));
             }
             .popover.status-inactive {
-                border-color: rgba(251,113,133,.55);
-                box-shadow: 0 18px 44px rgba(251,113,133,.28);
-                background: linear-gradient(165deg, rgba(251,113,133,.28), rgba(10,13,22,.95));
+                border-color: rgba(244,63,94,.55);
+                box-shadow: 0 18px 44px rgba(244,63,94,.28);
+                background: linear-gradient(165deg, rgba(244,63,94,.28), rgba(10,13,22,.95));
             }
             .popover .status-line {
                 font-weight: 600;
@@ -1065,8 +1069,8 @@
         panel.innerHTML = `
             <div class="search-row">
                 <div class="selection-actions" hidden>
-                    <button type="button" class="selection-button selection-copy-digi">Копировать DIGI</button>
-                    <button type="button" class="selection-button selection-copy-paths">Копировать пути</button>
+                    <button type="button" class="selection-button selection-copy-digi">DIGI</button>
+                    <button type="button" class="selection-button selection-copy-paths">Пути</button>
                 </div>
                 <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
             </div>
@@ -1333,7 +1337,10 @@
             const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
             row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
             row.dataset.hasChildren = isLeaf ? 'false' : (hasChildrenKnown ? 'true' : 'unknown');
-            row.title = new URL(node.href, location.origin).toString();
+            const nodeHref = new URL(node.href, location.origin).toString();
+            row.dataset.href = nodeHref;
+            const pathTitle = this._buildPathForNode(node);
+            row.title = pathTitle;
             row.style.paddingLeft = `${10 + depth * 16}px`;
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
@@ -1341,7 +1348,7 @@
             }
             const digiBadge = document.createElement('span');
             digiBadge.className = 'digi-badge';
-            digiBadge.textContent = node.digi ? `[${node.digi}]` : '[—]';
+            digiBadge.textContent = node.digi ? node.digi : '—';
             const nameEl = document.createElement('span');
             nameEl.className = 'name';
             nameEl.textContent = node.name;
@@ -1373,7 +1380,7 @@
             });
             row.addEventListener('auxclick', (e) => {
                 if (e.button === 1) {
-                    window.open(row.title, '_blank');
+                    window.open(row.dataset.href || nodeHref, '_blank');
                 }
             });
             row.addEventListener('mouseenter', (e) => this._onRowHoverStart(e, node, row));
