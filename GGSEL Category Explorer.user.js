@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.0.3
+// @version      1.0.4
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -20,7 +20,7 @@
     const RETRY_COUNT = 2;
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
-    const LIST_LEAF_MARKER_COLOR = '#8a8a8a';
+    const LIST_LEAF_MARKER_COLOR = '#94a3b8';
     const LOG_PREFIX = '[GGSEL Explorer]';
 
     // --- Вспомогательные функции ---
@@ -606,69 +606,95 @@
 
         const style = document.createElement('style');
         style.textContent = `
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
             :host, * { box-sizing: border-box; }
+            :host { color: #e2e8f0; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
             .panel {
+                --bg:#0f172a; --text:#e2e8f0; --card:#111827; --muted:#94a3b8;
+                --panel:#121b27; --accent-blue:#2563eb; --accent-rose:#f43f5e;
+                --accent-blue-10: rgba(37,99,235,.10); --accent-rose-10: rgba(244,63,94,.10);
+                --yes:#3b82f6; --no:#ef4444; --border: rgba(148,163,184,.18);
+                --divider: rgba(148,163,184,.08); --radius-sm:8px; --radius-md:12px; --radius-lg:16px;
+                --shadow-sm:0 4px 16px rgba(15,23,42,.22);
+                --shadow-md:0 10px 24px rgba(15,23,42,.28);
                 position: fixed;
                 top: 16px;
                 right: 16px;
-                width: 340px;
-                background: rgba(15, 15, 20, 0.92);
-                color: #f1f1f1;
-                font-family: 'Inter', sans-serif;
-                border-radius: 8px;
-                box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+                width: 348px;
+                background: var(--panel);
+                color: var(--text);
+                border-radius: var(--radius-lg);
+                border: 1px solid var(--border);
+                box-shadow: var(--shadow-md);
                 z-index: 999999;
-                border: 1px solid rgba(255,255,255,0.08);
                 overflow: hidden;
+                backdrop-filter: blur(12px) saturate(135%);
             }
             .search-input {
                 width: 100%;
-                border: none;
-                outline: none;
-                padding: 10px 12px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-md);
+                margin: 12px;
+                padding: 11px 14px;
                 font-size: 14px;
-                color: #f1f1f1;
-                background: rgba(255,255,255,0.08);
+                color: var(--text);
+                background: rgba(12,18,32,.92);
+                box-shadow: inset 0 0 0 1px rgba(15,23,42,.4);
+                transition: border-color .15s ease, box-shadow .15s ease;
             }
             .search-input::placeholder {
-                color: rgba(255,255,255,0.4);
+                color: rgba(203,213,225,.55);
+            }
+            .search-input:focus {
+                outline: none;
+                border-color: rgba(37,99,235,.55);
+                box-shadow: 0 0 0 3px var(--accent-blue-10);
             }
             .results {
-                max-height: 480px;
+                max-height: 500px;
                 overflow-y: auto;
-                padding: 4px 0;
+                padding: 4px 0 12px;
+                scrollbar-width: thin;
+                scrollbar-color: rgba(148,163,184,.32) transparent;
             }
+            .results::-webkit-scrollbar { width: 8px; }
+            .results::-webkit-scrollbar-thumb {
+                background: rgba(148,163,184,.28);
+                border-radius: 999px;
+            }
+            .results::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.45); }
             .row {
                 display: flex;
                 align-items: center;
-                gap: 6px;
-                padding: 4px 10px;
+                gap: 8px;
+                padding: 6px 16px;
                 font-size: 13px;
-                line-height: 1.4;
+                line-height: 1.35;
                 cursor: pointer;
                 white-space: nowrap;
                 text-overflow: ellipsis;
                 overflow: hidden;
                 position: relative;
-                transition: background 0.15s ease;
+                color: var(--text);
+                transition: background .15s ease, color .15s ease;
             }
             .row:hover {
-                background: rgba(255,255,255,0.08);
+                background: rgba(244,63,94,.12);
             }
             .row.leaf::before {
                 content: '';
                 width: 6px;
                 height: 6px;
-                border-radius: 50%;
+                border-radius: 999px;
                 background: ${LIST_LEAF_MARKER_COLOR};
-                margin-right: 4px;
+                opacity: 0.75;
             }
             .row .marker {
                 font-size: 11px;
-                width: 16px;
-                flex: 0 0 16px;
+                width: 18px;
+                flex: 0 0 18px;
                 text-align: center;
-                opacity: 0.7;
+                color: var(--muted);
             }
             .row .name {
                 flex: 1;
@@ -676,70 +702,86 @@
                 text-overflow: ellipsis;
             }
             .row.loading::after {
-                content: '...';
+                content: '…';
                 font-size: 12px;
-                margin-left: 4px;
-                opacity: 0.6;
+                margin-left: 6px;
+                color: var(--muted);
             }
             .row.error {
-                color: #ffb3b3;
+                color: var(--accent-rose);
             }
             .empty-state,
             .error-state,
             .loading-state {
-                padding: 12px;
+                padding: 12px 18px;
                 font-size: 13px;
-                color: rgba(255,255,255,0.6);
+                color: var(--muted);
             }
             .load-more {
-                text-align: center;
-                padding: 8px 12px;
-                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 8px 16px 0;
+                padding: 9px 12px;
+                border-radius: var(--radius-md);
+                border: 1px solid var(--border);
+                color: var(--text);
+                background: rgba(15,23,42,.75);
                 font-size: 13px;
-                color: #9ac4ff;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background .12s ease, border-color .12s ease, transform .12s ease;
+            }
+            .load-more:hover {
+                background: rgba(30,41,59,.92);
+                border-color: rgba(148,163,184,.32);
+                transform: translateY(-1px);
+            }
+            .load-more:active {
+                transform: translateY(0);
             }
             .popover {
                 position: fixed;
-                background: rgba(20,20,28,0.96);
-                color: #fff;
-                border-radius: 6px;
-                padding: 10px 12px;
+                background: rgba(18,27,39,.96);
+                color: var(--text);
+                border-radius: var(--radius-md);
+                padding: 12px 14px;
                 font-size: 12px;
                 max-width: 240px;
-                box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+                box-shadow: var(--shadow-sm);
                 pointer-events: none;
-                border: 1px solid rgba(255,255,255,0.12);
+                border: 1px solid var(--border);
                 z-index: 1000000;
             }
             .popover.status-active {
-                border-color: rgba(90, 149, 255, 0.85);
-                box-shadow: 0 10px 28px rgba(60, 110, 220, 0.35);
-                background: rgba(24, 36, 64, 0.95);
+                border-color: rgba(37,99,235,.55);
+                box-shadow: 0 16px 32px rgba(37,99,235,.28);
+                background: linear-gradient(135deg, rgba(37,99,235,.32), rgba(18,27,39,.95));
             }
             .popover.status-inactive {
-                border-color: rgba(255, 120, 120, 0.8);
-                box-shadow: 0 10px 28px rgba(200, 60, 60, 0.28);
-                background: rgba(54, 18, 24, 0.95);
+                border-color: rgba(244,63,94,.6);
+                box-shadow: 0 16px 32px rgba(244,63,94,.28);
+                background: linear-gradient(135deg, rgba(244,63,94,.32), rgba(24,18,26,.95));
             }
             .popover .status-line {
                 font-weight: 600;
                 text-transform: uppercase;
-                letter-spacing: 0.4px;
-                margin-bottom: 6px;
+                letter-spacing: .04em;
+                margin-bottom: 8px;
                 font-size: 11px;
-                opacity: 0.85;
+                color: rgba(226,232,240,.85);
             }
             .popover .grid {
                 display: grid;
                 grid-template-columns: auto 1fr;
-                gap: 4px 10px;
+                gap: 6px 12px;
             }
             .popover .label {
-                color: rgba(255,255,255,0.6);
+                color: rgba(148,163,184,.85);
                 white-space: nowrap;
             }
             .popover .value {
-                color: rgba(255,255,255,0.92);
+                color: rgba(226,232,240,.95);
                 text-align: right;
             }
         `;
