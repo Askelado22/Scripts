@@ -370,10 +370,125 @@
     }
   }
 
-    // ==========================
-    // 🎛️ Панель
-    // ==========================
-    const css = `
+  // ==========================
+  // 🗂️ CATologies tweaks
+  // ==========================
+  const DIGI_ID_BG = 'rgba(59,130,246,.16)';
+  let catologiesObserver = null;
+
+  function removeCatologiesEmptyState(scope){
+    const roots = collectScopeElements(scope, '.empty-state');
+    roots.forEach(node => {
+      if (!(node instanceof Element)) return;
+      if (!node.closest('.CATologies')) return;
+      const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/Введите запрос для поиска категорий\.?/i.test(text)) node.remove();
+    });
+  }
+
+  function styleDigiIdChips(scope){
+    const chips = collectScopeElements(scope, '.CATologies-chip');
+    chips.forEach(chip => {
+      if (!(chip instanceof Element)) return;
+      if (!chip.closest('.CATologies')) return;
+      const text = (chip.textContent || '').toLowerCase();
+      const datasetValues = Object.values(chip.dataset || {}).map(v => String(v).toLowerCase());
+      const joined = [text, ...datasetValues].join(' ');
+      if (/digi[\s_-]*id/.test(joined)) chip.style.setProperty('background', DIGI_ID_BG, 'important');
+    });
+  }
+
+  function reorderCatologiesSublists(scope){
+    const lists = collectScopeElements(scope, '.CATologies-acc-sublist');
+    lists.forEach(sublist => {
+      if (!(sublist instanceof Element)) return;
+      if (!sublist.closest('.CATologies')) return;
+      reorderSingleSublist(sublist);
+    });
+  }
+
+  function collectScopeElements(scope, selector){
+    const result = [];
+    const isDocFragment = typeof DocumentFragment !== 'undefined' && scope instanceof DocumentFragment;
+    if (scope instanceof Element || isDocFragment){
+      if (scope.matches?.(selector)) result.push(scope);
+      result.push(...scope.querySelectorAll(selector));
+    } else {
+      result.push(...document.querySelectorAll(selector));
+    }
+    return result;
+  }
+
+  function reorderSingleSublist(sublist){
+    const children = [...sublist.children];
+    const blocks = [];
+    for (let i = 0; i < children.length; i++){
+      const node = children[i];
+      if (!(node instanceof Element)) continue;
+      if (!node.classList.contains('CATologies-acc-row')) continue;
+      const type = node.classList.contains('CATologies-type-category') ? 'category' : 'section';
+      const blockNodes = [node];
+      const next = children[i + 1];
+      if (next instanceof Element && next.classList.contains('CATologies-acc-sublist')){
+        blockNodes.push(next);
+        i++;
+      }
+      blocks.push({ type, nodes: blockNodes });
+    }
+    if (!blocks.length) return;
+
+    const categories = blocks.filter(b => b.type === 'category');
+    const sections = blocks.filter(b => b.type !== 'category');
+    if (!sections.length || !categories.length) return;
+
+    const expected = [
+      ...Array(categories.length).fill('category'),
+      ...Array(sections.length).fill('section')
+    ];
+    const alreadyOrdered = blocks.every((block, idx) => block.type === expected[idx]);
+    if (alreadyOrdered) return;
+
+    const ordered = [...categories, ...sections];
+    ordered.forEach(block => {
+      block.nodes.forEach(node => sublist.appendChild(node));
+    });
+  }
+
+  function applyCatologiesTweaks(scope){
+    removeCatologiesEmptyState(scope);
+    styleDigiIdChips(scope);
+    reorderCatologiesSublists(scope);
+  }
+
+  function initCatologiesTweaks(){
+    if (catologiesObserver) return;
+    waitFor(() => document.querySelector('.CATologies-acc'), 12000).then(root => {
+      if (!root || catologiesObserver) return;
+      applyCatologiesTweaks(root);
+      catologiesObserver = new MutationObserver(mutations => {
+        for (const mutation of mutations){
+          if (mutation.type === 'childList'){
+            applyCatologiesTweaks(mutation.target);
+            mutation.addedNodes.forEach(node => {
+              if (!(node instanceof Element)) return;
+              applyCatologiesTweaks(node);
+            });
+          } else if (mutation.type === 'attributes'){
+            if (mutation.target instanceof Element){
+              applyCatologiesTweaks(mutation.target);
+            }
+          }
+        }
+      });
+      const obsRoot = root.closest('.CATologies') || root;
+      catologiesObserver.observe(obsRoot, { childList:true, subtree:true, attributes:true, attributeFilter:['data-opened'] });
+    });
+  }
+
+  // ==========================
+  // 🎛️ Панель
+  // ==========================
+  const css = `
 #vibe-panel{position:fixed;right:16px;top:96px;width:360px;z-index:999999;background:#0d0f12;color:#e7e7e7;border:1px solid #2a2f36;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;}
 #vibe-panel .hd{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #242933;font-weight:700;}
 #vibe-panel .bd{padding:10px 12px;}
@@ -397,6 +512,8 @@
 #vibe-row-actions{display:flex;gap:8px;}
 #vibe-id-badge{display:flex;gap:8px;align-items:center;}
 #vibe-id{font-weight:700;color:#a8ffad;}
+.CATologies-acc-sublist{margin:-10px 0 6px 34px;padding-left:13px;padding-top:10px;border-left:2.5px solid #ffe37a55;display:flex;flex-direction:column;gap:8px;background:linear-gradient(90deg,#232224 70%,#ffe37a08 140%);border-radius:0 0 7px 7px;contain:content;}
+.CATologies-acc-sublist .CATologies-acc-sublist{margin-top:6px;}
 `;
   try { GM_addStyle(css); } catch(e){ const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st); }
 
@@ -899,6 +1016,7 @@
   // ==========================
   function boot(){
     ensurePanel();
+    initCatologiesTweaks();
     if (state.started && state.phase && state.phase!=='done'){ log(`Восстанавливаю фазу: ${state.phase}`); scheduleNext(50); }
     setInterval(()=>{
       if (location.href !== state.lastUrl){
