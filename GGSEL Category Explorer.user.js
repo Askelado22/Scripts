@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.14
+// @version      1.2.15
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -1425,6 +1425,45 @@
                 background: rgba(34,197,94,.18);
                 color: #dcfce7;
             }
+            .context-menu {
+                position: fixed;
+                z-index: 1000001;
+                background: rgba(14,18,32,.96);
+                color: var(--text);
+                border-radius: var(--radius-sm);
+                border: 1px solid rgba(59,130,246,.25);
+                min-width: 168px;
+                box-shadow: var(--shadow-2);
+                padding: 6px 0;
+                display: none;
+                font-size: 12px;
+                backdrop-filter: blur(12px) saturate(140%);
+            }
+            .context-menu.open {
+                display: block;
+            }
+            .context-menu__item {
+                width: 100%;
+                background: transparent;
+                border: 0;
+                color: inherit;
+                text-align: left;
+                padding: 8px 16px;
+                cursor: pointer;
+                font: inherit;
+                line-height: 1.4;
+            }
+            .context-menu__item:hover,
+            .context-menu__item:focus {
+                background: rgba(59,130,246,.2);
+                color: var(--text);
+                outline: none;
+            }
+            .context-menu__separator {
+                height: 1px;
+                margin: 4px 0;
+                background: rgba(255,255,255,.08);
+            }
             .popover {
                 position: fixed;
                 background: linear-gradient(160deg, rgba(10,13,22,.98), rgba(21,24,36,.94));
@@ -1549,6 +1588,13 @@
             this.collapseTimer = null;
             this._manualCollapsed = false;
             this._hiddenDueToCollapse = { results: false, toasts: false };
+            this.contextMenuEl = null;
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+            this._onResultsContextMenu = null;
+            this._onContextPointerDown = null;
+            this._onDocumentPointerDown = null;
+            this._onWindowBlur = null;
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -1568,6 +1614,9 @@
                 this.searchToggleEl.addEventListener('click', () => this._onSearchToggleClick());
             }
             this.resultsContainer.addEventListener('scroll', () => {
+                if (this._contextMenuVisible) {
+                    this._hideContextMenu();
+                }
                 this._prefetchVisible();
                 this._schedulePersist();
             });
@@ -1577,9 +1626,11 @@
             this._setupDragHandles();
             this._onWindowResize = () => {
                 this._applyPanelPosition({ persist: true });
+                this._hideContextMenu();
             };
             window.addEventListener('resize', this._onWindowResize);
             this._setupScrollIsolation();
+            this._setupContextMenu();
             this._updateSearchAffordance();
             this.render();
             this._restoreState().catch((err) => {
@@ -1755,6 +1806,175 @@
                     }
                 }
             }, { passive: false });
+        }
+
+        _setupContextMenu() {
+            if (!this.shadowRoot) return;
+            if (!this.resultsContainer) return;
+            if (this._onResultsContextMenu && this.resultsContainer) {
+                this.resultsContainer.removeEventListener('contextmenu', this._onResultsContextMenu);
+            }
+            if (this._onContextPointerDown && this.shadowRoot) {
+                this.shadowRoot.removeEventListener('pointerdown', this._onContextPointerDown);
+            }
+            if (this._onDocumentPointerDown) {
+                document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
+            }
+            if (this._onWindowBlur) {
+                window.removeEventListener('blur', this._onWindowBlur);
+            }
+            if (this.contextMenuEl) {
+                this.contextMenuEl.remove();
+            }
+            const menu = document.createElement('div');
+            menu.className = 'context-menu';
+            this.shadowRoot.appendChild(menu);
+            this.contextMenuEl = menu;
+            this.contextMenuEl.style.left = '-9999px';
+            this.contextMenuEl.style.top = '-9999px';
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+
+            this._onResultsContextMenu = (event) => {
+                if (!this.resultsContainer) return;
+                if (!this.resultsContainer.contains(event.target)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const row = event.target.closest('.row');
+                let node = null;
+                if (row && row.dataset && row.dataset.id) {
+                    const rawId = row.dataset.id;
+                    node = nodesMap.get(rawId);
+                    if (!node) {
+                        const numericId = Number(rawId);
+                        if (!Number.isNaN(numericId)) {
+                            node = nodesMap.get(numericId);
+                        }
+                    }
+                }
+                this._showContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    node: node || null,
+                });
+            };
+            this.resultsContainer.addEventListener('contextmenu', this._onResultsContextMenu);
+
+            this._onContextPointerDown = (event) => {
+                if (!this._contextMenuVisible) return;
+                if (event.target.closest('.context-menu')) return;
+                this._hideContextMenu();
+            };
+            this.shadowRoot.addEventListener('pointerdown', this._onContextPointerDown);
+
+            this._onDocumentPointerDown = (event) => {
+                if (!this._contextMenuVisible) return;
+                const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+                if (path && path.includes(this.contextMenuEl)) {
+                    return;
+                }
+                this._hideContextMenu();
+            };
+            document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
+
+            this._onWindowBlur = () => {
+                this._hideContextMenu();
+            };
+            window.addEventListener('blur', this._onWindowBlur);
+        }
+
+        _showContextMenu({ x, y, node }) {
+            if (!this.contextMenuEl) return;
+            this._buildContextMenuItems(node);
+            this.contextMenuEl.style.left = '0px';
+            this.contextMenuEl.style.top = '0px';
+            this.contextMenuEl.classList.add('open');
+            this.contextMenuEl.style.visibility = 'hidden';
+            const { offsetWidth, offsetHeight } = this.contextMenuEl;
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            let left = x;
+            let top = y;
+            if (left + offsetWidth > viewportWidth) {
+                left = Math.max(0, viewportWidth - offsetWidth - 4);
+            }
+            if (top + offsetHeight > viewportHeight) {
+                top = Math.max(0, viewportHeight - offsetHeight - 4);
+            }
+            this.contextMenuEl.style.left = `${left}px`;
+            this.contextMenuEl.style.top = `${top}px`;
+            this.contextMenuEl.style.visibility = '';
+            this._contextMenuVisible = true;
+            this._contextMenuNodeId = node ? node.id : null;
+            const firstItem = this.contextMenuEl.querySelector('.context-menu__item');
+            if (firstItem) {
+                firstItem.focus();
+            }
+        }
+
+        _hideContextMenu() {
+            if (!this.contextMenuEl || !this._contextMenuVisible) return;
+            this.contextMenuEl.classList.remove('open');
+            this.contextMenuEl.innerHTML = '';
+            this.contextMenuEl.style.left = '-9999px';
+            this.contextMenuEl.style.top = '-9999px';
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+        }
+
+        _buildContextMenuItems(node) {
+            if (!this.contextMenuEl) return;
+            this.contextMenuEl.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            const actions = [];
+            if (node) {
+                actions.push(
+                    { key: 'create', label: 'Создать', contextNode: node },
+                    { key: 'edit', label: 'Редактировать', contextNode: node },
+                    { key: 'move', label: 'Переместить', contextNode: node },
+                    { key: 'separator' }
+                );
+            }
+            actions.push(
+                { key: 'settings', label: 'Настройки', contextNode: null },
+                { key: 'help', label: 'Справка', contextNode: null }
+            );
+
+            for (const action of actions) {
+                if (action.key === 'separator') {
+                    const separator = document.createElement('div');
+                    separator.className = 'context-menu__separator';
+                    fragment.appendChild(separator);
+                    continue;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'context-menu__item';
+                button.textContent = action.label;
+                button.addEventListener('click', () => {
+                    this._hideContextMenu();
+                    this._handleContextMenuAction(action.key, action.contextNode);
+                });
+                fragment.appendChild(button);
+            }
+            this.contextMenuEl.appendChild(fragment);
+        }
+
+        _handleContextMenuAction(actionKey, node) {
+            const labelMap = {
+                create: 'Создать',
+                edit: 'Редактировать',
+                move: 'Переместить',
+                settings: 'Настройки',
+                help: 'Справка',
+            };
+            const label = labelMap[actionKey] || actionKey;
+            logger.info('Контекстное действие (stub)', {
+                action: actionKey,
+                nodeId: node ? node.id : null,
+            });
+            const target = node ? ` для «${node.name}»` : '';
+            this._showToast(`Действие «${label}» пока недоступно${target}`, 'info');
         }
 
         _getDefaultPanelPlacement() {
@@ -2197,6 +2417,7 @@
         }
 
         render() {
+            this._hideContextMenu();
             const container = this.resultsContainer;
             container.innerHTML = '';
             this.visibleNodes = [];
@@ -2615,6 +2836,10 @@
 
         _onGlobalKeyDown(event) {
             if (event.key === 'Escape') {
+                if (this._contextMenuVisible) {
+                    this._hideContextMenu();
+                    return;
+                }
                 this._clearSelection();
             }
         }
