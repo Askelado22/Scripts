@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.15
+// @version      1.2.16
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -1432,8 +1432,7 @@
                 color: rgba(226,232,255,.92);
                 border-radius: var(--radius-sm);
                 border: 1px solid rgba(59,130,246,.32);
-                min-width: 0;
-                width: max-content;
+                width: 160px;
                 max-width: calc(100vw - 24px);
                 box-shadow: var(--shadow-2);
                 padding: 6px 0;
@@ -1461,9 +1460,11 @@
                 white-space: nowrap;
             }
             .context-menu__item:hover,
-            .context-menu__item:focus {
+            .context-menu__item:focus-visible {
                 background: rgba(244,63,94,.22);
                 color: #ffe4ea;
+            }
+            .context-menu__item:focus {
                 outline: none;
             }
             .context-menu__separator {
@@ -1603,6 +1604,9 @@
             this._onContextPointerDown = null;
             this._onDocumentPointerDown = null;
             this._onWindowBlur = null;
+            this._onContextMenuPointerOver = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -1836,6 +1840,9 @@
             if (this._onWindowBlur) {
                 window.removeEventListener('blur', this._onWindowBlur);
             }
+            if (this._onContextMenuPointerOver && this.contextMenuEl) {
+                this.contextMenuEl.removeEventListener('pointerover', this._onContextMenuPointerOver);
+            }
             if (this.contextMenuEl) {
                 this.contextMenuEl.remove();
             }
@@ -1847,6 +1854,8 @@
             this.contextMenuEl.style.top = '-9999px';
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
 
             this._onPanelContextMenu = null;
 
@@ -1865,7 +1874,8 @@
                 }
                 event.preventDefault();
                 event.stopPropagation();
-                const row = targetEl.closest('.row');
+                const editableTarget = targetEl.closest('input, textarea, [contenteditable="true"]');
+                const row = editableTarget ? null : targetEl.closest('.row');
                 let node = null;
                 if (row && row.dataset && row.dataset.id) {
                     const rawId = row.dataset.id;
@@ -1881,6 +1891,7 @@
                     x: event.clientX,
                     y: event.clientY,
                     node: node || null,
+                    editableTarget: editableTarget || null,
                 });
             };
             if (this.shadowRoot) {
@@ -1908,11 +1919,22 @@
                 this._hideContextMenu();
             };
             window.addEventListener('blur', this._onWindowBlur);
+
+            this._onContextMenuPointerOver = (event) => {
+                if (!this._contextMenuVisible || !this.contextMenuEl) return;
+                const focusedItem = this.contextMenuEl.querySelector('.context-menu__item:focus');
+                if (!focusedItem) return;
+                const targetButton = event.target instanceof Element ? event.target.closest('.context-menu__item') : null;
+                if (targetButton && targetButton !== focusedItem && focusedItem instanceof HTMLElement) {
+                    focusedItem.blur();
+                }
+            };
+            this.contextMenuEl.addEventListener('pointerover', this._onContextMenuPointerOver);
         }
 
-        _showContextMenu({ x, y, node }) {
+        _showContextMenu({ x, y, node, editableTarget }) {
             if (!this.contextMenuEl) return;
-            this._buildContextMenuItems(node);
+            this._buildContextMenuItems(node, editableTarget);
             this.contextMenuEl.style.left = '0px';
             this.contextMenuEl.style.top = '0px';
             this.contextMenuEl.classList.add('open');
@@ -1933,6 +1955,8 @@
             this.contextMenuEl.style.visibility = '';
             this._contextMenuVisible = true;
             this._contextMenuNodeId = node ? node.id : null;
+            this._contextMenuEditableTarget = editableTarget instanceof HTMLElement ? editableTarget : null;
+            this._contextMenuEditableSelection = this._contextMenuEditableTarget ? this._captureEditableSelection(this._contextMenuEditableTarget) : null;
             const firstItem = this.contextMenuEl.querySelector('.context-menu__item');
             if (firstItem) {
                 firstItem.focus();
@@ -1947,13 +1971,22 @@
             this.contextMenuEl.style.top = '-9999px';
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
         }
 
-        _buildContextMenuItems(node) {
+        _buildContextMenuItems(node, editableTarget) {
             if (!this.contextMenuEl) return;
             this.contextMenuEl.innerHTML = '';
             const fragment = document.createDocumentFragment();
             const actions = [];
+            if (editableTarget) {
+                actions.push(
+                    { key: 'copy', label: 'Копировать', contextNode: null, editableTarget },
+                    { key: 'paste', label: 'Вставить', contextNode: null, editableTarget },
+                    { key: 'separator' }
+                );
+            }
             if (node) {
                 actions.push(
                     { key: 'create', label: 'Создать', contextNode: node },
@@ -1979,21 +2012,73 @@
                 button.className = 'context-menu__item';
                 button.textContent = action.label;
                 button.addEventListener('click', () => {
+                    const selectionSnapshot = this._contextMenuEditableSelection;
                     this._hideContextMenu();
-                    this._handleContextMenuAction(action.key, action.contextNode);
+                    Promise.resolve(this._handleContextMenuAction(action.key, {
+                        node: action.contextNode || null,
+                        editable: action.editableTarget || null,
+                        selection: selectionSnapshot,
+                    })).catch((err) => {
+                        logger.warn('Ошибка обработки пункта контекстного меню', { error: err && err.message, action: action.key });
+                    });
                 });
                 fragment.appendChild(button);
             }
             this.contextMenuEl.appendChild(fragment);
         }
 
-        _handleContextMenuAction(actionKey, node) {
+        async _handleContextMenuAction(actionKey, context = {}) {
+            const { node, editable, selection } = context || {};
+            if (actionKey === 'copy') {
+                if (!editable) {
+                    this._showToast('Поле ввода не найдено', 'error');
+                    return;
+                }
+                const selectionInfo = selection || this._captureEditableSelection(editable);
+                const textToCopy = selectionInfo && selectionInfo.text ? selectionInfo.text : '';
+                if (!textToCopy) {
+                    this._restoreEditableSelection(editable, selectionInfo);
+                    this._showToast('Нет выделенного текста для копирования', 'error');
+                    return;
+                }
+                const success = await copyTextToClipboard(textToCopy);
+                this._restoreEditableSelection(editable, selectionInfo);
+                if (success) {
+                    this._showToast('Текст скопирован в буфер обмена', 'success');
+                } else {
+                    this._showToast('Не удалось скопировать текст', 'error');
+                }
+                return;
+            }
+            if (actionKey === 'paste') {
+                if (!editable) {
+                    this._showToast('Поле ввода не найдено', 'error');
+                    return;
+                }
+                const selectionInfo = selection || this._captureEditableSelection(editable);
+                const clipboardText = await this._readClipboardText();
+                if (clipboardText == null) {
+                    this._restoreEditableSelection(editable, selectionInfo);
+                    this._showToast('Буфер обмена недоступен', 'error');
+                    return;
+                }
+                this._restoreEditableSelection(editable, selectionInfo);
+                const inserted = this._pasteTextIntoEditable(editable, clipboardText);
+                if (inserted) {
+                    this._showToast('Текст вставлен из буфера обмена', 'success');
+                } else {
+                    this._showToast('Не удалось вставить текст', 'error');
+                }
+                return;
+            }
             const labelMap = {
                 create: 'Создать',
                 edit: 'Редактировать',
                 move: 'Переместить',
                 settings: 'Настройки',
                 help: 'Справка',
+                copy: 'Копировать',
+                paste: 'Вставить',
             };
             const label = labelMap[actionKey] || actionKey;
             logger.info('Контекстное действие (stub)', {
@@ -2002,6 +2087,102 @@
             });
             const target = node ? ` для «${node.name}»` : '';
             this._showToast(`Действие «${label}» пока недоступно${target}`, 'info');
+        }
+
+        _captureEditableSelection(editable) {
+            if (!editable) return null;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                const rawStart = typeof editable.selectionStart === 'number' ? editable.selectionStart : editable.value.length;
+                const rawEnd = typeof editable.selectionEnd === 'number' ? editable.selectionEnd : rawStart;
+                const start = Math.max(0, Math.min(rawStart, rawEnd));
+                const end = Math.max(start, Math.max(rawStart, rawEnd));
+                const text = editable.value.slice(start, end);
+                return { type: 'input', start, end, text };
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                const selection = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                if (!selection || selection.rangeCount === 0) {
+                    return { type: 'contenteditable', range: null, text: '' };
+                }
+                const range = selection.getRangeAt(0);
+                if (!editable.contains(range.commonAncestorContainer)) {
+                    return { type: 'contenteditable', range: null, text: '' };
+                }
+                return { type: 'contenteditable', range: range.cloneRange(), text: selection.toString() };
+            }
+            return null;
+        }
+
+        _restoreEditableSelection(editable, selection) {
+            if (!editable) return;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                editable.focus({ preventScroll: true });
+                if (selection && typeof selection.start === 'number' && typeof selection.end === 'number') {
+                    editable.setSelectionRange(selection.start, selection.end);
+                } else {
+                    const caret = editable.value.length;
+                    editable.setSelectionRange(caret, caret);
+                }
+                return;
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                editable.focus({ preventScroll: true });
+                if (selection && selection.range) {
+                    const sel = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                    if (sel) {
+                        sel.removeAllRanges();
+                        sel.addRange(selection.range.cloneRange());
+                    }
+                }
+            }
+        }
+
+        _pasteTextIntoEditable(editable, text) {
+            if (!editable || text == null) return false;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                const start = typeof editable.selectionStart === 'number' ? editable.selectionStart : editable.value.length;
+                const end = typeof editable.selectionEnd === 'number' ? editable.selectionEnd : start;
+                const newEnd = start + text.length;
+                editable.setRangeText(text, start, end, 'end');
+                editable.dispatchEvent(new Event('input', { bubbles: true }));
+                editable.dispatchEvent(new Event('change', { bubbles: true }));
+                editable.setSelectionRange(newEnd, newEnd);
+                return true;
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                const selection = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                if (!selection) return false;
+                if (selection.rangeCount === 0) {
+                    const range = editable.ownerDocument.createRange();
+                    range.selectNodeContents(editable);
+                    range.collapse(false);
+                    selection.addRange(range);
+                }
+                selection.deleteFromDocument();
+                const range = selection.getRangeAt(0);
+                const textNode = editable.ownerDocument.createTextNode(text);
+                range.insertNode(textNode);
+                range.setStartAfter(textNode);
+                range.setEndAfter(textNode);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                editable.dispatchEvent(new Event('input', { bubbles: true }));
+                editable.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+            return false;
+        }
+
+        async _readClipboardText() {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                    return await navigator.clipboard.readText();
+                } catch (err) {
+                    logger.warn('Не удалось прочитать текст из буфера обмена', { error: err && err.message });
+                }
+            }
+            logger.warn('Clipboard API для чтения недоступен');
+            return null;
         }
 
         _getDefaultPanelPlacement() {
