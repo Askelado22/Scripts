@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.8
+// @version      1.2.9
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -1087,7 +1087,7 @@
                 display: flex;
                 align-items: center;
                 gap: var(--row-gap);
-                padding: var(--row-pad-y) var(--row-pad-x);
+                padding: 0 var(--row-pad-x);
                 border-radius: var(--radius-sm);
                 border: 1px solid transparent;
                 margin: 0 2px;
@@ -1096,6 +1096,7 @@
                 cursor: pointer;
                 color: var(--text);
                 transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
+                height: var(--row-min-height);
                 min-height: var(--row-min-height);
                 overflow: hidden;
                 user-select: none;
@@ -1155,7 +1156,8 @@
             }
             .sublist > .row {
                 margin: 0;
-                padding: var(--row-pad-y) var(--row-pad-x);
+                padding: 0 var(--row-pad-x);
+                height: var(--row-min-height);
                 min-height: var(--row-min-height);
             }
             .row.leaf {
