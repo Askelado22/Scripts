@@ -963,6 +963,10 @@
             .panel.compact.dock-left .search-row { justify-content: flex-start; }
             .panel.compact.dock-right .search-row { justify-content: flex-end; }
             .panel.compact:not(.dock-left):not(.dock-right) .search-row { justify-content: center; }
+            .panel.compact.flush-left .search-row,
+            .panel.compact.flush-right .search-row {
+                justify-content: center;
+            }
             .panel.compact .search-control {
                 width: 46px;
                 max-width: 46px;
@@ -1052,6 +1056,34 @@
             }
             .search-control.collapsed .search-toggle:active {
                 transform: translateY(1px);
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle::after,
+            .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
+                content: '';
+                position: absolute;
+                top: -1px;
+                bottom: -1px;
+                width: calc((var(--panel-width) - 46px) / 2);
+                background: rgba(244,63,94,.18);
+                border: 1px solid rgba(244,63,94,.45);
+                border-radius: 0;
+                box-shadow: 0 12px 26px rgba(244,63,94,.18);
+                pointer-events: none;
+                z-index: -1;
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle::after {
+                left: 100%;
+                border-left: 0;
+            }
+            .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
+                right: 100%;
+                border-right: 0;
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle:hover::after,
+            .panel.compact.flush-left .search-control.collapsed .search-toggle:hover::after {
+                background: rgba(244,63,94,.28);
+                border-color: rgba(244,63,94,.6);
+                box-shadow: 0 16px 32px rgba(244,63,94,.26);
             }
             .search-toggle svg {
                 display: block;
