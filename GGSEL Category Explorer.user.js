@@ -220,7 +220,7 @@
             }
             const fractionDigits = Number.isInteger(daysValue) ? 0 : (Math.abs(daysValue) >= 10 ? 1 : 2);
             const daysText = formatNumber(daysValue, fractionDigits);
-            return `${daysText}d`;
+            return `${daysText} d дней`;
         }
         return rawValue || '—';
     };
@@ -732,7 +732,8 @@
                     const numeric = parseFloat(value.replace(',', '.'));
                     if (!Number.isNaN(numeric)) {
                         stats.autoFinishHours = numeric;
-                    } else {
+                        stats.autoFinishRaw = null;
+                    } else if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
                         stats.autoFinishRaw = value;
                     }
                 }
@@ -782,6 +783,12 @@
             this.commissionPercent = normalizedCommission != null ? normalizedCommission : null;
             this.commissionRaw = normalizedCommission == null && data.commissionRaw != null
                 ? String(data.commissionRaw).trim()
+                : null;
+            this.autoFinishHours = data.autoFinishHours != null && !Number.isNaN(Number(data.autoFinishHours))
+                ? Number(data.autoFinishHours)
+                : null;
+            this.autoFinishRaw = this.autoFinishHours == null && data.autoFinishRaw != null
+                ? String(data.autoFinishRaw).trim()
                 : null;
             this.hasChildren = typeof data.hasChildren === 'boolean' ? data.hasChildren : null;
             const rawSegments = Array.isArray(data.pathAnchors) && data.pathAnchors.length
@@ -2924,6 +2931,12 @@
                     }
                 }
             }
+            if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
+                node.autoFinishHours = Number(stats.autoFinishHours);
+                node.autoFinishRaw = null;
+            } else if (stats.autoFinishRaw && node.autoFinishHours == null) {
+                node.autoFinishRaw = stats.autoFinishRaw;
+            }
             const entry = this.visibleNodes.find(item => item.node === node);
             if (entry) {
                 this._updateRowCommission(entry.row, node);
@@ -3376,11 +3389,14 @@
                 const commissionValue = stats.commissionPercent != null
                     ? formatPercent(stats.commissionPercent)
                     : (stats.commissionRaw || '—');
-                const autoFinishValue = formatAutoFinish(stats.autoFinishHours, stats.autoFinishRaw);
+                const autoFinishValue = formatAutoFinish(
+                    stats.autoFinishHours != null ? stats.autoFinishHours : node.autoFinishHours,
+                    stats.autoFinishRaw || node.autoFinishRaw
+                );
 
                 appendRow('Каталог', digiValue);
                 appendRow('Комиссия', commissionValue || '—');
-                appendRow('Hold', autoFinishValue);
+                appendRow('Холд', autoFinishValue);
 
                 pop.appendChild(title);
                 pop.appendChild(grid);
@@ -3540,6 +3556,12 @@
                         relatedNode.commissionPercent = normalized;
                     }
                 }
+            }
+            if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
+                relatedNode.autoFinishHours = Number(stats.autoFinishHours);
+                relatedNode.autoFinishRaw = null;
+            } else if (stats.autoFinishRaw && relatedNode.autoFinishHours == null) {
+                relatedNode.autoFinishRaw = stats.autoFinishRaw;
             }
         }
         statsCache.set(categoryId, stats);
