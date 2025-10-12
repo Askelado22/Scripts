@@ -1432,7 +1432,9 @@
                 color: rgba(226,232,255,.92);
                 border-radius: var(--radius-sm);
                 border: 1px solid rgba(59,130,246,.32);
-                min-width: 152px;
+                min-width: 0;
+                width: max-content;
+                max-width: calc(100vw - 24px);
                 box-shadow: var(--shadow-2);
                 padding: 6px 0;
                 display: none;
@@ -1456,11 +1458,12 @@
                 line-height: 1.45;
                 letter-spacing: inherit;
                 transition: background var(--dur-1), color var(--dur-1);
+                white-space: nowrap;
             }
             .context-menu__item:hover,
             .context-menu__item:focus {
-                background: rgba(59,130,246,.24);
-                color: #f8fbff;
+                background: rgba(244,63,94,.22);
+                color: #ffe4ea;
                 outline: none;
             }
             .context-menu__separator {
@@ -1821,6 +1824,9 @@
             if (this._onPanelContextMenu && this.panelEl) {
                 this.panelEl.removeEventListener('contextmenu', this._onPanelContextMenu);
             }
+            if (this._onShadowContextMenu && this.shadowRoot) {
+                this.shadowRoot.removeEventListener('contextmenu', this._onShadowContextMenu);
+            }
             if (this._onContextPointerDown && this.shadowRoot) {
                 this.shadowRoot.removeEventListener('pointerdown', this._onContextPointerDown);
             }
@@ -1842,12 +1848,24 @@
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
 
-            this._onPanelContextMenu = (event) => {
+            this._onPanelContextMenu = null;
+
+            this._onShadowContextMenu = (event) => {
                 if (!this.panelEl) return;
-                if (!this.panelEl.contains(event.target)) return;
+                const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+                let targetEl = event.target instanceof Element ? event.target : null;
+                if (!targetEl && Array.isArray(path)) {
+                    targetEl = path.find((node) => node instanceof Element) || null;
+                }
+                if (!targetEl || !this.panelEl.contains(targetEl)) {
+                    return;
+                }
+                if (targetEl.closest('.context-menu')) {
+                    return;
+                }
                 event.preventDefault();
                 event.stopPropagation();
-                const row = event.target.closest('.row');
+                const row = targetEl.closest('.row');
                 let node = null;
                 if (row && row.dataset && row.dataset.id) {
                     const rawId = row.dataset.id;
@@ -1865,8 +1883,8 @@
                     node: node || null,
                 });
             };
-            if (this.panelEl) {
-                this.panelEl.addEventListener('contextmenu', this._onPanelContextMenu);
+            if (this.shadowRoot) {
+                this.shadowRoot.addEventListener('contextmenu', this._onShadowContextMenu);
             }
 
             this._onContextPointerDown = (event) => {
