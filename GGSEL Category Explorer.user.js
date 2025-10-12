@@ -212,14 +212,17 @@
     };
 
     const formatAutoFinish = (hours, rawValue) => {
-        if (hours == null || Number.isNaN(Number(hours))) {
-            return rawValue || '—';
+        if (hours != null && !Number.isNaN(Number(hours))) {
+            const hoursValue = Number(hours);
+            const daysValue = hoursValue / 24;
+            if (!Number.isFinite(daysValue)) {
+                return rawValue || '—';
+            }
+            const fractionDigits = Number.isInteger(daysValue) ? 0 : (Math.abs(daysValue) >= 10 ? 1 : 2);
+            const daysText = formatNumber(daysValue, fractionDigits);
+            return `${daysText}d`;
         }
-        const hoursValue = Number(hours);
-        const daysValue = hoursValue / 24;
-        const hoursText = formatNumber(hoursValue, hoursValue % 1 === 0 ? 0 : 1);
-        const daysText = formatNumber(daysValue, daysValue >= 10 ? 1 : 2);
-        return `${hoursText} ч · ${daysText} дн.`;
+        return rawValue || '—';
     };
 
     const getStatusClass = (status) => {
@@ -717,7 +720,15 @@
                         stats.commissionRaw = value;
                     }
                 }
-                if (label.includes('автозаверш') || label.includes('autofinish') || label.includes('auto finish')) {
+                if (
+                    label.includes('автозаверш')
+                    || label.includes('авто заверш')
+                    || label.includes('задержка авто')
+                    || label.includes('autofinish')
+                    || label.includes('auto finish')
+                    || label.includes('auto-complete')
+                    || label.includes('auto complete')
+                ) {
                     const numeric = parseFloat(value.replace(',', '.'));
                     if (!Number.isNaN(numeric)) {
                         stats.autoFinishHours = numeric;
@@ -3369,7 +3380,7 @@
 
                 appendRow('Каталог', digiValue);
                 appendRow('Комиссия', commissionValue || '—');
-                appendRow('Автозавершение', autoFinishValue);
+                appendRow('Hold', autoFinishValue);
 
                 pop.appendChild(title);
                 pop.appendChild(grid);
