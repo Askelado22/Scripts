@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.11
+// @version      1.2.12
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -933,10 +933,22 @@
             .panel.dragging .search-toggle {
                 cursor: grabbing;
             }
-            .panel.compact {
+            .panel.compact { 
                 --panel-width: calc(46px + 24px);
                 padding: 12px;
                 gap: 0;
+            }
+            .panel.dock-right .search-row {
+                justify-content: flex-end;
+            }
+            .panel.dock-bottom .search-row {
+                order: 2;
+            }
+            .panel.dock-bottom .results {
+                order: 1;
+            }
+            .panel.dock-bottom .toast-stack {
+                order: 0;
             }
             .panel.compact .search-row { gap: 0; }
             .panel.compact.dock-left .search-row { justify-content: flex-start; }
@@ -1031,6 +1043,17 @@
             .search-control.has-value .search-toggle svg {
                 transform: translateX(-6px) scale(0.72);
             }
+            .panel.dock-right .search-control.expanded .search-toggle {
+                justify-content: flex-end;
+                padding-left: 14px;
+                padding-right: 18px;
+            }
+            .panel.dock-right .search-control.expanded .search-toggle svg {
+                transform: translateX(6px) scale(0.9);
+            }
+            .panel.dock-right .search-control.has-value .search-toggle svg {
+                transform: translateX(6px) scale(0.72);
+            }
             .selection-button {
                 background: rgba(21,24,36,.92);
                 border: 1px solid var(--border);
@@ -1072,6 +1095,10 @@
                 transform: translateX(12px) scaleX(0.82);
                 z-index: 2;
             }
+            .panel.dock-right .search-input {
+                padding: 11px 58px 11px 14px;
+                transform: translateX(-12px) scaleX(0.82);
+            }
             .search-input::placeholder {
                 color: rgba(169,176,198,.65);
             }
@@ -1092,6 +1119,10 @@
             }
             .search-control.has-value .search-input {
                 padding-left: 18px;
+            }
+            .panel.dock-right .search-control.has-value .search-input {
+                padding-right: 18px;
+                padding-left: 14px;
             }
             .results {
                 max-height: 520px;
