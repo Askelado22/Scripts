@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.14
+// @version      1.2.15
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -964,8 +964,8 @@
             .panel.compact.dock-right .search-row { justify-content: flex-end; }
             .panel.compact:not(.dock-left):not(.dock-right) .search-row { justify-content: center; }
             .panel.compact .search-control {
-                width: 46px;
-                max-width: 46px;
+                width: var(--fab-collapsed-width, 46px);
+                max-width: var(--fab-collapsed-width, 46px);
             }
             .search-row {
                 display: flex;
@@ -993,8 +993,8 @@
             }
             .search-control.collapsed {
                 flex: 0 0 auto;
-                max-width: 46px;
-                width: 46px;
+                max-width: var(--fab-collapsed-width, 46px);
+                width: var(--fab-collapsed-width, 46px);
             }
             .search-control.expanded {
                 width: 100%;
@@ -1030,6 +1030,17 @@
             .panel.flush-bottom .search-control.manual-collapse .search-toggle {
                 border-bottom-left-radius: 0;
                 border-bottom-right-radius: 0;
+            }
+            .panel.flush-left .search-control,
+            .panel.flush-right .search-control {
+                --fab-collapsed-width: 44px;
+            }
+            .panel.flush-left .search-control.collapsed .search-toggle,
+            .panel.flush-left .search-control.manual-collapse .search-toggle,
+            .panel.flush-right .search-control.collapsed .search-toggle,
+            .panel.flush-right .search-control.manual-collapse .search-toggle {
+                padding-left: 6px;
+                padding-right: 6px;
             }
             .search-toggle {
                 position: absolute;
