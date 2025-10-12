@@ -1015,11 +1015,17 @@
             .panel.flush-left .search-control.manual-collapse .search-toggle {
                 border-top-left-radius: 0;
                 border-bottom-left-radius: 0;
+                justify-content: flex-start;
+                padding-left: 6px;
+                padding-right: 10px;
             }
             .panel.flush-right .search-control.collapsed .search-toggle,
             .panel.flush-right .search-control.manual-collapse .search-toggle {
                 border-top-right-radius: 0;
                 border-bottom-right-radius: 0;
+                justify-content: flex-end;
+                padding-right: 6px;
+                padding-left: 10px;
             }
             .panel.flush-top .search-control.collapsed .search-toggle,
             .panel.flush-top .search-control.manual-collapse .search-toggle {
