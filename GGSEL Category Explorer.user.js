@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.10
+// @version      1.2.11
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -31,6 +31,8 @@
     const SUBLIST_INDENT_STEP = 14;
     const STORAGE_KEY = 'ggsel-category-explorer:last-state';
     const STORAGE_SCHEMA_VERSION = 1;
+    const PANEL_STORAGE_KEY = 'ggsel-category-explorer:panel-placement';
+    const PANEL_STORAGE_SCHEMA_VERSION = 1;
     const POPOVER_HIDE_DELAY_MS = 220;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
@@ -80,6 +82,35 @@
                 localStorage.removeItem(STORAGE_KEY);
             } catch (err) {
                 logger.warn('Не удалось очистить состояние', { error: err && err.message });
+            }
+        },
+    };
+
+    const panelPlacementStorage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(PANEL_STORAGE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== PANEL_STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return null;
+                }
+                return parsed.payload;
+            } catch (err) {
+                logger.warn('Не удалось прочитать позицию панели', { error: err && err.message });
+                return null;
+            }
+        },
+        save(payload) {
+            if (!payload || typeof payload !== 'object') return;
+            try {
+                const data = {
+                    version: PANEL_STORAGE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить позицию панели', { error: err && err.message });
             }
         },
     };
@@ -877,8 +908,8 @@
                 --dur-2:.18s;
                 --panel-width: 348px;
                 position: fixed;
-                top: 16px;
-                right: 16px;
+                top: 0;
+                left: 0;
                 width: var(--panel-width);
                 min-width: var(--panel-width);
                 padding: 14px;
@@ -895,15 +926,22 @@
                 -webkit-user-select: none;
                 transition: width var(--dur-2), min-width var(--dur-2), padding var(--dur-2), gap var(--dur-2);
             }
+            .panel.dragging {
+                transition: none !important;
+                cursor: grabbing;
+            }
+            .panel.dragging .search-toggle {
+                cursor: grabbing;
+            }
             .panel.compact {
                 --panel-width: calc(46px + 24px);
                 padding: 12px;
                 gap: 0;
             }
-            .panel.compact .search-row {
-                justify-content: center;
-                gap: 0;
-            }
+            .panel.compact .search-row { gap: 0; }
+            .panel.compact.dock-left .search-row { justify-content: flex-start; }
+            .panel.compact.dock-right .search-row { justify-content: flex-end; }
+            .panel.compact:not(.dock-left):not(.dock-right) .search-row { justify-content: center; }
             .panel.compact .search-control {
                 width: 46px;
                 max-width: 46px;
@@ -1385,6 +1423,7 @@
             this.toastStackEl = toastStackEl;
             this.searchControlEl = searchControlEl;
             this.searchToggleEl = searchToggleEl;
+            this.panelPlacement = this._loadPanelPlacement() || this._getDefaultPanelPlacement();
             this.hoverTimer = null;
             this.currentPopover = null;
             this.currentPopoverAnchor = null;
@@ -1405,6 +1444,7 @@
             if (this.toastStackEl) {
                 this.toastStackEl.hidden = true;
             }
+            this._applyPanelPosition();
             this._updatePanelLayout();
         }
 
@@ -1423,6 +1463,11 @@
             this.copyDigiBtn.addEventListener('click', () => this._copySelectedDigis());
             this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
             window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
+            this._setupDragHandles();
+            this._onWindowResize = () => {
+                this._applyPanelPosition({ persist: true });
+            };
+            window.addEventListener('resize', this._onWindowResize);
             this._setupScrollIsolation();
             this._updateSearchAffordance();
             this.render();
@@ -1599,6 +1644,147 @@
                     }
                 }
             }, { passive: false });
+        }
+
+        _getDefaultPanelPlacement() {
+            return {
+                anchorX: 'right',
+                anchorY: 'top',
+                offsetX: 16,
+                offsetY: 16,
+            };
+        }
+
+        _loadPanelPlacement() {
+            const saved = panelPlacementStorage.load();
+            if (!saved) return null;
+            const anchorX = saved.anchorX === 'left' ? 'left' : 'right';
+            const anchorY = saved.anchorY === 'bottom' ? 'bottom' : 'top';
+            const offsetX = Number.isFinite(saved.offsetX) ? Math.max(0, Number(saved.offsetX)) : 16;
+            const offsetY = Number.isFinite(saved.offsetY) ? Math.max(0, Number(saved.offsetY)) : 16;
+            return { anchorX, anchorY, offsetX, offsetY };
+        }
+
+        _savePanelPlacement() {
+            if (!this.panelPlacement) return;
+            panelPlacementStorage.save({
+                anchorX: this.panelPlacement.anchorX,
+                anchorY: this.panelPlacement.anchorY,
+                offsetX: this.panelPlacement.offsetX,
+                offsetY: this.panelPlacement.offsetY,
+            });
+        }
+
+        _applyPanelPosition({ persist = false } = {}) {
+            if (!this.panelEl) return;
+            if (!this.panelPlacement) {
+                this.panelPlacement = this._getDefaultPanelPlacement();
+            }
+            const placement = this.panelPlacement;
+            const rect = this.panelEl.getBoundingClientRect();
+            const width = rect.width;
+            const height = rect.height;
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            const maxOffsetX = Math.max(0, Math.round(viewportWidth - width));
+            const maxOffsetY = Math.max(0, Math.round(viewportHeight - height));
+            let offsetX = Math.min(placement.offsetX, maxOffsetX);
+            let offsetY = Math.min(placement.offsetY, maxOffsetY);
+            if (!Number.isFinite(offsetX)) offsetX = 0;
+            if (!Number.isFinite(offsetY)) offsetY = 0;
+            let left = placement.anchorX === 'left' ? offsetX : viewportWidth - width - offsetX;
+            let top = placement.anchorY === 'top' ? offsetY : viewportHeight - height - offsetY;
+            const maxLeft = Math.max(0, viewportWidth - width);
+            const maxTop = Math.max(0, viewportHeight - height);
+            left = Math.min(Math.max(left, 0), maxLeft);
+            top = Math.min(Math.max(top, 0), maxTop);
+            this.panelEl.style.left = `${left}px`;
+            this.panelEl.style.top = `${top}px`;
+            this.panelEl.style.right = 'auto';
+            this.panelEl.style.bottom = 'auto';
+            this.panelEl.classList.toggle('dock-left', placement.anchorX === 'left');
+            this.panelEl.classList.toggle('dock-right', placement.anchorX === 'right');
+            this.panelEl.classList.toggle('dock-top', placement.anchorY === 'top');
+            this.panelEl.classList.toggle('dock-bottom', placement.anchorY === 'bottom');
+            const nextPlacement = {
+                anchorX: placement.anchorX,
+                anchorY: placement.anchorY,
+                offsetX,
+                offsetY,
+            };
+            this.panelPlacement = nextPlacement;
+            if (persist) {
+                this._savePanelPlacement();
+            }
+        }
+
+        _setupDragHandles() {
+            if (!this.searchToggleEl || !this.panelEl) return;
+            this._dragState = null;
+            const onPointerDown = (event) => {
+                if (event.button !== 0) return;
+                if (!(event.ctrlKey && event.altKey)) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                this._dragState = {
+                    pointerId: event.pointerId,
+                    offsetX: event.clientX - rect.left,
+                    offsetY: event.clientY - rect.top,
+                };
+                this.panelEl.classList.add('dragging');
+                try {
+                    this.panelEl.setPointerCapture(event.pointerId);
+                } catch (err) {
+                    logger.debug('Не удалось зафиксировать указатель', { message: err && err.message });
+                }
+                event.preventDefault();
+            };
+            const onPointerMove = (event) => {
+                if (!this._dragState || event.pointerId !== this._dragState.pointerId) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                let nextLeft = event.clientX - this._dragState.offsetX;
+                let nextTop = event.clientY - this._dragState.offsetY;
+                const maxLeft = Math.max(0, viewportWidth - width);
+                const maxTop = Math.max(0, viewportHeight - height);
+                nextLeft = Math.min(Math.max(nextLeft, 0), maxLeft);
+                nextTop = Math.min(Math.max(nextTop, 0), maxTop);
+                this.panelEl.style.left = `${nextLeft}px`;
+                this.panelEl.style.top = `${nextTop}px`;
+                this.panelEl.style.right = 'auto';
+                this.panelEl.style.bottom = 'auto';
+            };
+            const finalizeDrag = (event) => {
+                if (!this._dragState || (event && event.pointerId !== this._dragState.pointerId)) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                const distLeft = rect.left;
+                const distRight = viewportWidth - rect.right;
+                const distTop = rect.top;
+                const distBottom = viewportHeight - rect.bottom;
+                const anchorX = distLeft <= distRight ? 'left' : 'right';
+                const anchorY = distTop <= distBottom ? 'top' : 'bottom';
+                const offsetX = anchorX === 'left' ? Math.max(0, Math.round(distLeft)) : Math.max(0, Math.round(distRight));
+                const offsetY = anchorY === 'top' ? Math.max(0, Math.round(distTop)) : Math.max(0, Math.round(distBottom));
+                this.panelPlacement = { anchorX, anchorY, offsetX, offsetY };
+                this._applyPanelPosition({ persist: true });
+                if (event && typeof event.pointerId === 'number') {
+                    try {
+                        this.panelEl.releasePointerCapture(event.pointerId);
+                    } catch (err) {
+                        logger.debug('Не удалось отпустить указатель', { message: err && err.message });
+                    }
+                }
+                this.panelEl.classList.remove('dragging');
+                this._dragState = null;
+            };
+            this.searchToggleEl.addEventListener('pointerdown', onPointerDown);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', finalizeDrag);
+            window.addEventListener('pointercancel', finalizeDrag);
         }
 
         _onInput() {
@@ -1892,6 +2078,7 @@
             const hasToasts = this.toastStackEl && !this.toastStackEl.hidden && this.toastStackEl.childElementCount > 0;
             const shouldCompact = !expanded && !selectionVisible && !hasResults && !hasToasts;
             this.panelEl.classList.toggle('compact', shouldCompact);
+            this._applyPanelPosition();
         }
 
         _renderNode(parentContainer, node, depth) {
