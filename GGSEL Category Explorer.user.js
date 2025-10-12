@@ -908,12 +908,13 @@
                 --dur-1:.12s;
                 --dur-2:.18s;
                 --panel-width: 348px;
+                --panel-pad:14px;
                 position: fixed;
                 top: 0;
                 left: 0;
                 width: var(--panel-width);
                 min-width: var(--panel-width);
-                padding: 14px;
+                padding: var(--panel-pad);
                 background: var(--panel);
                 color: var(--text);
                 border-radius: var(--radius);
@@ -944,7 +945,8 @@
             }
             .panel.compact {
                 --panel-width: calc(46px + 24px);
-                padding: 12px;
+                --panel-pad: 12px;
+                padding: var(--panel-pad);
                 gap: 0;
             }
             .panel.dock-right .search-row {
@@ -983,6 +985,8 @@
             }
             .search-control {
                 position: relative;
+                --flush-extend-left: 0px;
+                --flush-extend-right: 0px;
                 flex: 1 1 auto;
                 display: flex;
                 align-items: center;
@@ -1016,10 +1020,18 @@
                 border-top-left-radius: 0;
                 border-bottom-left-radius: 0;
             }
+            .panel.flush-left .search-control.collapsed,
+            .panel.flush-left .search-control.manual-collapse {
+                --flush-extend-left: var(--panel-pad);
+            }
             .panel.flush-right .search-control.collapsed .search-toggle,
             .panel.flush-right .search-control.manual-collapse .search-toggle {
                 border-top-right-radius: 0;
                 border-bottom-right-radius: 0;
+            }
+            .panel.flush-right .search-control.collapsed,
+            .panel.flush-right .search-control.manual-collapse {
+                --flush-extend-right: var(--panel-pad);
             }
             .panel.flush-top .search-control.collapsed .search-toggle,
             .panel.flush-top .search-control.manual-collapse .search-toggle {
@@ -1032,6 +1044,9 @@
                 border-bottom-right-radius: 0;
             }
             .search-toggle {
+                --toggle-bg: rgba(244,63,94,.18);
+                --toggle-border: rgba(244,63,94,.45);
+                --toggle-shadow: 0 12px 26px rgba(244,63,94,.18);
                 position: absolute;
                 inset: 0;
                 display: flex;
@@ -1039,16 +1054,29 @@
                 justify-content: center;
                 padding: 0 10px;
                 border-radius: 999px;
-                border: 1px solid rgba(244,63,94,.45);
-                background: rgba(244,63,94,.18);
-                box-shadow: 0 12px 26px rgba(244,63,94,.18);
                 transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), transform var(--dur-1), border-radius var(--dur-2), padding var(--dur-2), opacity var(--dur-1);
                 z-index: 1;
+                overflow: visible;
+            }
+            .search-toggle::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: calc(-1 * var(--flush-extend-left));
+                right: calc(-1 * var(--flush-extend-right));
+                border-radius: inherit;
+                background: var(--toggle-bg);
+                border: 1px solid var(--toggle-border);
+                box-shadow: var(--toggle-shadow);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), left var(--dur-2), right var(--dur-2), border-radius var(--dur-2);
+                pointer-events: none;
+                z-index: -1;
             }
             .search-control.collapsed .search-toggle:hover {
-                border-color: rgba(244,63,94,.6);
-                background: rgba(244,63,94,.28);
-                box-shadow: 0 16px 32px rgba(244,63,94,.26);
+                --toggle-border: rgba(244,63,94,.6);
+                --toggle-bg: rgba(244,63,94,.28);
+                --toggle-shadow: 0 16px 32px rgba(244,63,94,.26);
             }
             .search-control.collapsed .search-toggle:active {
                 transform: translateY(1px);
@@ -1063,9 +1091,9 @@
                 justify-content: flex-start;
                 padding-left: 18px;
                 border-radius: var(--radius-sm);
-                background: rgba(244,63,94,.2);
-                border-color: rgba(244,63,94,.55);
-                box-shadow: 0 18px 44px rgba(244,63,94,.28);
+                --toggle-bg: rgba(244,63,94,.2);
+                --toggle-border: rgba(244,63,94,.55);
+                --toggle-shadow: 0 18px 44px rgba(244,63,94,.28);
                 cursor: default;
                 pointer-events: none;
             }
