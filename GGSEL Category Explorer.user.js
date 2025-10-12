@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.7
+// @version      1.2.8
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -867,6 +867,10 @@
                 --warn:#f59e0b;
                 --radius:14px;
                 --radius-sm:10px;
+                --row-pad-x:12px;
+                --row-pad-y:7px;
+                --row-gap:10px;
+                --row-min-height:32px;
                 --shadow-1:0 6px 24px rgba(0,0,0,.28);
                 --shadow-2:0 10px 34px rgba(0,0,0,.34);
                 --dur-1:.12s;
@@ -1082,8 +1086,8 @@
                 position: relative;
                 display: flex;
                 align-items: center;
-                gap: 10px;
-                padding: 7px 12px;
+                gap: var(--row-gap);
+                padding: var(--row-pad-y) var(--row-pad-x);
                 border-radius: var(--radius-sm);
                 border: 1px solid transparent;
                 margin: 0 2px;
@@ -1092,7 +1096,7 @@
                 cursor: pointer;
                 color: var(--text);
                 transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
-                min-height: 32px;
+                min-height: var(--row-min-height);
                 overflow: hidden;
                 user-select: none;
                 -webkit-user-select: none;
@@ -1145,12 +1149,14 @@
                 flex-direction: column;
                 gap: 2px;
                 margin: 0 0 0 var(--sublist-indent, 15px);
-                padding: 2px 0 2px 12px;
+                padding: 0 0 0 var(--row-pad-x);
                 border-left: 2px solid rgba(244,63,94,.45);
                 contain: content;
             }
             .sublist > .row {
                 margin: 0;
+                padding: var(--row-pad-y) var(--row-pad-x);
+                min-height: var(--row-min-height);
             }
             .row.leaf {
                 background: ${LIST_LEAF_HIGHLIGHT_BG};
@@ -1911,7 +1917,7 @@
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
-            row.style.paddingLeft = '12px';
+            row.style.paddingLeft = 'var(--row-pad-x)';
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
