@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.4
+// @version      1.2.5
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -871,10 +871,12 @@
                 --shadow-2:0 10px 34px rgba(0,0,0,.34);
                 --dur-1:.12s;
                 --dur-2:.18s;
+                --panel-width: 348px;
                 position: fixed;
                 top: 16px;
                 right: 16px;
-                width: 348px;
+                width: var(--panel-width);
+                min-width: var(--panel-width);
                 padding: 14px;
                 background: var(--panel);
                 color: var(--text);
@@ -887,6 +889,20 @@
                 z-index: 999999;
                 user-select: none;
                 -webkit-user-select: none;
+                transition: width var(--dur-2), min-width var(--dur-2), padding var(--dur-2), gap var(--dur-2);
+            }
+            .panel.compact {
+                --panel-width: calc(46px + 24px);
+                padding: 12px;
+                gap: 0;
+            }
+            .panel.compact .search-row {
+                justify-content: center;
+                gap: 0;
+            }
+            .panel.compact .search-control {
+                width: 46px;
+                max-width: 46px;
             }
             .search-row {
                 display: flex;
@@ -1332,14 +1348,15 @@
         const copyPathsBtn = panel.querySelector('.selection-copy-paths');
         const toastStackEl = panel.querySelector('.toast-stack');
 
-        const ui = new UIPanel(shadow, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
+        const ui = new UIPanel(shadow, panel, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
     }
 
     // --- Управление UI ---
     class UIPanel {
-        constructor(shadowRoot, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl) {
+        constructor(shadowRoot, panelEl, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl) {
             this.shadowRoot = shadowRoot;
+            this.panelEl = panelEl;
             this.inputEl = inputEl;
             this.resultsContainer = resultsContainer;
             this.selectionActionsEl = selectionActionsEl;
@@ -1368,6 +1385,7 @@
             if (this.toastStackEl) {
                 this.toastStackEl.hidden = true;
             }
+            this._updatePanelLayout();
         }
 
         init() {
@@ -1625,6 +1643,7 @@
                     this.inputEl.select();
                 });
             }
+            this._updatePanelLayout();
         }
 
         _updateSearchAffordance() {
@@ -1841,6 +1860,17 @@
         _setResultsVisibility(visible) {
             if (!this.resultsContainer) return;
             this.resultsContainer.hidden = !visible;
+            this._updatePanelLayout();
+        }
+
+        _updatePanelLayout() {
+            if (!this.panelEl) return;
+            const expanded = this._isSearchExpanded();
+            const hasResults = this.resultsContainer && !this.resultsContainer.hidden && this.resultsContainer.childElementCount > 0;
+            const selectionVisible = this.selectionActionsEl && this.selectionActionsEl.classList && this.selectionActionsEl.classList.contains('visible');
+            const hasToasts = this.toastStackEl && !this.toastStackEl.hidden && this.toastStackEl.childElementCount > 0;
+            const shouldCompact = !expanded && !selectionVisible && !hasResults && !hasToasts;
+            this.panelEl.classList.toggle('compact', shouldCompact);
         }
 
         _renderNode(parentContainer, node, depth) {
@@ -2029,14 +2059,16 @@
         }
 
         _updateSelectionUI() {
-            if (!this.selectionActionsEl) return;
-            if (this.selectedIds.size > 0) {
-                this.selectionActionsEl.hidden = false;
-                this.selectionActionsEl.classList.add('visible');
-            } else {
-                this.selectionActionsEl.hidden = true;
-                this.selectionActionsEl.classList.remove('visible');
+            if (this.selectionActionsEl) {
+                if (this.selectedIds.size > 0) {
+                    this.selectionActionsEl.hidden = false;
+                    this.selectionActionsEl.classList.add('visible');
+                } else {
+                    this.selectionActionsEl.hidden = true;
+                    this.selectionActionsEl.classList.remove('visible');
+                }
             }
+            this._updatePanelLayout();
         }
 
         async _copySelectedDigis() {
@@ -2105,6 +2137,7 @@
         _setToastVisibility(visible) {
             if (!this.toastStackEl) return;
             this.toastStackEl.hidden = !visible;
+            this._updatePanelLayout();
         }
 
         async _loadChildrenForNode(node, { expand = false } = {}) {
