@@ -1428,16 +1428,18 @@
             .context-menu {
                 position: fixed;
                 z-index: 1000001;
-                background: rgba(14,18,32,.96);
-                color: var(--text);
+                background: linear-gradient(165deg, rgba(11,15,28,.97), rgba(17,24,39,.94));
+                color: rgba(226,232,255,.92);
                 border-radius: var(--radius-sm);
-                border: 1px solid rgba(59,130,246,.25);
-                min-width: 168px;
+                border: 1px solid rgba(59,130,246,.32);
+                min-width: 152px;
                 box-shadow: var(--shadow-2);
                 padding: 6px 0;
                 display: none;
-                font-size: 12px;
+                font-size: 13px;
+                font-weight: 500;
                 backdrop-filter: blur(12px) saturate(140%);
+                letter-spacing: .01em;
             }
             .context-menu.open {
                 display: block;
@@ -1448,21 +1450,23 @@
                 border: 0;
                 color: inherit;
                 text-align: left;
-                padding: 8px 16px;
+                padding: 8px 14px;
                 cursor: pointer;
                 font: inherit;
-                line-height: 1.4;
+                line-height: 1.45;
+                letter-spacing: inherit;
+                transition: background var(--dur-1), color var(--dur-1);
             }
             .context-menu__item:hover,
             .context-menu__item:focus {
-                background: rgba(59,130,246,.2);
-                color: var(--text);
+                background: rgba(59,130,246,.24);
+                color: #f8fbff;
                 outline: none;
             }
             .context-menu__separator {
                 height: 1px;
                 margin: 4px 0;
-                background: rgba(255,255,255,.08);
+                background: rgba(148,163,213,.16);
             }
             .popover {
                 position: fixed;
@@ -1592,6 +1596,7 @@
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
             this._onResultsContextMenu = null;
+            this._onPanelContextMenu = null;
             this._onContextPointerDown = null;
             this._onDocumentPointerDown = null;
             this._onWindowBlur = null;
@@ -1810,9 +1815,11 @@
 
         _setupContextMenu() {
             if (!this.shadowRoot) return;
-            if (!this.resultsContainer) return;
             if (this._onResultsContextMenu && this.resultsContainer) {
                 this.resultsContainer.removeEventListener('contextmenu', this._onResultsContextMenu);
+            }
+            if (this._onPanelContextMenu && this.panelEl) {
+                this.panelEl.removeEventListener('contextmenu', this._onPanelContextMenu);
             }
             if (this._onContextPointerDown && this.shadowRoot) {
                 this.shadowRoot.removeEventListener('pointerdown', this._onContextPointerDown);
@@ -1835,9 +1842,9 @@
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
 
-            this._onResultsContextMenu = (event) => {
-                if (!this.resultsContainer) return;
-                if (!this.resultsContainer.contains(event.target)) return;
+            this._onPanelContextMenu = (event) => {
+                if (!this.panelEl) return;
+                if (!this.panelEl.contains(event.target)) return;
                 event.preventDefault();
                 event.stopPropagation();
                 const row = event.target.closest('.row');
@@ -1858,7 +1865,9 @@
                     node: node || null,
                 });
             };
-            this.resultsContainer.addEventListener('contextmenu', this._onResultsContextMenu);
+            if (this.panelEl) {
+                this.panelEl.addEventListener('contextmenu', this._onPanelContextMenu);
+            }
 
             this._onContextPointerDown = (event) => {
                 if (!this._contextMenuVisible) return;
