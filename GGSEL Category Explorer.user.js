@@ -614,8 +614,32 @@
                         if (labelCell.tagName === 'TH' && valueCell.tagName === 'TH') continue;
                         const labelText = labelCell.textContent || '';
                         const valueText = valueCell.textContent || '';
-                        if (!labelText.trim() || !valueText.trim()) continue;
-                        pushPair(labelText, valueText);
+                        if (!labelText.trim()) continue;
+                        pushPair(labelText, valueText.trim() ? valueText : '');
+                    }
+                }
+            };
+
+            const extractCommissionFromTables = () => {
+                const tables = doc.querySelectorAll('table');
+                for (const table of tables) {
+                    for (const row of Array.from(table.querySelectorAll('tr'))) {
+                        const headerCell = row.querySelector('th');
+                        if (!headerCell) continue;
+                        const headerText = (headerCell.textContent || '').trim().toLowerCase();
+                        if (!headerText.includes('комис')) continue;
+                        const valueCell = row.querySelector('td');
+                        if (!valueCell) continue;
+                        const valueText = (valueCell.textContent || '').trim();
+                        if (!valueText) continue;
+                        const normalized = normalizeCommissionPercent(valueText);
+                        if (normalized != null) {
+                            stats.commissionPercent = normalized;
+                            stats.commissionRaw = null;
+                        } else if (stats.commissionPercent == null && !stats.commissionRaw) {
+                            stats.commissionRaw = valueText;
+                        }
+                        return;
                     }
                 }
             };
@@ -654,6 +678,10 @@
                 collectFromTables(null);
                 collectDefinitionLists(null);
                 collectInfoBlocks(null);
+            }
+
+            if (stats.commissionPercent == null && !stats.commissionRaw) {
+                extractCommissionFromTables();
             }
 
             const setIfEmpty = (key, value) => {
