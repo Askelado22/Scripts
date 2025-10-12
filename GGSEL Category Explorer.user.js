@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.9
+// @version      1.2.10
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -2407,14 +2407,14 @@
             const rect = row.getBoundingClientRect();
             const popRect = pop.getBoundingClientRect();
             const verticalCenter = rect.top + rect.height / 2;
-            let top = verticalCenter + window.scrollY - popRect.height / 2;
-            const minTop = window.scrollY + 8;
-            const maxTop = window.scrollY + window.innerHeight - popRect.height - 8;
+            let top = verticalCenter - popRect.height / 2;
+            const minTop = 8;
+            const maxTop = window.innerHeight - popRect.height - 8;
             if (top < minTop) top = minTop;
             if (top > maxTop) top = Math.max(minTop, maxTop);
-            let left = rect.right + 6 + window.scrollX;
+            let left = rect.right + 6;
             if (left + popRect.width > window.innerWidth - 12) {
-                left = rect.left + window.scrollX - popRect.width - 6;
+                left = rect.left - popRect.width - 6;
             }
             if (left < 12) {
                 left = 12;
