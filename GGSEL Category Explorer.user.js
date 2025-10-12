@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.1.1
+// @version      1.2.14
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -20,14 +20,21 @@
     const RETRY_COUNT = 2;
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
-    const INPUT_DEBOUNCE_MS = 380;
+    const INPUT_DEBOUNCE_MS = 1500;
     const WAIT_FOR_TIMEOUT_MS = 6500;
     const WAIT_FOR_INTERVAL_MS = 120;
     const FOCUSED_HIGHLIGHT_MS = 1600;
     const TOAST_HIDE_MS = 4500;
     const LIST_LEAF_HIGHLIGHT_BG = 'rgba(59,130,246,.18)';
     const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
+    const SUBLIST_BASE_INDENT = 24;
+    const SUBLIST_INDENT_STEP = 14;
+    const STORAGE_KEY = 'ggsel-category-explorer:last-state';
+    const STORAGE_SCHEMA_VERSION = 1;
+    const PANEL_STORAGE_KEY = 'ggsel-category-explorer:panel-placement';
+    const PANEL_STORAGE_SCHEMA_VERSION = 1;
     const POPOVER_HIDE_DELAY_MS = 220;
+    const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
     // --- Вспомогательные функции ---
@@ -39,6 +46,74 @@
         info: (...args) => console.info(LOG_PREFIX, ...args),
         warn: (...args) => console.warn(LOG_PREFIX, ...args),
         error: (...args) => console.error(LOG_PREFIX, ...args),
+    };
+
+    const storage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return null;
+                }
+                return parsed.payload;
+            } catch (err) {
+                logger.warn('Не удалось прочитать состояние', { error: err && err.message });
+                return null;
+            }
+        },
+        save(payload) {
+            try {
+                if (!payload || !payload.query || !payload.query.trim()) {
+                    localStorage.removeItem(STORAGE_KEY);
+                    return;
+                }
+                const data = {
+                    version: STORAGE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить состояние', { error: err && err.message });
+            }
+        },
+        clear() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+            } catch (err) {
+                logger.warn('Не удалось очистить состояние', { error: err && err.message });
+            }
+        },
+    };
+
+    const panelPlacementStorage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(PANEL_STORAGE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== PANEL_STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return null;
+                }
+                return parsed.payload;
+            } catch (err) {
+                logger.warn('Не удалось прочитать позицию панели', { error: err && err.message });
+                return null;
+            }
+        },
+        save(payload) {
+            if (!payload || typeof payload !== 'object') return;
+            try {
+                const data = {
+                    version: PANEL_STORAGE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить позицию панели', { error: err && err.message });
+            }
+        },
     };
 
     const PATH_SEPARATOR_RE = /[>›→]/;
@@ -711,6 +786,52 @@
         return childNode;
     };
 
+    const orderChildrenForDisplay = (children) => {
+        if (!Array.isArray(children) || children.length < 2) {
+            return Array.isArray(children) ? children : [];
+        }
+        const categories = [];
+        const sections = [];
+        for (const child of children) {
+            if (!child) continue;
+            const isCategory = child.hasChildren !== false || (child.childrenLoaded && child.children.length > 0);
+            if (isCategory) {
+                categories.push(child);
+            } else {
+                sections.push(child);
+            }
+        }
+        return categories.concat(sections);
+    };
+
+    const applyDisplayOrder = (items) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+        if (items.length < 2) {
+            return items;
+        }
+        const ordered = orderChildrenForDisplay(items);
+        if (ordered.length !== items.length) {
+            return ordered;
+        }
+        for (let index = 0; index < ordered.length; index++) {
+            if (ordered[index] !== items[index]) {
+                return ordered;
+            }
+        }
+        return items;
+    };
+
+    const assignChildrenToNode = (node, childrenData) => {
+        const mapped = Array.isArray(childrenData)
+            ? childrenData.map(childData => upsertChildNode(childData, node))
+            : [];
+        const ordered = applyDisplayOrder(mapped);
+        node.children = ordered;
+        return ordered;
+    };
+
     // --- Управление состоянием поиска ---
     const SearchState = {
         queryInfo: null,
@@ -720,6 +841,24 @@
         loading: false,
         error: null,
     };
+
+    function reorderSiblingsForNode(node) {
+        if (!node) return;
+        if (node.parentId) {
+            const parent = nodesMap.get(node.parentId);
+            if (parent && Array.isArray(parent.children) && parent.children.length > 1) {
+                const ordered = applyDisplayOrder(parent.children);
+                if (ordered !== parent.children) {
+                    parent.children = ordered;
+                }
+            }
+        } else if (Array.isArray(SearchState.results) && SearchState.results.length > 1) {
+            const orderedRoots = applyDisplayOrder(SearchState.results);
+            if (orderedRoots !== SearchState.results) {
+                SearchState.results = orderedRoots;
+            }
+        }
+    }
 
     // --- Инициализация панели ---
     function initPanel() {
@@ -754,20 +893,27 @@
                 --blue-600:#2563eb;
                 --rose:#f43f5e;
                 --rose-600:#e11d48;
+                --accent-rose:var(--rose);
                 --accent-danger:#f43f5e;
                 --success:#22c55e;
                 --warn:#f59e0b;
                 --radius:14px;
                 --radius-sm:10px;
+                --row-pad-x:12px;
+                --row-pad-y:7px;
+                --row-gap:10px;
+                --row-min-height:32px;
                 --shadow-1:0 6px 24px rgba(0,0,0,.28);
                 --shadow-2:0 10px 34px rgba(0,0,0,.34);
                 --dur-1:.12s;
                 --dur-2:.18s;
+                --panel-width: 348px;
                 position: fixed;
-                top: 16px;
-                right: 16px;
-                width: 348px;
-                padding: 14px 14px 10px;
+                top: 0;
+                left: 0;
+                width: var(--panel-width);
+                min-width: var(--panel-width);
+                padding: 14px;
                 background: var(--panel);
                 color: var(--text);
                 border-radius: var(--radius);
@@ -779,11 +925,52 @@
                 z-index: 999999;
                 user-select: none;
                 -webkit-user-select: none;
+                transition: width var(--dur-2), min-width var(--dur-2), padding var(--dur-2), gap var(--dur-2);
+            }
+            .panel.flush-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+            .panel.flush-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+            .panel.flush-top { border-top-left-radius: 0; border-top-right-radius: 0; }
+            .panel.flush-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+            .panel.flush-left.compact { padding-left: 0; }
+            .panel.flush-right.compact { padding-right: 0; }
+            .panel.flush-top.compact { padding-top: 0; }
+            .panel.flush-bottom.compact { padding-bottom: 0; }
+            .panel.dragging {
+                transition: none !important;
+                cursor: grabbing;
+            }
+            .panel.dragging .search-toggle {
+                cursor: grabbing;
+            }
+            .panel.compact {
+                --panel-width: calc(46px + 24px);
+                padding: 12px;
+                gap: 0;
+            }
+            .panel.dock-right .search-row {
+                justify-content: flex-end;
+            }
+            .panel.dock-bottom .search-row {
+                order: 2;
+            }
+            .panel.dock-bottom .results {
+                order: 1;
+            }
+            .panel.dock-bottom .toast-stack {
+                order: 0;
+            }
+            .panel.compact .search-row { gap: 0; }
+            .panel.compact.dock-left .search-row { justify-content: flex-start; }
+            .panel.compact.dock-right .search-row { justify-content: flex-end; }
+            .panel.compact:not(.dock-left):not(.dock-right) .search-row { justify-content: center; }
+            .panel.compact .search-control {
+                width: 46px;
+                max-width: 46px;
             }
             .search-row {
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
             }
             .selection-actions {
                 display: none;
@@ -793,6 +980,117 @@
             }
             .selection-actions.visible {
                 display: flex;
+            }
+            .search-control {
+                position: relative;
+                flex: 1 1 auto;
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                height: 46px;
+                max-width: 100%;
+                transition: max-width var(--dur-2), width var(--dur-2);
+            }
+            .search-control.collapsed {
+                flex: 0 0 auto;
+                max-width: 46px;
+                width: 46px;
+            }
+            .search-control.expanded {
+                width: 100%;
+            }
+            .search-control.collapsed .search-toggle {
+                cursor: pointer;
+            }
+            .search-control.manual-collapse .search-toggle {
+                opacity: 1 !important;
+                visibility: visible !important;
+                pointer-events: auto !important;
+                transform: none !important;
+            }
+            .search-control.manual-collapse .search-toggle svg {
+                transform: none !important;
+            }
+            .panel.flush-left .search-control.collapsed .search-toggle,
+            .panel.flush-left .search-control.manual-collapse .search-toggle {
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+            }
+            .panel.flush-right .search-control.collapsed .search-toggle,
+            .panel.flush-right .search-control.manual-collapse .search-toggle {
+                border-top-right-radius: 0;
+                border-bottom-right-radius: 0;
+            }
+            .panel.flush-top .search-control.collapsed .search-toggle,
+            .panel.flush-top .search-control.manual-collapse .search-toggle {
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+            }
+            .panel.flush-bottom .search-control.collapsed .search-toggle,
+            .panel.flush-bottom .search-control.manual-collapse .search-toggle {
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+            }
+            .search-toggle {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0 10px;
+                border-radius: 999px;
+                border: 1px solid rgba(244,63,94,.45);
+                background: rgba(244,63,94,.18);
+                box-shadow: 0 12px 26px rgba(244,63,94,.18);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), transform var(--dur-1), border-radius var(--dur-2), padding var(--dur-2), opacity var(--dur-1);
+                z-index: 1;
+            }
+            .search-control.collapsed .search-toggle:hover {
+                border-color: rgba(244,63,94,.6);
+                background: rgba(244,63,94,.28);
+                box-shadow: 0 16px 32px rgba(244,63,94,.26);
+            }
+            .search-control.collapsed .search-toggle:active {
+                transform: translateY(1px);
+            }
+            .search-toggle svg {
+                display: block;
+                width: 32px;
+                height: 32px;
+                transition: transform var(--dur-1), opacity var(--dur-1);
+            }
+            .search-control.expanded .search-toggle {
+                justify-content: flex-start;
+                padding-left: 18px;
+                border-radius: var(--radius-sm);
+                background: rgba(244,63,94,.2);
+                border-color: rgba(244,63,94,.55);
+                box-shadow: 0 18px 44px rgba(244,63,94,.28);
+                cursor: default;
+                pointer-events: none;
+            }
+            .search-control.expanded .search-toggle svg {
+                transform: translateX(-6px) scale(0.9);
+            }
+            .search-control.has-value .search-toggle {
+                opacity: 0;
+                pointer-events: none;
+                visibility: hidden;
+                transform: scale(0.7);
+            }
+            .search-control.has-value .search-toggle svg {
+                transform: translateX(-6px) scale(0.72);
+            }
+            .panel.dock-right .search-control.expanded .search-toggle {
+                justify-content: flex-end;
+                padding-left: 14px;
+                padding-right: 18px;
+            }
+            .panel.dock-right .search-control.expanded .search-toggle svg {
+                transform: translateX(6px) scale(0.9);
+            }
+            .panel.dock-right .search-control.has-value .search-toggle svg {
+                transform: translateX(6px) scale(0.72);
             }
             .selection-button {
                 background: rgba(21,24,36,.92);
@@ -817,16 +1115,27 @@
                 transform: translateY(1px);
             }
             .search-input {
+                position: absolute;
+                inset: 0;
                 width: 100%;
+                height: 100%;
                 border: 1px solid var(--border);
                 border-radius: var(--radius-sm);
-                padding: 11px 14px;
+                padding: 11px 14px 11px 58px;
                 font-size: 14px;
                 color: var(--text);
                 background: var(--panel-2);
-                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), opacity var(--dur-2), transform var(--dur-2);
                 user-select: text;
                 -webkit-user-select: text;
+                opacity: 0;
+                pointer-events: none;
+                transform: translateX(12px) scaleX(0.82);
+                z-index: 2;
+            }
+            .panel.dock-right .search-input {
+                padding: 11px 58px 11px 14px;
+                transform: translateX(-12px) scaleX(0.82);
             }
             .search-input::placeholder {
                 color: rgba(169,176,198,.65);
@@ -837,10 +1146,26 @@
                 box-shadow: 0 0 0 3px rgba(244,63,94,.25);
                 background: rgba(21,24,36,.96);
             }
+            .search-control.collapsed .search-input {
+                border-width: 0;
+            }
+            .search-control.expanded .search-input {
+                opacity: 1;
+                border-width: 1px;
+                pointer-events: auto;
+                transform: none;
+            }
+            .search-control.has-value .search-input {
+                padding-left: 18px;
+            }
+            .panel.dock-right .search-control.has-value .search-input {
+                padding-right: 18px;
+                padding-left: 14px;
+            }
             .results {
                 max-height: 520px;
                 overflow-y: auto;
-                padding: 2px 0 6px;
+                padding: 2px 6px 6px 0;
                 margin: 0;
                 display: flex;
                 flex-direction: column;
@@ -852,6 +1177,12 @@
                 user-select: none;
                 -webkit-user-select: none;
             }
+            .results[hidden] {
+                display: none !important;
+                padding: 0;
+                margin: 0;
+                max-height: 0;
+            }
             .results::-webkit-scrollbar { width: 8px; }
             .results::-webkit-scrollbar-thumb {
                 background: rgba(59,130,246,.22);
@@ -862,8 +1193,8 @@
                 position: relative;
                 display: flex;
                 align-items: center;
-                gap: 10px;
-                padding: 7px 12px;
+                gap: var(--row-gap);
+                padding: 0 var(--row-pad-x);
                 border-radius: var(--radius-sm);
                 border: 1px solid transparent;
                 margin: 0 2px;
@@ -872,7 +1203,8 @@
                 cursor: pointer;
                 color: var(--text);
                 transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2);
-                min-height: 32px;
+                height: var(--row-min-height);
+                min-height: var(--row-min-height);
                 overflow: hidden;
                 user-select: none;
                 -webkit-user-select: none;
@@ -889,9 +1221,9 @@
                 font-weight: 650;
                 font-size: 12px;
                 letter-spacing: .01em;
-                color: #38bdf8;
-                background: rgba(14,165,233,.18);
-                border: 1px solid rgba(14,165,233,.35);
+                color: #e0f2ff;
+                background: rgba(59,130,246,.16);
+                border: 1px solid rgba(59,130,246,.45);
                 border-radius: 8px;
                 padding: 4px 12px;
                 white-space: nowrap;
@@ -902,6 +1234,14 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
+            .row[data-has-children="true"]:not(.leaf),
+            .row[data-has-children="unknown"]:not(.leaf) {
+                border-color: rgba(39,48,70,.85);
+            }
+            .row[data-has-children="true"][data-state="expanded"],
+            .row[data-has-children="unknown"][data-state="expanded"] {
+                border-color: transparent;
+            }
             .row.potential {
                 border-color: rgba(59,130,246,.22);
             }
@@ -911,6 +1251,22 @@
                 margin-left: 6px;
                 color: var(--muted);
             }
+            .sublist {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                margin: 0 0 0 var(--sublist-indent, 15px);
+                padding: 0 0 0 var(--row-pad-x);
+                border-left: 2px solid rgba(244,63,94,.45);
+                contain: content;
+            }
+            .sublist > .row {
+                margin: 0;
+                padding: 0 var(--row-pad-x);
+                height: var(--row-min-height);
+                min-height: var(--row-min-height);
+            }
             .row.leaf {
                 background: ${LIST_LEAF_HIGHLIGHT_BG};
                 border-color: ${LIST_LEAF_HIGHLIGHT_BORDER};
@@ -918,8 +1274,8 @@
                 cursor: default;
             }
             .row.leaf .digi-badge {
-                background: rgba(14,165,233,.26);
-                border-color: rgba(14,165,233,.45);
+                background: rgba(59,130,246,.16);
+                border-color: rgba(59,130,246,.45);
                 color: #e0f2ff;
             }
             .row.leaf:hover {
@@ -993,6 +1349,10 @@
                 flex-direction: column;
                 gap: 6px;
                 margin: 4px 2px 0;
+            }
+            .toast-stack[hidden] {
+                display: none !important;
+                margin: 0;
             }
             .toast {
                 background: rgba(21,24,36,.94);
@@ -1083,13 +1443,31 @@
                     <button type="button" class="selection-button selection-copy-digi">DIGI</button>
                     <button type="button" class="selection-button selection-copy-paths">Пути</button>
                 </div>
-                <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+                <div class="search-control collapsed" data-expanded="false">
+                    <button type="button" class="search-toggle" aria-label="Открыть поиск" aria-expanded="false">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="28" viewBox="0 0 512 512" role="img" focusable="false" aria-hidden="true">
+                          <path d="M335.646 261.389C339.197 264.491 342.607 267.725 346 270.999 346.717 271.664 347.433 272.329 348.172 273.014 376.736 300.208 396.087 345.642 398.203 384.753 398.475 406.812 391.943 425.548 376.813 441.75 362.672 455.15 346.392 460.797 327.105 460.488 317.286 459.986 308.026 456.722 298.699 453.82 265.762 443.81 231.982 447.549 199.766 458.055 186.081 462.114 170.109 461.616 157 456 156.124 455.638 155.247 455.276 154.344 454.903 147.778 451.914 142.408 447.731 137 443.001 136.384 442.48 135.768 441.959 135.133 441.423 121.299 428.8 114.512 409.772 113.615 391.449 112.526 348.022 135.879 303.221 164.676 272.111 210.651 224.472 284.467 218.197 335.646 261.389Z" fill="var(--accent-rose)"></path>
+                          <path d="M335.646 261.389C339.197 264.491 342.607 267.725 346 270.999 346.717 271.664 347.433 272.329 348.172 273.014 376.736 300.208 396.087 345.642 398.203 384.753 398.475 406.812 391.943 425.548 376.813 441.75 362.672 455.15 346.392 460.797 327.105 460.488 317.286 459.986 308.026 456.722 298.699 453.82 265.762 443.81 231.982 447.549 199.766 458.055 186.081 462.114 170.109 461.616 157 456 156.124 455.638 155.247 455.276 154.344 454.903 147.778 451.914 142.408 447.731 137 443.001 136.384 442.48 135.768 441.959 135.133 441.423 121.299 428.8 114.512 409.772 113.615 391.449 112.526 348.022 135.879 303.221 164.676 272.111 210.651 224.472 284.467 218.197 335.646 261.389ZM185 298C162.824 322.881 144.807 359.764 146.551 393.695 147.488 404.561 152.268 412.612 160.137 420.008 166.936 425.679 173.381 428.389 182.314 428.274 187.886 427.705 193.17 425.837 198.5 424.187 234.578 413.466 274.771 411.565 310.828 423.594 321.788 427.249 331.488 430.445 342.813 426.098 352.076 421.45 359.221 413.61 363.438 404.188 368.292 389.035 364.648 372.703 360 358 359.754 357.213 359.507 356.426 359.254 355.615 348.604 322.479 328.198 291.269 296.911 274.6 257.083 254.313 214.677 266.672 185 298Z" fill="var(--accent-rose)"></path>
+                          <path d="M361.5 60.195C380.356 73.807 390.96 94.885 394.664 117.575 398.505 145.291 394.336 174.527 377.5 197.496 368.434 209.204 355.938 218.66 341 221 323.408 222.118 309.501 218.427 295.875 206.813 278.073 190.098 269.612 165.414 268.816 141.399 268.307 116.033 274.044 88.986 292 70 310.795 50.46 338.208 45.189 361.5 60.195Z" fill="var(--accent-rose)"></path>
+                          <path d="M206.125 58.688C225.594 71.168 235.867 91.04 241 113 246.731 139.925 242.426 169.441 228 193 225.256 196.948 222.305 200.513 219 204 218.314 204.727 217.629 205.454 216.922 206.203 206.071 216.732 192.428 221.44 177.579 221.364 162.512 220.997 149.335 213.769 139 203 121.191 182.769 114.945 156.045 116.106 129.573 117.662 105.248 126.015 82.397 143.687 65.188 161.551 49.836 185.648 47.326 206.125 58.688Z" fill="var(--accent-rose)"></path>
+                          <path d="M473.313 187.313C486.541 197.329 494.128 210.59 497 227 497.941 241.365 497.79 255.337 493 269 492.638 270.059 492.276 271.118 491.903 272.21 485.205 289.873 472.599 304.295 455.672 312.64 444.023 317.632 430.404 319.377 418.222 314.964 405.381 309.39 394.619 300.353 389.237 287.125 380.796 264.519 381.831 240.644 391.653 218.653 399.582 202.085 412.857 188.882 430 182 444.752 177.595 460.343 178.679 473.313 187.313Z" fill="var(--accent-rose)"></path>
+                          <path d="M92.688 187.188C111.369 200.012 123.292 218.972 127.589 241.21 130.707 262.343 127.566 282.182 115.04 299.75 108.695 307.487 98.416 315.045 88.301 316.821 69.151 318.317 54.465 313.979 39.637 301.447 25.559 288.391 16.089 269.174 14.796 249.959 14.698 246.679 14.679 243.408 14.688 240.127 14.672 239.033 14.656 237.938 14.64 236.811 14.63 220.332 20.041 205.104 31.625 193.187 48.877 177.325 72.512 175.074 92.688 187.188Z" fill="var(--accent-rose)"></path>
+                          <path d="M183 84C193.454 87.49 198.716 94.229 203.75 103.688 209.156 114.918 210.258 124.808 210.375 137.125 210.389 138.222 210.403 139.319 210.418 140.449 210.374 147.738 209.287 154.087 207 161 206.71 161.878 206.42 162.755 206.122 163.66 202.484 174.178 195.956 182.855 186 188 181.065 189.645 176.819 189.625 172.063 187.5 160.032 180.765 154.186 168.281 150.508 155.477 146.224 134.587 148.482 114.136 160 96 162.551 92.478 164.959 90.08 168.625 87.75 169.401 87.25 170.177 86.75 170.977 86.234 174.997 83.782 178.348 83.334 183 84Z" fill="var(--accent-rose)"></path>
+                          <path d="M338.102 84.734C349.405 89.898 355.594 100.899 360 112 364.974 126.424 365.113 145.685 360 160 359.637 161.026 359.273 162.052 358.899 163.109 354.797 173.747 348.473 183.184 338.062 188.5 331.723 189.535 326.825 188.844 321.312 185.438 310.276 177.358 304.303 163.18 302 150 300.775 129.13 301.676 109.386 315.375 92.438 321.587 85.976 329.101 81.59 338.102 84.734Z" fill="var(--accent-rose)"></path>
+                          <path d="M453.063 213C458.753 216.874 462.631 222.584 464.523 229.207 466.972 243.558 464.795 257.273 456.625 269.5 451.697 275.911 447.031 281.724 439 284 434.011 284.575 429.681 284.841 425.125 282.563 417.168 272.968 414.981 262.393 415.762 250.121 417.174 237.557 423.429 225.478 433.125 217.438 439.447 212.58 445.179 210.426 453.063 213Z" fill="var(--accent-rose)"></path>
+                          <path d="M70.25 212.719C80.574 217.044 86.966 224.215 91.519 234.399 96.441 247.022 98.641 259.863 93.137 272.727 90.648 277.705 88.454 281.911 83 284 76.468 284.925 71.292 284.555 65.903 280.599 65.275 280.071 64.647 279.544 64 279.001 62.981 278.164 62.981 278.164 61.941 277.31 52.695 268.938 47.661 256.644 46.719 244.329 46.473 234.148 47.415 225.134 54 217 59.222 212.399 63.207 210.469 70.25 212.719Z" fill="var(--accent-rose)"></path>
+                        </svg>
+                    </button>
+                    <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+                </div>
             </div>
             <div class="results"></div>
             <div class="toast-stack" aria-live="polite"></div>
         `;
         shadow.appendChild(panel);
 
+        const searchControlEl = panel.querySelector('.search-control');
+        const searchToggleEl = panel.querySelector('.search-toggle');
         const input = panel.querySelector('.search-input');
         const resultsEl = panel.querySelector('.results');
         const selectionActionsEl = panel.querySelector('.selection-actions');
@@ -1097,20 +1475,24 @@
         const copyPathsBtn = panel.querySelector('.selection-copy-paths');
         const toastStackEl = panel.querySelector('.toast-stack');
 
-        const ui = new UIPanel(shadow, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl);
+        const ui = new UIPanel(shadow, panel, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
     }
 
     // --- Управление UI ---
     class UIPanel {
-        constructor(shadowRoot, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl) {
+        constructor(shadowRoot, panelEl, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl) {
             this.shadowRoot = shadowRoot;
+            this.panelEl = panelEl;
             this.inputEl = inputEl;
             this.resultsContainer = resultsContainer;
             this.selectionActionsEl = selectionActionsEl;
             this.copyDigiBtn = copyDigiBtn;
             this.copyPathsBtn = copyPathsBtn;
             this.toastStackEl = toastStackEl;
+            this.searchControlEl = searchControlEl;
+            this.searchToggleEl = searchToggleEl;
+            this.panelPlacement = this._loadPanelPlacement() || this._getDefaultPanelPlacement();
             this.hoverTimer = null;
             this.currentPopover = null;
             this.currentPopoverAnchor = null;
@@ -1121,17 +1503,170 @@
             this.selectedIds = new Set();
             this.lastFocusedId = null;
             this.navigationInProgress = false;
+            this.pendingRestoreState = null;
+            this.persistTimer = null;
+            this.restoring = false;
+            this.collapseTimer = null;
+            this._manualCollapsed = false;
+            this._hiddenDueToCollapse = { results: false, toasts: false };
+            if (this.resultsContainer) {
+                this.resultsContainer.hidden = true;
+            }
+            if (this.toastStackEl) {
+                this.toastStackEl.hidden = true;
+            }
+            this._applyPanelPosition();
+            this._updatePanelLayout();
         }
 
         init() {
             this.inputEl.addEventListener('input', () => this._onInput());
             this.inputEl.addEventListener('keydown', (e) => this._onKeyDown(e));
-            this.resultsContainer.addEventListener('scroll', () => this._prefetchVisible());
+            this.inputEl.addEventListener('focus', () => this._onInputFocus());
+            this.inputEl.addEventListener('blur', () => this._onInputBlur());
+            if (this.searchToggleEl) {
+                this.searchToggleEl.addEventListener('click', () => this._onSearchToggleClick());
+            }
+            this.resultsContainer.addEventListener('scroll', () => {
+                this._prefetchVisible();
+                this._schedulePersist();
+            });
             this.copyDigiBtn.addEventListener('click', () => this._copySelectedDigis());
             this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
             window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
+            this._setupDragHandles();
+            this._onWindowResize = () => {
+                this._applyPanelPosition({ persist: true });
+            };
+            window.addEventListener('resize', this._onWindowResize);
             this._setupScrollIsolation();
+            this._updateSearchAffordance();
             this.render();
+            this._restoreState().catch((err) => {
+                logger.warn('Не удалось восстановить состояние', { error: err && err.message });
+            });
+        }
+
+        _schedulePersist(immediate = false) {
+            if (this.restoring && !immediate) {
+                return;
+            }
+            if (this.persistTimer) {
+                clearTimeout(this.persistTimer);
+                this.persistTimer = null;
+            }
+            if (immediate) {
+                this._persistState();
+                return;
+            }
+            this.persistTimer = setTimeout(() => {
+                this.persistTimer = null;
+                this._persistState();
+            }, 160);
+        }
+
+        _persistState() {
+            if (this.restoring) return;
+            const query = this.inputEl ? this.inputEl.value || '' : '';
+            if (!query.trim()) {
+                storage.clear();
+                return;
+            }
+            const expandedNodes = [];
+            for (const node of nodesMap.values()) {
+                if (node && node.expanded) {
+                    const depth = getNodePathSegments(node).length;
+                    expandedNodes.push({ id: node.id, depth });
+                }
+            }
+            expandedNodes.sort((a, b) => {
+                if (a.depth !== b.depth) return a.depth - b.depth;
+                return String(a.id).localeCompare(String(b.id), undefined, { numeric: true, sensitivity: 'base' });
+            });
+            const expandedIds = expandedNodes.map((item) => item.id);
+            const payload = {
+                query,
+                selectedIds: Array.from(this.selectedIds),
+                expandedIds,
+                lastFocusedId: this.lastFocusedId || null,
+                scrollTop: this.resultsContainer ? this.resultsContainer.scrollTop : 0,
+            };
+            storage.save(payload);
+        }
+
+        async _restoreState() {
+            const saved = storage.load();
+            if (!saved || !saved.query || !saved.query.trim()) {
+                return;
+            }
+            this.restoring = true;
+            this.pendingRestoreState = {
+                expandedIds: Array.isArray(saved.expandedIds) ? saved.expandedIds.slice() : [],
+                selectedIds: Array.isArray(saved.selectedIds) ? saved.selectedIds.slice() : [],
+                lastFocusedId: saved.lastFocusedId || null,
+                scrollTop: typeof saved.scrollTop === 'number' ? saved.scrollTop : 0,
+            };
+            this.selectedIds = new Set(this.pendingRestoreState.selectedIds);
+            this.lastFocusedId = this.pendingRestoreState.lastFocusedId;
+            if (this.inputEl) {
+                this.inputEl.value = saved.query;
+                this._updateSearchAffordance();
+            }
+            const result = this.startSearch(saved.query, { preserveSelection: true });
+            if (result && typeof result.then === 'function') {
+                await result;
+            }
+            await this._applyPendingRestore();
+            this.restoring = false;
+            this._schedulePersist(true);
+        }
+
+        async _applyPendingRestore() {
+            const state = this.pendingRestoreState;
+            if (!state) {
+                this._updateSelectionUI();
+                return;
+            }
+            const uniqueExpanded = Array.from(new Set(state.expandedIds || []));
+            const idsWithDepth = uniqueExpanded
+                .map((id) => {
+                    const node = nodesMap.get(id);
+                    if (!node) return null;
+                    const depth = getNodePathSegments(node).length;
+                    return { id, depth };
+                })
+                .filter(Boolean)
+                .sort((a, b) => {
+                    if (a.depth !== b.depth) return a.depth - b.depth;
+                    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true, sensitivity: 'base' });
+                });
+            let needsRender = false;
+            for (const { id } of idsWithDepth) {
+                const node = nodesMap.get(id);
+                if (!node || node.hasChildren === false) continue;
+                if (!node.childrenLoaded) {
+                    const expanded = await this._loadChildrenForNode(node, { expand: true });
+                    if (expanded) {
+                        needsRender = true;
+                    }
+                } else if (!node.expanded) {
+                    node.expanded = true;
+                    needsRender = true;
+                    this._ensureChildrenLeafInfo(node);
+                }
+            }
+            if (needsRender) {
+                this.render();
+            } else {
+                this._updateSelectionUI();
+            }
+            this.selectedIds = new Set(state.selectedIds || []);
+            this.lastFocusedId = state.lastFocusedId;
+            this._updateSelectionUI();
+            if (this.resultsContainer && typeof state.scrollTop === 'number') {
+                this.resultsContainer.scrollTop = state.scrollTop;
+            }
+            this.pendingRestoreState = null;
         }
 
         _setupScrollIsolation() {
@@ -1182,11 +1717,281 @@
             }, { passive: false });
         }
 
+        _getDefaultPanelPlacement() {
+            return {
+                anchorX: 'right',
+                anchorY: 'top',
+                offsetX: 16,
+                offsetY: 16,
+            };
+        }
+
+        _loadPanelPlacement() {
+            const saved = panelPlacementStorage.load();
+            if (!saved) return null;
+            const anchorX = saved.anchorX === 'left' ? 'left' : 'right';
+            const anchorY = saved.anchorY === 'bottom' ? 'bottom' : 'top';
+            const offsetX = Number.isFinite(saved.offsetX) ? Math.max(0, Number(saved.offsetX)) : 16;
+            const offsetY = Number.isFinite(saved.offsetY) ? Math.max(0, Number(saved.offsetY)) : 16;
+            return { anchorX, anchorY, offsetX, offsetY };
+        }
+
+        _savePanelPlacement() {
+            if (!this.panelPlacement) return;
+            panelPlacementStorage.save({
+                anchorX: this.panelPlacement.anchorX,
+                anchorY: this.panelPlacement.anchorY,
+                offsetX: this.panelPlacement.offsetX,
+                offsetY: this.panelPlacement.offsetY,
+            });
+        }
+
+        _applyPanelPosition({ persist = false } = {}) {
+            if (!this.panelEl) return;
+            if (!this.panelPlacement) {
+                this.panelPlacement = this._getDefaultPanelPlacement();
+            }
+            const placement = this.panelPlacement;
+            const rect = this.panelEl.getBoundingClientRect();
+            const width = rect.width;
+            const height = rect.height;
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            const maxOffsetX = Math.max(0, Math.round(viewportWidth - width));
+            const maxOffsetY = Math.max(0, Math.round(viewportHeight - height));
+            let offsetX = Math.min(Math.max(Math.round(placement.offsetX), 0), maxOffsetX);
+            let offsetY = Math.min(Math.max(Math.round(placement.offsetY), 0), maxOffsetY);
+            if (!Number.isFinite(offsetX)) offsetX = 0;
+            if (!Number.isFinite(offsetY)) offsetY = 0;
+            if (placement.anchorX === 'left') {
+                this.panelEl.style.left = `${offsetX}px`;
+                this.panelEl.style.right = 'auto';
+            } else {
+                this.panelEl.style.left = 'auto';
+                this.panelEl.style.right = `${offsetX}px`;
+            }
+            if (placement.anchorY === 'top') {
+                this.panelEl.style.top = `${offsetY}px`;
+                this.panelEl.style.bottom = 'auto';
+            } else {
+                this.panelEl.style.top = 'auto';
+                this.panelEl.style.bottom = `${offsetY}px`;
+            }
+            this.panelEl.classList.toggle('dock-left', placement.anchorX === 'left');
+            this.panelEl.classList.toggle('dock-right', placement.anchorX === 'right');
+            this.panelEl.classList.toggle('dock-top', placement.anchorY === 'top');
+            this.panelEl.classList.toggle('dock-bottom', placement.anchorY === 'bottom');
+            const flushLeft = placement.anchorX === 'left' && offsetX <= EDGE_FLUSH_EPSILON;
+            const flushRight = placement.anchorX === 'right' && offsetX <= EDGE_FLUSH_EPSILON;
+            const flushTop = placement.anchorY === 'top' && offsetY <= EDGE_FLUSH_EPSILON;
+            const flushBottom = placement.anchorY === 'bottom' && offsetY <= EDGE_FLUSH_EPSILON;
+            this.panelEl.classList.toggle('flush-left', flushLeft);
+            this.panelEl.classList.toggle('flush-right', flushRight);
+            this.panelEl.classList.toggle('flush-top', flushTop);
+            this.panelEl.classList.toggle('flush-bottom', flushBottom);
+            const nextPlacement = {
+                anchorX: placement.anchorX,
+                anchorY: placement.anchorY,
+                offsetX,
+                offsetY,
+            };
+            this.panelPlacement = nextPlacement;
+            if (persist) {
+                this._savePanelPlacement();
+            }
+        }
+
+        _setupDragHandles() {
+            if (!this.searchToggleEl || !this.panelEl) return;
+            this._dragState = null;
+            const onPointerDown = (event) => {
+                if (event.button !== 0) return;
+                if (!(event.ctrlKey && event.altKey)) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                this._dragState = {
+                    pointerId: event.pointerId,
+                    offsetX: event.clientX - rect.left,
+                    offsetY: event.clientY - rect.top,
+                };
+                this.panelEl.classList.add('dragging');
+                try {
+                    this.panelEl.setPointerCapture(event.pointerId);
+                } catch (err) {
+                    logger.debug('Не удалось зафиксировать указатель', { message: err && err.message });
+                }
+                event.preventDefault();
+            };
+            const onPointerMove = (event) => {
+                if (!this._dragState || event.pointerId !== this._dragState.pointerId) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                let nextLeft = event.clientX - this._dragState.offsetX;
+                let nextTop = event.clientY - this._dragState.offsetY;
+                const maxLeft = Math.max(0, viewportWidth - width);
+                const maxTop = Math.max(0, viewportHeight - height);
+                nextLeft = Math.min(Math.max(nextLeft, 0), maxLeft);
+                nextTop = Math.min(Math.max(nextTop, 0), maxTop);
+                this.panelEl.style.left = `${nextLeft}px`;
+                this.panelEl.style.top = `${nextTop}px`;
+                this.panelEl.style.right = 'auto';
+                this.panelEl.style.bottom = 'auto';
+            };
+            const finalizeDrag = (event) => {
+                if (!this._dragState || (event && event.pointerId !== this._dragState.pointerId)) return;
+                const rect = this.panelEl.getBoundingClientRect();
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                const distLeft = rect.left;
+                const distRight = viewportWidth - rect.right;
+                const distTop = rect.top;
+                const distBottom = viewportHeight - rect.bottom;
+                const anchorX = distLeft <= distRight ? 'left' : 'right';
+                const anchorY = distTop <= distBottom ? 'top' : 'bottom';
+                const offsetX = anchorX === 'left' ? Math.max(0, Math.round(distLeft)) : Math.max(0, Math.round(distRight));
+                const offsetY = anchorY === 'top' ? Math.max(0, Math.round(distTop)) : Math.max(0, Math.round(distBottom));
+                this.panelPlacement = { anchorX, anchorY, offsetX, offsetY };
+                this._applyPanelPosition({ persist: true });
+                if (event && typeof event.pointerId === 'number') {
+                    try {
+                        this.panelEl.releasePointerCapture(event.pointerId);
+                    } catch (err) {
+                        logger.debug('Не удалось отпустить указатель', { message: err && err.message });
+                    }
+                }
+                this.panelEl.classList.remove('dragging');
+                this._dragState = null;
+            };
+            this.searchToggleEl.addEventListener('pointerdown', onPointerDown);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', finalizeDrag);
+            window.addEventListener('pointercancel', finalizeDrag);
+        }
+
         _onInput() {
+            this._updateSearchAffordance();
             clearTimeout(this.debounceTimer);
             this.debounceTimer = setTimeout(() => {
                 this._handleInputValue(this.inputEl.value);
             }, INPUT_DEBOUNCE_MS);
+        }
+
+        _onInputFocus() {
+            if (this.collapseTimer) {
+                clearTimeout(this.collapseTimer);
+                this.collapseTimer = null;
+            }
+            this._setSearchExpanded(true);
+        }
+
+        _onInputBlur() {
+            if (this.collapseTimer) {
+                clearTimeout(this.collapseTimer);
+            }
+            this.collapseTimer = setTimeout(() => {
+                this.collapseTimer = null;
+                const value = this.inputEl ? this.inputEl.value : '';
+                if (!value || !value.trim()) {
+                    this._setSearchExpanded(false);
+                }
+            }, 60);
+        }
+
+        _onSearchToggleClick() {
+            const isExpanded = this._isSearchExpanded();
+            if (!isExpanded) {
+                this._setSearchExpanded(true, { focus: true });
+                return;
+            }
+            if (this.inputEl) {
+                this.inputEl.focus();
+                if (!this.inputEl.value || !this.inputEl.value.trim()) {
+                    this.inputEl.select();
+                }
+            }
+        }
+
+        _collapseSearchToFab({ preserveQuery = true } = {}) {
+            if (!this.searchControlEl) return;
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+                this.debounceTimer = null;
+            }
+            if (this.resultsContainer && !this.resultsContainer.hidden && this.resultsContainer.childElementCount > 0) {
+                this.resultsContainer.hidden = true;
+                this._hiddenDueToCollapse.results = true;
+            }
+            if (this.toastStackEl && !this.toastStackEl.hidden && this.toastStackEl.childElementCount > 0) {
+                this.toastStackEl.hidden = true;
+                this._hiddenDueToCollapse.toasts = true;
+            }
+            if (!preserveQuery && this.inputEl) {
+                this.inputEl.value = '';
+            }
+            if (this.inputEl) {
+                this.inputEl.blur();
+            }
+            this._setSearchExpanded(false, { manual: true });
+            if (!preserveQuery) {
+                this._updateSearchAffordance();
+            }
+        }
+
+        _isSearchExpanded() {
+            if (!this.searchControlEl) return true;
+            return this.searchControlEl.classList.contains('expanded');
+        }
+
+        _setSearchExpanded(expanded, { focus = false, manual = false } = {}) {
+            if (!this.searchControlEl) return;
+            this.searchControlEl.classList.toggle('expanded', expanded);
+            this.searchControlEl.classList.toggle('collapsed', !expanded);
+            this.searchControlEl.dataset.expanded = expanded ? 'true' : 'false';
+            if (this.searchToggleEl) {
+                this.searchToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            }
+            if (expanded) {
+                this._manualCollapsed = false;
+                this.searchControlEl.classList.remove('manual-collapse');
+                if (this._hiddenDueToCollapse.results && this.resultsContainer && this.resultsContainer.childElementCount > 0) {
+                    this.resultsContainer.hidden = false;
+                }
+                if (this._hiddenDueToCollapse.toasts && this.toastStackEl && this.toastStackEl.childElementCount > 0) {
+                    this.toastStackEl.hidden = false;
+                }
+                this._hiddenDueToCollapse.results = false;
+                this._hiddenDueToCollapse.toasts = false;
+            } else {
+                if (manual) {
+                    this._manualCollapsed = true;
+                    this.searchControlEl.classList.add('manual-collapse');
+                } else {
+                    this._manualCollapsed = false;
+                    this.searchControlEl.classList.remove('manual-collapse');
+                }
+            }
+            if (expanded && focus && this.inputEl) {
+                requestAnimationFrame(() => {
+                    this.inputEl.focus();
+                    this.inputEl.select();
+                });
+            }
+            this._updatePanelLayout();
+        }
+
+        _updateSearchAffordance() {
+            if (!this.searchControlEl) return;
+            const value = this.inputEl ? this.inputEl.value : '';
+            const hasValue = Boolean(value && value.trim().length > 0);
+            const activeElement = this.shadowRoot ? this.shadowRoot.activeElement : null;
+            const isFocused = this.inputEl && activeElement === this.inputEl;
+            this.searchControlEl.classList.toggle('has-value', hasValue);
+            if (this._manualCollapsed && !isFocused) {
+                return;
+            }
+            this._setSearchExpanded(hasValue || isFocused);
         }
 
         async _handleInputValue(rawValue) {
@@ -1207,6 +2012,16 @@
         }
 
         _onKeyDown(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (this._isSearchExpanded()) {
+                    this._collapseSearchToFab();
+                } else if (this.inputEl) {
+                    this.inputEl.blur();
+                }
+                return;
+            }
             const rows = Array.from(this.resultsContainer.querySelectorAll('.row'));
             if (!rows.length) return;
             const activeIndex = rows.findIndex(row => row.classList.contains('active'));
@@ -1259,6 +2074,7 @@
                     this.lastFocusedId = null;
                 }
                 this.render();
+                this._schedulePersist(true);
                 return Promise.resolve();
             }
             logger.info('Новый поиск', { type: info.type, value: info.value });
@@ -1274,6 +2090,7 @@
                 this.lastFocusedId = null;
             }
             this.render();
+            this._schedulePersist();
             return this._performSearch();
         }
 
@@ -1316,10 +2133,12 @@
                 }
                 SearchState.nextPage = nextPageUrl;
                 SearchState.pageCount += pagesFetched;
-                SearchState.results = loadMore ? SearchState.results.concat(gathered) : gathered;
+                const combined = loadMore ? SearchState.results.concat(gathered) : gathered;
+                SearchState.results = applyDisplayOrder(combined);
                 SearchState.loading = false;
                 this.render();
                 this._prefetchVisible();
+                this._schedulePersist();
                 logger.info('Обновление результатов', {
                     total: SearchState.results.length,
                     nextPage: SearchState.nextPage,
@@ -1333,6 +2152,7 @@
                 SearchState.error = 'Не удалось загрузить результаты';
                 SearchState.loading = false;
                 this.render();
+                this._schedulePersist();
             }
         }
 
@@ -1340,24 +2160,27 @@
             const container = this.resultsContainer;
             container.innerHTML = '';
             this.visibleNodes = [];
+            this._setResultsVisibility(false);
 
             if (!SearchState.queryInfo) {
-                container.innerHTML = `<div class="empty-state">Введите запрос для поиска категорий.</div>`;
                 this._updateSelectionUI();
                 return;
             }
             if (SearchState.loading && SearchState.results.length === 0) {
                 container.innerHTML = `<div class="loading-state">Загрузка...</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (SearchState.error) {
                 container.innerHTML = `<div class="error-state">${SearchState.error}</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (!SearchState.results.length) {
                 container.innerHTML = `<div class="empty-state">Ничего не найдено.</div>`;
+                this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
@@ -1379,12 +2202,31 @@
                 fragment.appendChild(loadMore);
             }
             container.appendChild(fragment);
+            this._setResultsVisibility(true);
             this._updateSelectionUI();
         }
 
-        _renderNode(parentFragment, node, depth) {
+        _setResultsVisibility(visible) {
+            if (!this.resultsContainer) return;
+            this.resultsContainer.hidden = !visible;
+            this._updatePanelLayout();
+        }
+
+        _updatePanelLayout() {
+            if (!this.panelEl) return;
+            const expanded = this._isSearchExpanded();
+            const hasResults = this.resultsContainer && !this.resultsContainer.hidden && this.resultsContainer.childElementCount > 0;
+            const selectionVisible = this.selectionActionsEl && this.selectionActionsEl.classList && this.selectionActionsEl.classList.contains('visible');
+            const hasToasts = this.toastStackEl && !this.toastStackEl.hidden && this.toastStackEl.childElementCount > 0;
+            const shouldCompact = !expanded && !selectionVisible && !hasResults && !hasToasts;
+            this.panelEl.classList.toggle('compact', shouldCompact);
+            this._applyPanelPosition();
+        }
+
+        _renderNode(parentContainer, node, depth) {
             const row = document.createElement('div');
             row.className = 'row';
+            row.classList.add('CATologies-acc-row');
             if (node.error) row.classList.add('error');
             if (node.loading) row.classList.add('loading');
             row.dataset.id = node.id;
@@ -1397,11 +2239,16 @@
             const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
             row.dataset.state = node.expanded ? 'expanded' : (isLeaf ? 'leaf' : 'collapsed');
             row.dataset.hasChildren = isLeaf ? 'false' : (hasChildrenKnown ? 'true' : 'unknown');
+            if (row.dataset.hasChildren === 'false') {
+                row.classList.add('CATologies-type-section');
+            } else {
+                row.classList.add('CATologies-type-category');
+            }
             const nodeHref = new URL(node.href, location.origin).toString();
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
-            row.style.paddingLeft = `${10 + depth * 16}px`;
+            row.style.paddingLeft = 'var(--row-pad-x)';
 
             if (!node.childrenLoaded && node.hasChildren !== false) {
                 row.classList.add('potential');
@@ -1446,12 +2293,19 @@
             row.addEventListener('mouseenter', (e) => this._onRowHoverStart(e, node, row));
             row.addEventListener('mouseleave', (e) => this._onRowHoverEnd(e));
 
-            parentFragment.appendChild(row);
+            parentContainer.appendChild(row);
             this.visibleNodes.push({ node, row });
 
             if (node.expanded && node.childrenLoaded && node.children.length) {
+                const sublist = document.createElement('div');
+                sublist.className = 'sublist CATologies-acc-sublist';
+                sublist.dataset.parentId = node.id;
+                sublist.dataset.depth = String(depth + 1);
+                const indent = SUBLIST_BASE_INDENT + depth * SUBLIST_INDENT_STEP;
+                sublist.style.setProperty('--sublist-indent', `${indent}px`);
+                parentContainer.appendChild(sublist);
                 for (const child of node.children) {
-                    this._renderNode(parentFragment, child, depth + 1);
+                    this._renderNode(sublist, child, depth + 1);
                 }
             }
         }
@@ -1460,6 +2314,7 @@
             if (node.loading) return;
             if (node.childrenLoaded && node.children.length === 0) {
                 node.hasChildren = false;
+                reorderSiblingsForNode(node);
             }
             if (node.hasChildren === false && node.childrenLoaded) {
                 logger.debug('Игнорируем клик по листу', { id: node.id });
@@ -1474,7 +2329,9 @@
             } else if (!node.children.length) {
                 node.hasChildren = false;
                 node.expanded = false;
+                reorderSiblingsForNode(node);
                 this.render();
+                this._schedulePersist();
                 return;
             } else {
                 node.expanded = !node.expanded;
@@ -1483,6 +2340,7 @@
                 if (node.expanded) {
                     this._ensureChildrenLeafInfo(node);
                 }
+                this._schedulePersist();
             }
         }
 
@@ -1504,6 +2362,7 @@
             }
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _selectRange(node, row) {
@@ -1536,6 +2395,7 @@
             }
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _clearSelection() {
@@ -1545,17 +2405,20 @@
                 row.classList.remove('gce-selected');
             }
             this._updateSelectionUI();
+            this._schedulePersist();
         }
 
         _updateSelectionUI() {
-            if (!this.selectionActionsEl) return;
-            if (this.selectedIds.size > 0) {
-                this.selectionActionsEl.hidden = false;
-                this.selectionActionsEl.classList.add('visible');
-            } else {
-                this.selectionActionsEl.hidden = true;
-                this.selectionActionsEl.classList.remove('visible');
+            if (this.selectionActionsEl) {
+                if (this.selectedIds.size > 0) {
+                    this.selectionActionsEl.hidden = false;
+                    this.selectionActionsEl.classList.add('visible');
+                } else {
+                    this.selectionActionsEl.hidden = true;
+                    this.selectionActionsEl.classList.remove('visible');
+                }
             }
+            this._updatePanelLayout();
         }
 
         async _copySelectedDigis() {
@@ -1608,6 +2471,7 @@
             toast.className = `toast toast--${type}`;
             toast.textContent = message;
             this.toastStackEl.appendChild(toast);
+            this._setToastVisibility(true);
             requestAnimationFrame(() => {
                 toast.classList.add('show');
             });
@@ -1615,8 +2479,15 @@
                 toast.classList.remove('show');
                 setTimeout(() => {
                     toast.remove();
-                }, 200);
+                    this._setToastVisibility(this.toastStackEl.children.length > 0);
+                }, 220);
             }, TOAST_HIDE_MS);
+        }
+
+        _setToastVisibility(visible) {
+            if (!this.toastStackEl) return;
+            this.toastStackEl.hidden = !visible;
+            this._updatePanelLayout();
         }
 
         async _loadChildrenForNode(node, { expand = false } = {}) {
@@ -1630,9 +2501,10 @@
                 logger.info('Загрузка дочерних категорий', { id: node.id });
                 const children = await loadChildren(node.id);
                 logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
-                node.children = children.map(childData => upsertChildNode(childData, node));
+                const mappedChildren = assignChildrenToNode(node, children);
                 node.childrenLoaded = true;
-                node.hasChildren = node.children.length > 0;
+                node.hasChildren = mappedChildren.length > 0;
+                reorderSiblingsForNode(node);
                 node.loading = false;
                 if (expand && node.hasChildren) {
                     node.expanded = true;
@@ -1645,12 +2517,14 @@
                 }
                 this.render();
                 this._prefetchVisible();
+                this._schedulePersist();
                 return node.hasChildren;
             } catch (err) {
                 logger.error('Ошибка загрузки дочерних категорий', { id: node.id, error: err && err.message });
                 node.error = 'Не удалось загрузить дочерние';
                 node.loading = false;
                 this.render();
+                this._schedulePersist();
                 return false;
             }
         }
@@ -1666,12 +2540,15 @@
             if (!node.children.length) {
                 node.hasChildren = false;
                 node.expanded = false;
+                reorderSiblingsForNode(node);
                 this.render();
+                this._schedulePersist();
                 return false;
             }
             if (!node.expanded) {
                 node.expanded = true;
                 this.render();
+                this._schedulePersist();
             }
             this._ensureChildrenLeafInfo(node);
             return true;
@@ -1859,14 +2736,14 @@
             const rect = row.getBoundingClientRect();
             const popRect = pop.getBoundingClientRect();
             const verticalCenter = rect.top + rect.height / 2;
-            let top = verticalCenter + window.scrollY - popRect.height / 2;
-            const minTop = window.scrollY + 8;
-            const maxTop = window.scrollY + window.innerHeight - popRect.height - 8;
+            let top = verticalCenter - popRect.height / 2;
+            const minTop = 8;
+            const maxTop = window.innerHeight - popRect.height - 8;
             if (top < minTop) top = minTop;
             if (top > maxTop) top = Math.max(minTop, maxTop);
-            let left = rect.right + 6 + window.scrollX;
+            let left = rect.right + 6;
             if (left + popRect.width > window.innerWidth - 12) {
-                left = rect.left + window.scrollX - popRect.width - 6;
+                left = rect.left - popRect.width - 6;
             }
             if (left < 12) {
                 left = 12;
@@ -1997,9 +2874,10 @@
         if (!node || node.childrenLoaded) return;
         try {
             const children = await loadChildren(node.id);
-            node.children = children.map(childData => upsertChildNode(childData, node));
+            const mappedChildren = assignChildrenToNode(node, children);
             node.childrenLoaded = true;
-            node.hasChildren = node.children.length > 0;
+            node.hasChildren = mappedChildren.length > 0;
+            reorderSiblingsForNode(node);
             if (!node.hasChildren) {
                 node.expanded = false;
             }
