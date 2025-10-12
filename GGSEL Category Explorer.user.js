@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.5
+// @version      1.2.6
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -950,7 +950,7 @@
                 border: 1px solid rgba(244,63,94,.45);
                 background: rgba(244,63,94,.18);
                 box-shadow: 0 12px 26px rgba(244,63,94,.18);
-                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), transform var(--dur-1), border-radius var(--dur-2), padding var(--dur-2);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), transform var(--dur-1), border-radius var(--dur-2), padding var(--dur-2), opacity var(--dur-1);
                 z-index: 1;
             }
             .search-control.collapsed .search-toggle:hover {
@@ -979,6 +979,15 @@
             }
             .search-control.expanded .search-toggle svg {
                 transform: translateX(-6px) scale(0.9);
+            }
+            .search-control.has-value .search-toggle {
+                opacity: 0;
+                pointer-events: none;
+                visibility: hidden;
+                transform: scale(0.7);
+            }
+            .search-control.has-value .search-toggle svg {
+                transform: translateX(-6px) scale(0.72);
             }
             .selection-button {
                 background: rgba(21,24,36,.92);
@@ -1038,6 +1047,9 @@
                 border-width: 1px;
                 pointer-events: auto;
                 transform: none;
+            }
+            .search-control.has-value .search-input {
+                padding-left: 18px;
             }
             .results {
                 max-height: 520px;
@@ -1652,6 +1664,7 @@
             const hasValue = Boolean(value && value.trim().length > 0);
             const activeElement = this.shadowRoot ? this.shadowRoot.activeElement : null;
             const isFocused = this.inputEl && activeElement === this.inputEl;
+            this.searchControlEl.classList.toggle('has-value', hasValue);
             this._setSearchExpanded(hasValue || isFocused);
         }
 
