@@ -1057,6 +1057,17 @@
             .search-control.collapsed .search-toggle:active {
                 transform: translateY(1px);
             }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle,
+            .panel.compact.flush-left .search-control.collapsed .search-toggle {
+                border-right-color: rgba(244,63,94,.45);
+                border-left-color: rgba(244,63,94,.45);
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle {
+                border-right-color: transparent;
+            }
+            .panel.compact.flush-left .search-control.collapsed .search-toggle {
+                border-left-color: transparent;
+            }
             .panel.compact.flush-right .search-control.collapsed .search-toggle::after,
             .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
                 content: '';
