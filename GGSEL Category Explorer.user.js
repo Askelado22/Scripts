@@ -194,6 +194,16 @@
         return trimTrailingZeros(fixed);
     };
 
+    const normalizeCommissionPercent = (value) => {
+        if (value == null) return null;
+        const match = String(value).trim().match(/-?\d+(?:[.,]\d+)?/);
+        if (!match) return null;
+        const numeric = Number(match[0].replace(',', '.'));
+        if (Number.isNaN(numeric)) return null;
+        const percent = numeric <= 1 ? numeric * 100 : numeric;
+        return Math.round(percent * 100) / 100;
+    };
+
     const formatPercent = (value) => {
         if (value == null || Number.isNaN(Number(value))) return null;
         const amount = Number(value);
@@ -671,11 +681,11 @@
                     }
                 }
                 if (label.includes('комис')) {
-                    const numeric = parseFloat(value.replace(',', '.'));
-                    if (!Number.isNaN(numeric)) {
-                        const percent = numeric <= 1 ? numeric * 100 : numeric;
-                        stats.commissionPercent = Math.round(percent * 100) / 100;
-                    } else {
+                    const normalized = normalizeCommissionPercent(value);
+                    if (normalized != null) {
+                        stats.commissionPercent = normalized;
+                        stats.commissionRaw = null;
+                    } else if (!stats.commissionPercent) {
                         stats.commissionRaw = value;
                     }
                 }
@@ -728,6 +738,12 @@
             this.status = data.status || '';
             this.kind = data.kind || '';
             this.digi = (data.digi || '').trim();
+            const initialCommission = data.commissionPercent != null ? data.commissionPercent : data.commissionRaw;
+            const normalizedCommission = normalizeCommissionPercent(initialCommission);
+            this.commissionPercent = normalizedCommission != null ? normalizedCommission : null;
+            this.commissionRaw = normalizedCommission == null && data.commissionRaw != null
+                ? String(data.commissionRaw).trim()
+                : null;
             this.hasChildren = typeof data.hasChildren === 'boolean' ? data.hasChildren : null;
             const rawSegments = Array.isArray(data.pathAnchors) && data.pathAnchors.length
                 ? data.pathAnchors.slice()
@@ -1274,6 +1290,24 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
+            .row .commission {
+                flex: 0 0 auto;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: .03em;
+                color: rgba(255,220,228,.88);
+                margin-left: 10px;
+                white-space: nowrap;
+                text-align: right;
+                opacity: .9;
+            }
+            .row .commission.muted {
+                color: rgba(226,232,255,.6);
+                opacity: .72;
+            }
+            .row .commission[hidden] {
+                display: none !important;
+            }
             .row[data-has-children="true"]:not(.leaf),
             .row[data-has-children="unknown"]:not(.leaf) {
                 border-color: rgba(39,48,70,.85);
@@ -1400,37 +1434,32 @@
                 display: none !important;
             }
             .toast {
-                background: rgba(21,24,36,.94);
-                border: 1px solid rgba(39,48,70,.85);
+                background: linear-gradient(150deg, rgba(244,63,94,.95), rgba(244,63,94,.82));
+                border: 1px solid rgba(244,63,94,.68);
                 border-radius: var(--radius-sm);
                 padding: 10px 14px;
                 font-size: 12px;
-                color: var(--text);
-                box-shadow: var(--shadow-1);
+                color: #fff5f7;
+                text-shadow: 0 1px 2px rgba(0,0,0,.35);
+                box-shadow: 0 18px 36px rgba(244,63,94,.34);
                 opacity: 0;
                 transform: translateY(-6px);
                 transition: opacity var(--dur-2), transform var(--dur-2);
                 pointer-events: none;
                 max-width: 100%;
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
             }
             .toast.show {
                 opacity: 1;
                 transform: translateY(0);
             }
-            .toast--info {
-                border-color: rgba(59,130,246,.38);
-                background: rgba(59,130,246,.18);
-                color: #dbeafe;
-            }
-            .toast--error {
-                border-color: rgba(244,63,94,.55);
-                background: rgba(244,63,94,.18);
-                color: #ffe1e6;
-            }
+            .toast--info,
+            .toast--error,
             .toast--success {
-                border-color: rgba(34,197,94,.45);
-                background: rgba(34,197,94,.18);
-                color: #dcfce7;
+                background: linear-gradient(150deg, rgba(244,63,94,.96), rgba(244,63,94,.82));
+                border-color: rgba(244,63,94,.7);
+                color: #fff6f8;
             }
             .context-menu {
                 position: fixed;
@@ -2742,6 +2771,11 @@
             row.appendChild(digiBadge);
             row.appendChild(nameEl);
 
+            const commissionEl = document.createElement('span');
+            commissionEl.className = 'commission';
+            row.appendChild(commissionEl);
+            this._updateRowCommission(row, node);
+
             if (row.dataset.state === 'leaf') {
                 row.classList.add('leaf');
             }
@@ -2775,6 +2809,20 @@
             parentContainer.appendChild(row);
             this.visibleNodes.push({ node, row });
 
+            const shouldPrefetchCommission = row.dataset.hasChildren === 'false'
+                && node.commissionPercent == null
+                && !node.commissionRaw;
+            if (shouldPrefetchCommission) {
+                const cachedStats = statsCache.get(node.id);
+                if (cachedStats) {
+                    this._applyStatsToNode(node, cachedStats);
+                } else {
+                    loadStats(node.id)
+                        .then(stats => this._applyStatsToNode(node, stats))
+                        .catch(() => {});
+                }
+            }
+
             if (node.expanded && node.childrenLoaded && node.children.length) {
                 const sublist = document.createElement('div');
                 sublist.className = 'sublist CATologies-acc-sublist';
@@ -2786,6 +2834,60 @@
                 for (const child of node.children) {
                     this._renderNode(sublist, child, depth + 1);
                 }
+            }
+        }
+
+        _getNodeCommissionText(node) {
+            if (!node) return '';
+            const percent = node.commissionPercent != null && !Number.isNaN(Number(node.commissionPercent))
+                ? Number(node.commissionPercent)
+                : normalizeCommissionPercent(node.commissionRaw);
+            if (percent != null && !Number.isNaN(percent)) {
+                return formatPercent(percent);
+            }
+            if (node.commissionRaw) {
+                return String(node.commissionRaw);
+            }
+            return '';
+        }
+
+        _updateRowCommission(row, node) {
+            if (!row) return;
+            const commissionEl = row.querySelector('.commission');
+            if (!commissionEl) return;
+            const isSection = row.dataset.hasChildren === 'false';
+            if (!isSection) {
+                commissionEl.textContent = '';
+                commissionEl.hidden = true;
+                return;
+            }
+            const text = this._getNodeCommissionText(node);
+            const hasValue = Boolean(text);
+            commissionEl.hidden = false;
+            commissionEl.textContent = hasValue ? text : '—';
+            commissionEl.classList.toggle('muted', !hasValue);
+        }
+
+        _applyStatsToNode(node, stats) {
+            if (!node || !stats) return;
+            if (stats.status) node.status = stats.status;
+            if (stats.kind) node.kind = stats.kind;
+            if (stats.digi) node.digi = stats.digi;
+            if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
+                node.commissionPercent = Number(stats.commissionPercent);
+                node.commissionRaw = null;
+            } else if (stats.commissionRaw) {
+                node.commissionRaw = stats.commissionRaw;
+                if (node.commissionPercent == null) {
+                    const normalized = normalizeCommissionPercent(stats.commissionRaw);
+                    if (normalized != null) {
+                        node.commissionPercent = normalized;
+                    }
+                }
+            }
+            const entry = this.visibleNodes.find(item => item.node === node);
+            if (entry) {
+                this._updateRowCommission(entry.row, node);
             }
         }
 
@@ -3173,6 +3275,7 @@
             this.hoverTimer = setTimeout(async () => {
                 try {
                     const stats = await loadStats(node.id);
+                    this._applyStatsToNode(node, stats);
                     this._showPopover(row, node, stats);
                 } catch (err) {
                     logger.error('Ошибка загрузки статистики', { id: node.id, error: err && err.message });
@@ -3303,12 +3406,24 @@
         _prefetchVisible() {
             const visible = this.visibleNodes.slice(0, PREFETCH_VISIBLE_LIMIT);
             for (const { node } of visible) {
-                if (!statsCache.get(node.id)) {
-                    loadStats(node.id).catch(() => {});
+                const cached = statsCache.get(node.id);
+                if (cached) {
+                    this._applyStatsToNode(node, cached);
+                } else {
+                    loadStats(node.id)
+                        .then(stats => this._applyStatsToNode(node, stats))
+                        .catch(() => {});
                 }
                 if (node.expanded && node.childrenLoaded) {
                     for (const child of node.children.slice(0, PREFETCH_VISIBLE_LIMIT)) {
-                        if (!statsCache.get(child.id)) loadStats(child.id).catch(() => {});
+                        const childCached = statsCache.get(child.id);
+                        if (childCached) {
+                            this._applyStatsToNode(child, childCached);
+                        } else {
+                            loadStats(child.id)
+                                .then(stats => this._applyStatsToNode(child, stats))
+                                .catch(() => {});
+                        }
                     }
                 }
             }
@@ -3375,6 +3490,18 @@
             if (stats.status) relatedNode.status = stats.status;
             if (stats.kind) relatedNode.kind = stats.kind;
             if (stats.digi) relatedNode.digi = stats.digi;
+            if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
+                relatedNode.commissionPercent = Number(stats.commissionPercent);
+                relatedNode.commissionRaw = null;
+            } else if (stats.commissionRaw) {
+                relatedNode.commissionRaw = stats.commissionRaw;
+                if (relatedNode.commissionPercent == null) {
+                    const normalized = normalizeCommissionPercent(stats.commissionRaw);
+                    if (normalized != null) {
+                        relatedNode.commissionPercent = normalized;
+                    }
+                }
+            }
         }
         statsCache.set(categoryId, stats);
         return stats;
