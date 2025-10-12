@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.3
+// @version      1.2.4
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -20,7 +20,7 @@
     const RETRY_COUNT = 2;
     const RETRY_DELAY_MS = 700;
     const REQUEST_TIMEOUT_MS = 15000;
-    const INPUT_DEBOUNCE_MS = 380;
+    const INPUT_DEBOUNCE_MS = 1500;
     const WAIT_FOR_TIMEOUT_MS = 6500;
     const WAIT_FOR_INTERVAL_MS = 120;
     const FOCUSED_HIGHLIGHT_MS = 1600;
@@ -861,6 +861,7 @@
                 --blue-600:#2563eb;
                 --rose:#f43f5e;
                 --rose-600:#e11d48;
+                --accent-rose:var(--rose);
                 --accent-danger:#f43f5e;
                 --success:#22c55e;
                 --warn:#f59e0b;
@@ -890,7 +891,7 @@
             .search-row {
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
             }
             .selection-actions {
                 display: none;
@@ -900,6 +901,68 @@
             }
             .selection-actions.visible {
                 display: flex;
+            }
+            .search-control {
+                position: relative;
+                flex: 1 1 auto;
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                height: 46px;
+                max-width: 100%;
+                transition: max-width var(--dur-2), width var(--dur-2);
+            }
+            .search-control.collapsed {
+                flex: 0 0 auto;
+                max-width: 46px;
+                width: 46px;
+            }
+            .search-control.expanded {
+                width: 100%;
+            }
+            .search-control.collapsed .search-toggle {
+                cursor: pointer;
+            }
+            .search-toggle {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0 10px;
+                border-radius: 999px;
+                border: 1px solid rgba(244,63,94,.45);
+                background: rgba(244,63,94,.18);
+                box-shadow: 0 12px 26px rgba(244,63,94,.18);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), transform var(--dur-1), border-radius var(--dur-2), padding var(--dur-2);
+                z-index: 1;
+            }
+            .search-control.collapsed .search-toggle:hover {
+                border-color: rgba(244,63,94,.6);
+                background: rgba(244,63,94,.28);
+                box-shadow: 0 16px 32px rgba(244,63,94,.26);
+            }
+            .search-control.collapsed .search-toggle:active {
+                transform: translateY(1px);
+            }
+            .search-toggle svg {
+                display: block;
+                width: 32px;
+                height: 32px;
+                transition: transform var(--dur-1), opacity var(--dur-1);
+            }
+            .search-control.expanded .search-toggle {
+                justify-content: flex-start;
+                padding-left: 18px;
+                border-radius: var(--radius-sm);
+                background: rgba(244,63,94,.2);
+                border-color: rgba(244,63,94,.55);
+                box-shadow: 0 18px 44px rgba(244,63,94,.28);
+                cursor: default;
+                pointer-events: none;
+            }
+            .search-control.expanded .search-toggle svg {
+                transform: translateX(-6px) scale(0.9);
             }
             .selection-button {
                 background: rgba(21,24,36,.92);
@@ -924,16 +987,23 @@
                 transform: translateY(1px);
             }
             .search-input {
+                position: absolute;
+                inset: 0;
                 width: 100%;
+                height: 100%;
                 border: 1px solid var(--border);
                 border-radius: var(--radius-sm);
-                padding: 11px 14px;
+                padding: 11px 14px 11px 58px;
                 font-size: 14px;
                 color: var(--text);
                 background: var(--panel-2);
-                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1);
+                transition: border-color var(--dur-1), box-shadow var(--dur-2), background var(--dur-1), opacity var(--dur-2), transform var(--dur-2);
                 user-select: text;
                 -webkit-user-select: text;
+                opacity: 0;
+                pointer-events: none;
+                transform: translateX(12px) scaleX(0.82);
+                z-index: 2;
             }
             .search-input::placeholder {
                 color: rgba(169,176,198,.65);
@@ -943,6 +1013,15 @@
                 border-color: var(--rose);
                 box-shadow: 0 0 0 3px rgba(244,63,94,.25);
                 background: rgba(21,24,36,.96);
+            }
+            .search-control.collapsed .search-input {
+                border-width: 0;
+            }
+            .search-control.expanded .search-input {
+                opacity: 1;
+                border-width: 1px;
+                pointer-events: auto;
+                transform: none;
             }
             .results {
                 max-height: 520px;
@@ -1014,6 +1093,14 @@
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+            }
+            .row[data-has-children="true"]:not(.leaf),
+            .row[data-has-children="unknown"]:not(.leaf) {
+                border-color: rgba(39,48,70,.85);
+            }
+            .row[data-has-children="true"][data-state="expanded"],
+            .row[data-has-children="unknown"][data-state="expanded"] {
+                border-color: transparent;
             }
             .row.potential {
                 border-color: rgba(59,130,246,.22);
@@ -1213,13 +1300,31 @@
                     <button type="button" class="selection-button selection-copy-digi">DIGI</button>
                     <button type="button" class="selection-button selection-copy-paths">Пути</button>
                 </div>
-                <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+                <div class="search-control collapsed" data-expanded="false">
+                    <button type="button" class="search-toggle" aria-label="Открыть поиск" aria-expanded="false">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="28" viewBox="0 0 512 512" role="img" focusable="false" aria-hidden="true">
+                          <path d="M335.646 261.389C339.197 264.491 342.607 267.725 346 270.999 346.717 271.664 347.433 272.329 348.172 273.014 376.736 300.208 396.087 345.642 398.203 384.753 398.475 406.812 391.943 425.548 376.813 441.75 362.672 455.15 346.392 460.797 327.105 460.488 317.286 459.986 308.026 456.722 298.699 453.82 265.762 443.81 231.982 447.549 199.766 458.055 186.081 462.114 170.109 461.616 157 456 156.124 455.638 155.247 455.276 154.344 454.903 147.778 451.914 142.408 447.731 137 443.001 136.384 442.48 135.768 441.959 135.133 441.423 121.299 428.8 114.512 409.772 113.615 391.449 112.526 348.022 135.879 303.221 164.676 272.111 210.651 224.472 284.467 218.197 335.646 261.389Z" fill="var(--accent-rose)"></path>
+                          <path d="M335.646 261.389C339.197 264.491 342.607 267.725 346 270.999 346.717 271.664 347.433 272.329 348.172 273.014 376.736 300.208 396.087 345.642 398.203 384.753 398.475 406.812 391.943 425.548 376.813 441.75 362.672 455.15 346.392 460.797 327.105 460.488 317.286 459.986 308.026 456.722 298.699 453.82 265.762 443.81 231.982 447.549 199.766 458.055 186.081 462.114 170.109 461.616 157 456 156.124 455.638 155.247 455.276 154.344 454.903 147.778 451.914 142.408 447.731 137 443.001 136.384 442.48 135.768 441.959 135.133 441.423 121.299 428.8 114.512 409.772 113.615 391.449 112.526 348.022 135.879 303.221 164.676 272.111 210.651 224.472 284.467 218.197 335.646 261.389ZM185 298C162.824 322.881 144.807 359.764 146.551 393.695 147.488 404.561 152.268 412.612 160.137 420.008 166.936 425.679 173.381 428.389 182.314 428.274 187.886 427.705 193.17 425.837 198.5 424.187 234.578 413.466 274.771 411.565 310.828 423.594 321.788 427.249 331.488 430.445 342.813 426.098 352.076 421.45 359.221 413.61 363.438 404.188 368.292 389.035 364.648 372.703 360 358 359.754 357.213 359.507 356.426 359.254 355.615 348.604 322.479 328.198 291.269 296.911 274.6 257.083 254.313 214.677 266.672 185 298Z" fill="var(--accent-rose)"></path>
+                          <path d="M361.5 60.195C380.356 73.807 390.96 94.885 394.664 117.575 398.505 145.291 394.336 174.527 377.5 197.496 368.434 209.204 355.938 218.66 341 221 323.408 222.118 309.501 218.427 295.875 206.813 278.073 190.098 269.612 165.414 268.816 141.399 268.307 116.033 274.044 88.986 292 70 310.795 50.46 338.208 45.189 361.5 60.195Z" fill="var(--accent-rose)"></path>
+                          <path d="M206.125 58.688C225.594 71.168 235.867 91.04 241 113 246.731 139.925 242.426 169.441 228 193 225.256 196.948 222.305 200.513 219 204 218.314 204.727 217.629 205.454 216.922 206.203 206.071 216.732 192.428 221.44 177.579 221.364 162.512 220.997 149.335 213.769 139 203 121.191 182.769 114.945 156.045 116.106 129.573 117.662 105.248 126.015 82.397 143.687 65.188 161.551 49.836 185.648 47.326 206.125 58.688Z" fill="var(--accent-rose)"></path>
+                          <path d="M473.313 187.313C486.541 197.329 494.128 210.59 497 227 497.941 241.365 497.79 255.337 493 269 492.638 270.059 492.276 271.118 491.903 272.21 485.205 289.873 472.599 304.295 455.672 312.64 444.023 317.632 430.404 319.377 418.222 314.964 405.381 309.39 394.619 300.353 389.237 287.125 380.796 264.519 381.831 240.644 391.653 218.653 399.582 202.085 412.857 188.882 430 182 444.752 177.595 460.343 178.679 473.313 187.313Z" fill="var(--accent-rose)"></path>
+                          <path d="M92.688 187.188C111.369 200.012 123.292 218.972 127.589 241.21 130.707 262.343 127.566 282.182 115.04 299.75 108.695 307.487 98.416 315.045 88.301 316.821 69.151 318.317 54.465 313.979 39.637 301.447 25.559 288.391 16.089 269.174 14.796 249.959 14.698 246.679 14.679 243.408 14.688 240.127 14.672 239.033 14.656 237.938 14.64 236.811 14.63 220.332 20.041 205.104 31.625 193.187 48.877 177.325 72.512 175.074 92.688 187.188Z" fill="var(--accent-rose)"></path>
+                          <path d="M183 84C193.454 87.49 198.716 94.229 203.75 103.688 209.156 114.918 210.258 124.808 210.375 137.125 210.389 138.222 210.403 139.319 210.418 140.449 210.374 147.738 209.287 154.087 207 161 206.71 161.878 206.42 162.755 206.122 163.66 202.484 174.178 195.956 182.855 186 188 181.065 189.645 176.819 189.625 172.063 187.5 160.032 180.765 154.186 168.281 150.508 155.477 146.224 134.587 148.482 114.136 160 96 162.551 92.478 164.959 90.08 168.625 87.75 169.401 87.25 170.177 86.75 170.977 86.234 174.997 83.782 178.348 83.334 183 84Z" fill="var(--accent-rose)"></path>
+                          <path d="M338.102 84.734C349.405 89.898 355.594 100.899 360 112 364.974 126.424 365.113 145.685 360 160 359.637 161.026 359.273 162.052 358.899 163.109 354.797 173.747 348.473 183.184 338.062 188.5 331.723 189.535 326.825 188.844 321.312 185.438 310.276 177.358 304.303 163.18 302 150 300.775 129.13 301.676 109.386 315.375 92.438 321.587 85.976 329.101 81.59 338.102 84.734Z" fill="var(--accent-rose)"></path>
+                          <path d="M453.063 213C458.753 216.874 462.631 222.584 464.523 229.207 466.972 243.558 464.795 257.273 456.625 269.5 451.697 275.911 447.031 281.724 439 284 434.011 284.575 429.681 284.841 425.125 282.563 417.168 272.968 414.981 262.393 415.762 250.121 417.174 237.557 423.429 225.478 433.125 217.438 439.447 212.58 445.179 210.426 453.063 213Z" fill="var(--accent-rose)"></path>
+                          <path d="M70.25 212.719C80.574 217.044 86.966 224.215 91.519 234.399 96.441 247.022 98.641 259.863 93.137 272.727 90.648 277.705 88.454 281.911 83 284 76.468 284.925 71.292 284.555 65.903 280.599 65.275 280.071 64.647 279.544 64 279.001 62.981 278.164 62.981 278.164 61.941 277.31 52.695 268.938 47.661 256.644 46.719 244.329 46.473 234.148 47.415 225.134 54 217 59.222 212.399 63.207 210.469 70.25 212.719Z" fill="var(--accent-rose)"></path>
+                        </svg>
+                    </button>
+                    <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
+                </div>
             </div>
             <div class="results"></div>
             <div class="toast-stack" aria-live="polite"></div>
         `;
         shadow.appendChild(panel);
 
+        const searchControlEl = panel.querySelector('.search-control');
+        const searchToggleEl = panel.querySelector('.search-toggle');
         const input = panel.querySelector('.search-input');
         const resultsEl = panel.querySelector('.results');
         const selectionActionsEl = panel.querySelector('.selection-actions');
@@ -1227,13 +1332,13 @@
         const copyPathsBtn = panel.querySelector('.selection-copy-paths');
         const toastStackEl = panel.querySelector('.toast-stack');
 
-        const ui = new UIPanel(shadow, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl);
+        const ui = new UIPanel(shadow, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
     }
 
     // --- Управление UI ---
     class UIPanel {
-        constructor(shadowRoot, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl) {
+        constructor(shadowRoot, inputEl, resultsContainer, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl) {
             this.shadowRoot = shadowRoot;
             this.inputEl = inputEl;
             this.resultsContainer = resultsContainer;
@@ -1241,6 +1346,8 @@
             this.copyDigiBtn = copyDigiBtn;
             this.copyPathsBtn = copyPathsBtn;
             this.toastStackEl = toastStackEl;
+            this.searchControlEl = searchControlEl;
+            this.searchToggleEl = searchToggleEl;
             this.hoverTimer = null;
             this.currentPopover = null;
             this.currentPopoverAnchor = null;
@@ -1254,6 +1361,7 @@
             this.pendingRestoreState = null;
             this.persistTimer = null;
             this.restoring = false;
+            this.collapseTimer = null;
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -1265,6 +1373,11 @@
         init() {
             this.inputEl.addEventListener('input', () => this._onInput());
             this.inputEl.addEventListener('keydown', (e) => this._onKeyDown(e));
+            this.inputEl.addEventListener('focus', () => this._onInputFocus());
+            this.inputEl.addEventListener('blur', () => this._onInputBlur());
+            if (this.searchToggleEl) {
+                this.searchToggleEl.addEventListener('click', () => this._onSearchToggleClick());
+            }
             this.resultsContainer.addEventListener('scroll', () => {
                 this._prefetchVisible();
                 this._schedulePersist();
@@ -1273,6 +1386,7 @@
             this.copyPathsBtn.addEventListener('click', () => this._copySelectedPaths());
             window.addEventListener('keydown', (e) => this._onGlobalKeyDown(e));
             this._setupScrollIsolation();
+            this._updateSearchAffordance();
             this.render();
             this._restoreState().catch((err) => {
                 logger.warn('Не удалось восстановить состояние', { error: err && err.message });
@@ -1342,6 +1456,7 @@
             this.lastFocusedId = this.pendingRestoreState.lastFocusedId;
             if (this.inputEl) {
                 this.inputEl.value = saved.query;
+                this._updateSearchAffordance();
             }
             const result = this.startSearch(saved.query, { preserveSelection: true });
             if (result && typeof result.then === 'function') {
@@ -1449,10 +1564,76 @@
         }
 
         _onInput() {
+            this._updateSearchAffordance();
             clearTimeout(this.debounceTimer);
             this.debounceTimer = setTimeout(() => {
                 this._handleInputValue(this.inputEl.value);
             }, INPUT_DEBOUNCE_MS);
+        }
+
+        _onInputFocus() {
+            if (this.collapseTimer) {
+                clearTimeout(this.collapseTimer);
+                this.collapseTimer = null;
+            }
+            this._setSearchExpanded(true);
+        }
+
+        _onInputBlur() {
+            if (this.collapseTimer) {
+                clearTimeout(this.collapseTimer);
+            }
+            this.collapseTimer = setTimeout(() => {
+                this.collapseTimer = null;
+                const value = this.inputEl ? this.inputEl.value : '';
+                if (!value || !value.trim()) {
+                    this._setSearchExpanded(false);
+                }
+            }, 60);
+        }
+
+        _onSearchToggleClick() {
+            const isExpanded = this._isSearchExpanded();
+            if (!isExpanded) {
+                this._setSearchExpanded(true, { focus: true });
+                return;
+            }
+            if (this.inputEl) {
+                this.inputEl.focus();
+                if (!this.inputEl.value || !this.inputEl.value.trim()) {
+                    this.inputEl.select();
+                }
+            }
+        }
+
+        _isSearchExpanded() {
+            if (!this.searchControlEl) return true;
+            return this.searchControlEl.classList.contains('expanded');
+        }
+
+        _setSearchExpanded(expanded, { focus = false } = {}) {
+            if (!this.searchControlEl) return;
+            this.searchControlEl.classList.toggle('expanded', expanded);
+            this.searchControlEl.classList.toggle('collapsed', !expanded);
+            this.searchControlEl.dataset.expanded = expanded ? 'true' : 'false';
+            if (this.searchToggleEl) {
+                this.searchToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            }
+            if (expanded && focus && this.inputEl) {
+                requestAnimationFrame(() => {
+                    this.inputEl.focus();
+                    this.inputEl.select();
+                });
+            }
+        }
+
+        _updateSearchAffordance() {
+            if (!this.searchControlEl) return;
+            const value = this.inputEl ? this.inputEl.value : '';
+            const hasValue = Boolean(value && value.trim().length > 0);
+            const activeElement = this.shadowRoot ? this.shadowRoot.activeElement : null;
+            const isFocused = this.inputEl && activeElement === this.inputEl;
+            this._setSearchExpanded(hasValue || isFocused);
         }
 
         async _handleInputValue(rawValue) {
