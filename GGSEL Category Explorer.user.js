@@ -1015,11 +1015,15 @@
             .panel.flush-left .search-control.manual-collapse .search-toggle {
                 border-top-left-radius: 0;
                 border-bottom-left-radius: 0;
+                padding-left: 6px;
+                padding-right: 14px;
             }
             .panel.flush-right .search-control.collapsed .search-toggle,
             .panel.flush-right .search-control.manual-collapse .search-toggle {
                 border-top-right-radius: 0;
                 border-bottom-right-radius: 0;
+                padding-right: 6px;
+                padding-left: 14px;
             }
             .panel.flush-top .search-control.collapsed .search-toggle,
             .panel.flush-top .search-control.manual-collapse .search-toggle {
