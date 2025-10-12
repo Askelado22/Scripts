@@ -24,7 +24,7 @@
     const WAIT_FOR_TIMEOUT_MS = 6500;
     const WAIT_FOR_INTERVAL_MS = 120;
     const FOCUSED_HIGHLIGHT_MS = 1600;
-    const TOAST_HIDE_MS = 4500;
+    const TOAST_HIDE_MS = 2600;
     const LIST_LEAF_HIGHLIGHT_BG = 'rgba(59,130,246,.18)';
     const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
     const SUBLIST_BASE_INDENT = 24;
@@ -1385,26 +1385,33 @@
                 transform: translateY(1px);
             }
             .toast-stack {
+                position: absolute;
+                top: 10px;
+                left: 14px;
+                right: 14px;
                 display: flex;
                 flex-direction: column;
+                align-items: center;
                 gap: 6px;
-                margin: 4px 2px 0;
+                pointer-events: none;
+                z-index: 3;
             }
             .toast-stack[hidden] {
                 display: none !important;
-                margin: 0;
             }
             .toast {
                 background: rgba(21,24,36,.94);
                 border: 1px solid rgba(39,48,70,.85);
                 border-radius: var(--radius-sm);
-                padding: 10px 12px;
+                padding: 10px 14px;
                 font-size: 12px;
                 color: var(--text);
                 box-shadow: var(--shadow-1);
                 opacity: 0;
                 transform: translateY(-6px);
                 transition: opacity var(--dur-2), transform var(--dur-2);
+                pointer-events: none;
+                max-width: 100%;
             }
             .toast.show {
                 opacity: 1;
@@ -1596,6 +1603,9 @@
             this.collapseTimer = null;
             this._manualCollapsed = false;
             this._hiddenDueToCollapse = { results: false, toasts: false };
+            this._toastQueue = [];
+            this._activeToastEl = null;
+            this._toastTimers = { hide: null, remove: null };
             this.contextMenuEl = null;
             this._contextMenuVisible = false;
             this._contextMenuNodeId = null;
@@ -2936,27 +2946,55 @@
 
         _showToast(message, type = 'info') {
             if (!this.toastStackEl) return;
-            const toast = document.createElement('div');
-            toast.className = `toast toast--${type}`;
-            toast.textContent = message;
-            this.toastStackEl.appendChild(toast);
-            this._setToastVisibility(true);
-            requestAnimationFrame(() => {
-                toast.classList.add('show');
-            });
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => {
-                    toast.remove();
-                    this._setToastVisibility(this.toastStackEl.children.length > 0);
-                }, 220);
-            }, TOAST_HIDE_MS);
+            this._toastQueue.push({ message, type });
+            this._processToastQueue();
         }
 
         _setToastVisibility(visible) {
             if (!this.toastStackEl) return;
             this.toastStackEl.hidden = !visible;
             this._updatePanelLayout();
+        }
+
+        _processToastQueue() {
+            if (!this.toastStackEl) return;
+            if (this._activeToastEl) return;
+            if (!this._toastQueue.length) {
+                this._setToastVisibility(false);
+                return;
+            }
+            const { message, type } = this._toastQueue.shift();
+            const toast = document.createElement('div');
+            toast.className = `toast toast--${type}`;
+            toast.textContent = message;
+            this.toastStackEl.appendChild(toast);
+            this._activeToastEl = toast;
+            this._setToastVisibility(true);
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+            if (this._toastTimers.hide) {
+                clearTimeout(this._toastTimers.hide);
+                this._toastTimers.hide = null;
+            }
+            if (this._toastTimers.remove) {
+                clearTimeout(this._toastTimers.remove);
+                this._toastTimers.remove = null;
+            }
+            this._toastTimers.hide = setTimeout(() => {
+                toast.classList.remove('show');
+                this._toastTimers.remove = setTimeout(() => {
+                    toast.remove();
+                    this._activeToastEl = null;
+                    this._toastTimers.hide = null;
+                    this._toastTimers.remove = null;
+                    if (this._toastQueue.length) {
+                        this._processToastQueue();
+                    } else {
+                        this._setToastVisibility(false);
+                    }
+                }, 220);
+            }, TOAST_HIDE_MS);
         }
 
         async _loadChildrenForNode(node, { expand = false } = {}) {
