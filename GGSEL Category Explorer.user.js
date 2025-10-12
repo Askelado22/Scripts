@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.13
+// @version      1.2.14
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -34,6 +34,7 @@
     const PANEL_STORAGE_KEY = 'ggsel-category-explorer:panel-placement';
     const PANEL_STORAGE_SCHEMA_VERSION = 1;
     const POPOVER_HIDE_DELAY_MS = 220;
+    const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
     // --- Вспомогательные функции ---
@@ -926,6 +927,14 @@
                 -webkit-user-select: none;
                 transition: width var(--dur-2), min-width var(--dur-2), padding var(--dur-2), gap var(--dur-2);
             }
+            .panel.flush-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+            .panel.flush-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+            .panel.flush-top { border-top-left-radius: 0; border-top-right-radius: 0; }
+            .panel.flush-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+            .panel.flush-left.compact { padding-left: 0; }
+            .panel.flush-right.compact { padding-right: 0; }
+            .panel.flush-top.compact { padding-top: 0; }
+            .panel.flush-bottom.compact { padding-bottom: 0; }
             .panel.dragging {
                 transition: none !important;
                 cursor: grabbing;
@@ -992,6 +1001,35 @@
             }
             .search-control.collapsed .search-toggle {
                 cursor: pointer;
+            }
+            .search-control.manual-collapse .search-toggle {
+                opacity: 1 !important;
+                visibility: visible !important;
+                pointer-events: auto !important;
+                transform: none !important;
+            }
+            .search-control.manual-collapse .search-toggle svg {
+                transform: none !important;
+            }
+            .panel.flush-left .search-control.collapsed .search-toggle,
+            .panel.flush-left .search-control.manual-collapse .search-toggle {
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+            }
+            .panel.flush-right .search-control.collapsed .search-toggle,
+            .panel.flush-right .search-control.manual-collapse .search-toggle {
+                border-top-right-radius: 0;
+                border-bottom-right-radius: 0;
+            }
+            .panel.flush-top .search-control.collapsed .search-toggle,
+            .panel.flush-top .search-control.manual-collapse .search-toggle {
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+            }
+            .panel.flush-bottom .search-control.collapsed .search-toggle,
+            .panel.flush-bottom .search-control.manual-collapse .search-toggle {
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
             }
             .search-toggle {
                 position: absolute;
@@ -1469,6 +1507,8 @@
             this.persistTimer = null;
             this.restoring = false;
             this.collapseTimer = null;
+            this._manualCollapsed = false;
+            this._hiddenDueToCollapse = { results: false, toasts: false };
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -1741,6 +1781,14 @@
             this.panelEl.classList.toggle('dock-right', placement.anchorX === 'right');
             this.panelEl.classList.toggle('dock-top', placement.anchorY === 'top');
             this.panelEl.classList.toggle('dock-bottom', placement.anchorY === 'bottom');
+            const flushLeft = placement.anchorX === 'left' && offsetX <= EDGE_FLUSH_EPSILON;
+            const flushRight = placement.anchorX === 'right' && offsetX <= EDGE_FLUSH_EPSILON;
+            const flushTop = placement.anchorY === 'top' && offsetY <= EDGE_FLUSH_EPSILON;
+            const flushBottom = placement.anchorY === 'bottom' && offsetY <= EDGE_FLUSH_EPSILON;
+            this.panelEl.classList.toggle('flush-left', flushLeft);
+            this.panelEl.classList.toggle('flush-right', flushRight);
+            this.panelEl.classList.toggle('flush-top', flushTop);
+            this.panelEl.classList.toggle('flush-bottom', flushBottom);
             const nextPlacement = {
                 anchorX: placement.anchorX,
                 anchorY: placement.anchorY,
@@ -1865,18 +1913,64 @@
             }
         }
 
+        _collapseSearchToFab({ preserveQuery = true } = {}) {
+            if (!this.searchControlEl) return;
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+                this.debounceTimer = null;
+            }
+            if (this.resultsContainer && !this.resultsContainer.hidden && this.resultsContainer.childElementCount > 0) {
+                this.resultsContainer.hidden = true;
+                this._hiddenDueToCollapse.results = true;
+            }
+            if (this.toastStackEl && !this.toastStackEl.hidden && this.toastStackEl.childElementCount > 0) {
+                this.toastStackEl.hidden = true;
+                this._hiddenDueToCollapse.toasts = true;
+            }
+            if (!preserveQuery && this.inputEl) {
+                this.inputEl.value = '';
+            }
+            if (this.inputEl) {
+                this.inputEl.blur();
+            }
+            this._setSearchExpanded(false, { manual: true });
+            if (!preserveQuery) {
+                this._updateSearchAffordance();
+            }
+        }
+
         _isSearchExpanded() {
             if (!this.searchControlEl) return true;
             return this.searchControlEl.classList.contains('expanded');
         }
 
-        _setSearchExpanded(expanded, { focus = false } = {}) {
+        _setSearchExpanded(expanded, { focus = false, manual = false } = {}) {
             if (!this.searchControlEl) return;
             this.searchControlEl.classList.toggle('expanded', expanded);
             this.searchControlEl.classList.toggle('collapsed', !expanded);
             this.searchControlEl.dataset.expanded = expanded ? 'true' : 'false';
             if (this.searchToggleEl) {
                 this.searchToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            }
+            if (expanded) {
+                this._manualCollapsed = false;
+                this.searchControlEl.classList.remove('manual-collapse');
+                if (this._hiddenDueToCollapse.results && this.resultsContainer && this.resultsContainer.childElementCount > 0) {
+                    this.resultsContainer.hidden = false;
+                }
+                if (this._hiddenDueToCollapse.toasts && this.toastStackEl && this.toastStackEl.childElementCount > 0) {
+                    this.toastStackEl.hidden = false;
+                }
+                this._hiddenDueToCollapse.results = false;
+                this._hiddenDueToCollapse.toasts = false;
+            } else {
+                if (manual) {
+                    this._manualCollapsed = true;
+                    this.searchControlEl.classList.add('manual-collapse');
+                } else {
+                    this._manualCollapsed = false;
+                    this.searchControlEl.classList.remove('manual-collapse');
+                }
             }
             if (expanded && focus && this.inputEl) {
                 requestAnimationFrame(() => {
@@ -1894,6 +1988,9 @@
             const activeElement = this.shadowRoot ? this.shadowRoot.activeElement : null;
             const isFocused = this.inputEl && activeElement === this.inputEl;
             this.searchControlEl.classList.toggle('has-value', hasValue);
+            if (this._manualCollapsed && !isFocused) {
+                return;
+            }
             this._setSearchExpanded(hasValue || isFocused);
         }
 
@@ -1915,6 +2012,16 @@
         }
 
         _onKeyDown(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (this._isSearchExpanded()) {
+                    this._collapseSearchToFab();
+                } else if (this.inputEl) {
+                    this.inputEl.blur();
+                }
+                return;
+            }
             const rows = Array.from(this.resultsContainer.querySelectorAll('.row'));
             if (!rows.length) return;
             const activeIndex = rows.findIndex(row => row.classList.contains('active'));
