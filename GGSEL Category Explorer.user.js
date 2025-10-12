@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.12
+// @version      1.2.13
 // @match        https://back-office.staging.ggsel.com/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -1719,20 +1719,24 @@
             const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
             const maxOffsetX = Math.max(0, Math.round(viewportWidth - width));
             const maxOffsetY = Math.max(0, Math.round(viewportHeight - height));
-            let offsetX = Math.min(placement.offsetX, maxOffsetX);
-            let offsetY = Math.min(placement.offsetY, maxOffsetY);
+            let offsetX = Math.min(Math.max(Math.round(placement.offsetX), 0), maxOffsetX);
+            let offsetY = Math.min(Math.max(Math.round(placement.offsetY), 0), maxOffsetY);
             if (!Number.isFinite(offsetX)) offsetX = 0;
             if (!Number.isFinite(offsetY)) offsetY = 0;
-            let left = placement.anchorX === 'left' ? offsetX : viewportWidth - width - offsetX;
-            let top = placement.anchorY === 'top' ? offsetY : viewportHeight - height - offsetY;
-            const maxLeft = Math.max(0, viewportWidth - width);
-            const maxTop = Math.max(0, viewportHeight - height);
-            left = Math.min(Math.max(left, 0), maxLeft);
-            top = Math.min(Math.max(top, 0), maxTop);
-            this.panelEl.style.left = `${left}px`;
-            this.panelEl.style.top = `${top}px`;
-            this.panelEl.style.right = 'auto';
-            this.panelEl.style.bottom = 'auto';
+            if (placement.anchorX === 'left') {
+                this.panelEl.style.left = `${offsetX}px`;
+                this.panelEl.style.right = 'auto';
+            } else {
+                this.panelEl.style.left = 'auto';
+                this.panelEl.style.right = `${offsetX}px`;
+            }
+            if (placement.anchorY === 'top') {
+                this.panelEl.style.top = `${offsetY}px`;
+                this.panelEl.style.bottom = 'auto';
+            } else {
+                this.panelEl.style.top = 'auto';
+                this.panelEl.style.bottom = `${offsetY}px`;
+            }
             this.panelEl.classList.toggle('dock-left', placement.anchorX === 'left');
             this.panelEl.classList.toggle('dock-right', placement.anchorX === 'right');
             this.panelEl.classList.toggle('dock-top', placement.anchorY === 'top');
