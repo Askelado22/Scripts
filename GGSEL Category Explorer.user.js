@@ -943,7 +943,7 @@
                 cursor: grabbing;
             }
             .panel.compact {
-                --panel-width: calc(46px + 24px);
+                --panel-width: calc(48px + 24px);
                 padding: 12px;
                 gap: 0;
             }
@@ -1074,10 +1074,12 @@
             .panel.compact.flush-right .search-control.collapsed .search-toggle::after {
                 left: 100%;
                 border-left: 0;
+                border-right: 0;
             }
             .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
                 right: 100%;
                 border-right: 0;
+                border-left: 0;
             }
             .panel.compact.flush-right .search-control.collapsed .search-toggle:hover::after,
             .panel.compact.flush-left .search-control.collapsed .search-toggle:hover::after {
