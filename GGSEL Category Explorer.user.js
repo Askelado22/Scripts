@@ -5,6 +5,7 @@
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_cookie
 // @connect      back-office.staging.ggsel.com
 // @connect      admin.ggsel.com
 // ==/UserScript==
@@ -170,6 +171,56 @@
 
     // --- Вспомогательные функции ---
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const COOKIE_CACHE_TTL_MS = 45000;
+    const cookieHeaderCache = new Map();
+
+    const clearCookieCache = () => {
+        cookieHeaderCache.clear();
+    };
+
+    const getCookieHeaderForUrl = async (url) => {
+        if (typeof GM_cookie === 'undefined' || typeof GM_cookie.list !== 'function') {
+            return null;
+        }
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (err) {
+            logger.debug('Не удалось разобрать URL для cookie', { url, error: err && err.message });
+            return null;
+        }
+        const cacheKey = parsed.hostname;
+        const cached = cookieHeaderCache.get(cacheKey);
+        const now = Date.now();
+        if (cached && (now - cached.timestamp) < COOKIE_CACHE_TTL_MS) {
+            return cached.value || null;
+        }
+        return new Promise((resolve) => {
+            try {
+                GM_cookie.list({ url: parsed.origin }, (cookies, error) => {
+                    if (error) {
+                        logger.warn('Не удалось получить cookies админки', { url, error });
+                        cookieHeaderCache.delete(cacheKey);
+                        resolve(null);
+                        return;
+                    }
+                    if (!Array.isArray(cookies) || cookies.length === 0) {
+                        cookieHeaderCache.set(cacheKey, { value: '', timestamp: now });
+                        resolve(null);
+                        return;
+                    }
+                    const header = cookies.map(item => `${item.name}=${item.value}`).join('; ');
+                    cookieHeaderCache.set(cacheKey, { value: header, timestamp: now });
+                    resolve(header || null);
+                });
+            } catch (err) {
+                logger.warn('GM_cookie.list вызвал исключение', { url, error: err && err.message });
+                cookieHeaderCache.delete(cacheKey);
+                resolve(null);
+            }
+        });
+    };
 
     const storage = {
         load() {
@@ -536,12 +587,23 @@
         }
 
         // Фоллбек через GM_xmlhttpRequest
-        _fallbackRequest(url, options) {
+        async _fallbackRequest(url, options) {
+            const headers = { ...(options.headers || {}) };
+            try {
+                if (!headers.Cookie) {
+                    const cookieHeader = await getCookieHeaderForUrl(url);
+                    if (cookieHeader) {
+                        headers.Cookie = cookieHeader;
+                    }
+                }
+            } catch (err) {
+                logger.warn('Не удалось подготовить Cookie для запроса', { url, error: err && err.message });
+            }
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: options.method || 'GET',
                     url,
-                    headers: options.headers || {},
+                    headers,
                     data: options.body,
                     timeout: REQUEST_TIMEOUT_MS,
                     onload: (response) => {
@@ -604,6 +666,7 @@
         statsCache.clear();
         childrenCache.clear();
         pendingChildrenPromises.clear();
+        clearCookieCache();
     };
 
     const setAdminOrigin = (value) => {
