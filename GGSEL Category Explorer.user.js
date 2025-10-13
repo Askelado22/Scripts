@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.16
-// @match        https://back-office.staging.ggsel.com/admin/categories*
+// @version      1.3.0
+// @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      back-office.staging.ggsel.com
+// @connect      admin.ggsel.com
 // ==/UserScript==
 
 (function() {
@@ -37,9 +38,6 @@
     const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
-    // --- Вспомогательные функции ---
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
     // --- Утилита логирования ---
     const logger = {
         debug: (...args) => console.debug(LOG_PREFIX, ...args),
@@ -47,6 +45,131 @@
         warn: (...args) => console.warn(LOG_PREFIX, ...args),
         error: (...args) => console.error(LOG_PREFIX, ...args),
     };
+
+    const ADMIN_ORIGIN_STORAGE_KEY = 'ggsel-category-explorer:admin-origin';
+    const KNOWN_ADMIN_HOSTS = new Set([
+        'admin.ggsel.com',
+        'back-office.staging.ggsel.com',
+    ]);
+    const DEFAULT_ADMIN_ORIGINS = [
+        'https://admin.ggsel.com',
+        'https://back-office.staging.ggsel.com',
+    ];
+
+    const normalizeAdminOrigin = (value) => {
+        if (value == null) return null;
+        const text = String(value).trim();
+        if (!text) return null;
+        const candidate = /^https?:\/\//i.test(text) ? text : `https://${text}`;
+        try {
+            const url = new URL(candidate);
+            if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+            return `${url.protocol}//${url.host}`;
+        } catch (err) {
+            logger.debug('Некорректный адрес админки', { value, error: err && err.message });
+            return null;
+        }
+    };
+
+    const detectAdminOriginFromEnvironment = () => {
+        try {
+            if (typeof location !== 'undefined' && location) {
+                const { origin, hostname, pathname } = location;
+                if (origin && hostname) {
+                    const hostLower = hostname.toLowerCase();
+                    if (KNOWN_ADMIN_HOSTS.has(hostLower) || pathname.startsWith('/admin')) {
+                        return origin;
+                    }
+                }
+            }
+        } catch (err) {
+            logger.debug('Не удалось определить адрес админки из окружения', { error: err && err.message });
+        }
+        for (const candidate of DEFAULT_ADMIN_ORIGINS) {
+            const normalized = normalizeAdminOrigin(candidate);
+            if (normalized) return normalized;
+        }
+        return 'https://admin.ggsel.com';
+    };
+
+    const loadStoredAdminOrigin = () => {
+        try {
+            const raw = localStorage.getItem(ADMIN_ORIGIN_STORAGE_KEY);
+            if (!raw) return null;
+            const normalized = normalizeAdminOrigin(raw);
+            if (!normalized) {
+                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
+                return null;
+            }
+            return normalized;
+        } catch (err) {
+            logger.debug('Не удалось прочитать сохранённый адрес админки', { error: err && err.message });
+            return null;
+        }
+    };
+
+    const persistAdminOrigin = (origin) => {
+        try {
+            if (origin) {
+                localStorage.setItem(ADMIN_ORIGIN_STORAGE_KEY, origin);
+            } else {
+                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
+            }
+        } catch (err) {
+            logger.debug('Не удалось сохранить адрес админки', { error: err && err.message });
+        }
+    };
+
+    let adminOrigin = (() => {
+        const stored = loadStoredAdminOrigin();
+        if (stored) {
+            logger.info('Используем адрес админки из хранилища', { origin: stored });
+            return stored;
+        }
+        const detected = detectAdminOriginFromEnvironment();
+        logger.info('Используем адрес админки по умолчанию', { origin: detected });
+        return detected;
+    })();
+
+    const getAdminOrigin = () => adminOrigin;
+
+    const resolveAdminUrl = (input) => {
+        const origin = getAdminOrigin();
+        if (!input) {
+            return new URL('/admin/categories', origin).toString();
+        }
+        try {
+            if (input instanceof URL) {
+                return input.toString();
+            }
+        } catch (err) {
+            // ignore
+        }
+        const raw = String(input).trim();
+        if (!raw) {
+            return new URL('/admin/categories', origin).toString();
+        }
+        if (/^https?:\/\//i.test(raw)) {
+            return raw;
+        }
+        if (raw.startsWith('//')) {
+            try {
+                const temp = new URL(origin);
+                return `${temp.protocol}${raw}`;
+            } catch (err) {
+                logger.debug('Не удалось преобразовать протокол-зависимый URL', { input: raw, error: err && err.message });
+            }
+        }
+        try {
+            return new URL(raw, origin).toString();
+        } catch (err) {
+            logger.warn('Не удалось построить URL админки, используем корень', { input: raw, error: err && err.message });
+            return new URL('/admin/categories', origin).toString();
+        }
+    };
+
+    // --- Вспомогательные функции ---
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     const storage = {
         load() {
@@ -287,7 +410,8 @@
     class UrlBuilder {
         // Собираем URL с параметрами поиска
         static buildSearchUrl(baseUrl, queryInfo, page = 1) {
-            const url = new URL(baseUrl, location.origin);
+            const resolvedBase = resolveAdminUrl(baseUrl || '/admin/categories');
+            const url = new URL(resolvedBase);
             const params = url.searchParams;
             params.set('page', String(page));
             params.set('search[id]', queryInfo.type === 'id' ? queryInfo.value : '');
@@ -338,7 +462,9 @@
 
         // Выполняем HTTP-запрос с таймаутом и повторами
         fetchText(url, options = {}) {
-            return this.enqueue(() => this._fetchWithRetry(url, options, RETRY_COUNT));
+            const resolvedUrl = resolveAdminUrl(url);
+            const requestOptions = { ...options };
+            return this.enqueue(() => this._fetchWithRetry(resolvedUrl, requestOptions, RETRY_COUNT));
         }
 
         async _fetchWithRetry(url, options, retries) {
@@ -434,12 +560,52 @@
                 this.map.delete(oldestKey);
             }
         }
+
+        clear() {
+            this.map.clear();
+        }
     }
 
     const pageCache = new LRUCache(50);
     const statsCache = new LRUCache(100);
     const childrenCache = new LRUCache(100);
     const pendingChildrenPromises = new Map();
+
+    const resetAllCaches = () => {
+        pageCache.clear();
+        statsCache.clear();
+        childrenCache.clear();
+        pendingChildrenPromises.clear();
+    };
+
+    const setAdminOrigin = (value) => {
+        if (value == null || (typeof value === 'string' && value.trim() === '')) {
+            persistAdminOrigin(null);
+            const fallback = detectAdminOriginFromEnvironment();
+            const previous = adminOrigin;
+            adminOrigin = fallback;
+            const changed = previous !== adminOrigin;
+            if (changed) {
+                resetAllCaches();
+            }
+            logger.info('Адрес админки сброшен к умолчанию', { origin: adminOrigin, changed });
+            return { success: true, origin: adminOrigin, changed, stored: false };
+        }
+        const normalized = normalizeAdminOrigin(value);
+        if (!normalized) {
+            logger.warn('Попытка задать некорректный адрес админки', { value });
+            return { success: false, origin: adminOrigin, changed: false, stored: false };
+        }
+        const previous = adminOrigin;
+        adminOrigin = normalized;
+        persistAdminOrigin(normalized);
+        const changed = previous !== adminOrigin;
+        if (changed) {
+            resetAllCaches();
+        }
+        logger.info('Адрес админки обновлён', { origin: adminOrigin, changed });
+        return { success: true, origin: adminOrigin, changed, stored: true };
+    };
 
     // --- Парсер HTML ---
     const Parser = {
@@ -557,7 +723,8 @@
                 const kind = pickCellText(columnIndex.kind, 2);
                 const digi = pickCellText(columnIndex.digi, 3);
                 const name = breadcrumbNames[breadcrumbNames.length - 1] || (nameCell.textContent || '').trim();
-                const href = idLink.getAttribute('href');
+                const hrefAttr = idLink.getAttribute('href');
+                const href = hrefAttr ? resolveAdminUrl(hrefAttr) : resolveAdminUrl(`/admin/categories/${id}`);
                 items.push({ id, name, pathDepth, href, pathAnchors: breadcrumbNames, status, kind, digi });
             }
             logger.info('Распарсено элементов', items.length);
@@ -577,7 +744,7 @@
                     return !Number.isNaN(num) && num === currentPage + 1;
                 });
                 if (candidates.length) {
-                    nextPage = new URL(candidates[0].getAttribute('href'), location.origin).toString();
+                    nextPage = resolveAdminUrl(candidates[0].getAttribute('href'));
                     logger.debug('Обнаружена ссылка на следующую страницу', { nextPage });
                 }
             }
@@ -601,13 +768,14 @@
                 const cells = Array.from(tr.children);
                 const idLink = cells[0] ? cells[0].querySelector('a[href*="/admin/categories/"]') : null;
                 const id = idLink ? idLink.textContent.trim() : (cells[0] ? cells[0].textContent.trim() : '');
+                const hrefAttr = idLink ? idLink.getAttribute('href') : null;
                 return {
                     id,
                     name: cells[1] ? cells[1].textContent.trim() : '',
                     status: cells[2] ? cells[2].textContent.trim() : '',
                     digi: cells[3] ? cells[3].textContent.trim() : '',
                     kind: cells[4] ? cells[4].textContent.trim() : '',
-                    href: idLink ? idLink.getAttribute('href') : null,
+                    href: hrefAttr ? resolveAdminUrl(hrefAttr) : resolveAdminUrl(`/admin/categories/${id}`),
                 };
             }).filter(item => item.id);
             logger.debug('Распарсены дочерние категории', { count: items.length });
@@ -835,7 +1003,8 @@
         constructor(data, parentId = null) {
             this.id = data.id;
             this.name = (data.name || '').trim();
-            this.href = data.href || `/admin/categories/${this.id}`;
+            const rawHref = data.href || `/admin/categories/${this.id}`;
+            this.href = resolveAdminUrl(rawHref);
             this.parentId = parentId;
             this.children = [];
             this.childrenLoaded = false;
@@ -872,6 +1041,9 @@
     }
 
     const nodesMap = new Map();
+
+    let panelInstance = null;
+    let externalBridgeCleanup = null;
 
     const mergeStatsIntoNode = (node, stats) => {
         if (!node || !stats) return;
@@ -1738,6 +1910,18 @@
 
         const ui = new UIPanel(shadow, panel, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
+        panelInstance = ui;
+        if (typeof registerExternalAPIs === 'function') {
+            if (externalBridgeCleanup) {
+                try {
+                    externalBridgeCleanup();
+                } catch (err) {
+                    logger.debug('Не удалось очистить предыдущие хуки внешнего API', { error: err && err.message });
+                }
+                externalBridgeCleanup = null;
+            }
+            externalBridgeCleanup = registerExternalAPIs(ui);
+        }
     }
 
     // --- Управление UI ---
@@ -2739,6 +2923,32 @@
             return this._performSearch();
         }
 
+        openExternally(detail = {}) {
+            const payload = (detail && typeof detail === 'object') ? detail : { query: detail };
+            const focusOnly = Boolean(payload.focusOnly);
+            const candidates = [payload.query, payload.value, payload.id, payload.digi, payload.term, payload.search];
+            const target = candidates.find((candidate) => {
+                if (candidate == null) return false;
+                const text = String(candidate).trim();
+                return text.length > 0;
+            });
+            this._setSearchExpanded(true, { focus: true });
+            if (!this.inputEl) {
+                return Promise.resolve();
+            }
+            if (target != null) {
+                const queryText = String(target).trim();
+                this.inputEl.value = queryText;
+                this._updateSearchAffordance();
+                return this.startSearch(queryText, { preserveSelection: Boolean(payload.preserveSelection) });
+            }
+            this._updateSearchAffordance();
+            if (!focusOnly) {
+                this.inputEl.select();
+            }
+            return Promise.resolve();
+        }
+
         async _performSearch(loadMore = false) {
             if (!SearchState.queryInfo) return;
             if (loadMore && !SearchState.nextPage) return;
@@ -2890,7 +3100,7 @@
             } else {
                 row.classList.add('CATologies-type-category');
             }
-            const nodeHref = new URL(node.href, location.origin).toString();
+            const nodeHref = resolveAdminUrl(node.href);
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
@@ -3174,6 +3384,10 @@
             if (!this.toastStackEl) return;
             this._toastQueue.push({ message, type });
             this._processToastQueue();
+        }
+
+        showToast(message, type = 'info') {
+            this._showToast(message, type);
         }
 
         _setToastVisibility(visible) {
@@ -3557,6 +3771,67 @@
         }
     }
 
+    function registerExternalAPIs(ui) {
+        if (!ui) {
+            return null;
+        }
+
+        const openFromDetail = (detail) => {
+            try {
+                return ui.openExternally(detail);
+            } catch (err) {
+                logger.error('Ошибка запуска поиска через внешнее API', { error: err && err.message });
+                ui.showToast('Не удалось открыть поиск', 'error');
+                return Promise.reject(err);
+            }
+        };
+
+        const eventHandler = (event) => {
+            const payload = event && typeof event.detail === 'object' ? event.detail : {};
+            openFromDetail(payload);
+        };
+
+        window.addEventListener('ggsel:cqe-open', eventHandler);
+        window.addEventListener('vibe:cqe-open', eventHandler);
+
+        const openShortcut = (value) => openFromDetail(value);
+
+        const applyOriginChange = (value) => {
+            const result = setAdminOrigin(value);
+            if (!result.success) {
+                ui.showToast('Не удалось обновить адрес админки', 'error');
+            } else if (result.changed) {
+                ui.showToast(result.stored ? 'Адрес админки обновлён' : 'Адрес админки сброшен', 'success');
+            } else {
+                ui.showToast('Этот адрес админки уже используется', 'info');
+            }
+            return result;
+        };
+
+        const bridge = {
+            open: openShortcut,
+            setOrigin: applyOriginChange,
+            getOrigin: () => getAdminOrigin(),
+            resolveUrl: resolveAdminUrl,
+            panel: ui,
+        };
+
+        window.ggselCategoryExplorer = bridge;
+        window.ggselCategoryExplorerOpen = openShortcut;
+        window.vibeCqeOpen = openShortcut;
+        window.ggselCategoryExplorerSetOrigin = applyOriginChange;
+        window.ggselCategoryExplorerGetOrigin = () => getAdminOrigin();
+        window.ggselCategoryExplorerResolveUrl = resolveAdminUrl;
+
+        return () => {
+            window.removeEventListener('ggsel:cqe-open', eventHandler);
+            window.removeEventListener('vibe:cqe-open', eventHandler);
+            if (window.ggselCategoryExplorer === bridge) {
+                delete window.ggselCategoryExplorer;
+            }
+        };
+    }
+
     // --- Загрузка дочерних категорий ---
     async function loadChildren(categoryId) {
         if (pendingChildrenPromises.has(categoryId)) {
@@ -3569,7 +3844,7 @@
         }
         const promise = (async () => {
             logger.debug('Запрос на загрузку дочерних категорий', { id: categoryId });
-            const url = `/admin/categories/${categoryId}`;
+            const url = resolveAdminUrl(`/admin/categories/${categoryId}`);
             const cachedPage = pageCache.get(url);
             if (cachedPage) {
                 logger.debug('Карточка категории из кэша', { url });
@@ -3628,7 +3903,7 @@
             return cached;
         }
         logger.debug('Запрос статистики категории', { id: categoryId });
-        const url = `/admin/categories/${categoryId}`;
+        const url = resolveAdminUrl(`/admin/categories/${categoryId}`);
         const cachedPage = pageCache.get(url);
         if (cachedPage) {
             logger.debug('Карточка для статистики из кэша', { url });
