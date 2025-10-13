@@ -5,6 +5,8 @@
 // @match        *://*/*
 // @match        https://back-office.staging.ggsel.com/*
 // @match        https://admin.ggsel.com/*
+// @include      https://back-office.staging.ggsel.com/*
+// @include      https://admin.ggsel.com/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
@@ -225,9 +227,10 @@
         }
         return new Promise((resolve) => {
             try {
-                GM_cookie.list({ url: parsed.origin }, (cookies, error) => {
+                const listUrl = `${parsed.origin.replace(/\/$/, '')}/`;
+                GM_cookie.list({ url: listUrl }, (cookies, error) => {
                     if (error) {
-                        logger.warn('Не удалось получить cookies админки', { url, error });
+                        logger.warn('Не удалось получить cookies админки', { url: listUrl, error });
                         cookieHeaderCache.delete(cacheKey);
                         resolve(null);
                         return;
