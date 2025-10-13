@@ -647,6 +647,38 @@
                 }
             };
 
+            const extractAutoFinishFromTables = () => {
+                const tables = doc.querySelectorAll('table');
+                for (const table of tables) {
+                    for (const row of Array.from(table.querySelectorAll('tr'))) {
+                        const headerCell = row.querySelector('th');
+                        if (!headerCell) continue;
+                        const headerText = (headerCell.textContent || '').trim().toLowerCase();
+                        if (
+                            !headerText.includes('автозаверш')
+                            && !headerText.includes('авто заверш')
+                            && !headerText.includes('задержка авто')
+                            && !headerText.includes('auto-complete')
+                            && !headerText.includes('auto complete')
+                        ) {
+                            continue;
+                        }
+                        const valueCell = row.querySelector('td');
+                        if (!valueCell) continue;
+                        const rawValue = (valueCell.textContent || '').trim();
+                        if (!rawValue) continue;
+                        const numeric = parseFloat(rawValue.replace(',', '.'));
+                        if (!Number.isNaN(numeric)) {
+                            stats.autoFinishHours = numeric;
+                            stats.autoFinishRaw = null;
+                        } else if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
+                            stats.autoFinishRaw = rawValue;
+                        }
+                        return;
+                    }
+                }
+            };
+
             const collectDefinitionLists = (scope) => {
                 const dls = scope ? scope.querySelectorAll('dl') : doc.querySelectorAll('dl');
                 for (const dl of dls) {
@@ -685,6 +717,10 @@
 
             if (stats.commissionPercent == null && !stats.commissionRaw) {
                 extractCommissionFromTables();
+            }
+
+            if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
+                extractAutoFinishFromTables();
             }
 
             const setIfEmpty = (key, value) => {
