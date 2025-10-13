@@ -806,6 +806,31 @@
 
     const nodesMap = new Map();
 
+    const mergeStatsIntoNode = (node, stats) => {
+        if (!node || !stats) return;
+        if (stats.status) node.status = stats.status;
+        if (stats.kind) node.kind = stats.kind;
+        if (stats.digi) node.digi = stats.digi;
+        if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
+            node.commissionPercent = Number(stats.commissionPercent);
+            node.commissionRaw = null;
+        } else if (stats.commissionRaw != null && stats.commissionRaw !== '') {
+            node.commissionRaw = String(stats.commissionRaw).trim();
+            if (node.commissionPercent == null) {
+                const normalized = normalizeCommissionPercent(stats.commissionRaw);
+                if (normalized != null) {
+                    node.commissionPercent = normalized;
+                }
+            }
+        }
+        if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
+            node.autoFinishHours = Number(stats.autoFinishHours);
+            node.autoFinishRaw = null;
+        } else if (stats.autoFinishRaw != null && stats.autoFinishRaw !== '' && node.autoFinishHours == null) {
+            node.autoFinishRaw = String(stats.autoFinishRaw).trim();
+        }
+    };
+
     const getNodePathSegments = (node) => {
         if (!node) return [];
         if (Array.isArray(node.pathSegments) && node.pathSegments.length) {
@@ -2916,27 +2941,7 @@
 
         _applyStatsToNode(node, stats) {
             if (!node || !stats) return;
-            if (stats.status) node.status = stats.status;
-            if (stats.kind) node.kind = stats.kind;
-            if (stats.digi) node.digi = stats.digi;
-            if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
-                node.commissionPercent = Number(stats.commissionPercent);
-                node.commissionRaw = null;
-            } else if (stats.commissionRaw) {
-                node.commissionRaw = stats.commissionRaw;
-                if (node.commissionPercent == null) {
-                    const normalized = normalizeCommissionPercent(stats.commissionRaw);
-                    if (normalized != null) {
-                        node.commissionPercent = normalized;
-                    }
-                }
-            }
-            if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
-                node.autoFinishHours = Number(stats.autoFinishHours);
-                node.autoFinishRaw = null;
-            } else if (stats.autoFinishRaw && node.autoFinishHours == null) {
-                node.autoFinishRaw = stats.autoFinishRaw;
-            }
+            mergeStatsIntoNode(node, stats);
             const entry = this.visibleNodes.find(item => item.node === node);
             if (entry) {
                 this._updateRowCommission(entry.row, node);
@@ -3506,6 +3511,34 @@
             }
             const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
             if (!cachedPage) pageCache.set(url, html);
+            try {
+                const stats = Parser.parseStats(html);
+                const hasText = (value) => typeof value === 'string' && value.trim() !== '';
+                const hasMeaningfulStats = stats && (
+                    hasText(stats.status)
+                    || hasText(stats.kind)
+                    || hasText(stats.digi)
+                    || stats.commissionPercent != null
+                    || (stats.commissionRaw != null && String(stats.commissionRaw).trim() !== '')
+                    || stats.autoFinishHours != null
+                    || (stats.autoFinishRaw != null && String(stats.autoFinishRaw).trim() !== '')
+                );
+                if (hasMeaningfulStats) {
+                    const existing = statsCache.get(categoryId);
+                    const mergedStats = existing ? { ...existing, ...stats } : { ...stats };
+                    mergedStats.id = mergedStats.id || categoryId;
+                    statsCache.set(categoryId, mergedStats);
+                    const relatedNode = nodesMap.get(categoryId);
+                    if (relatedNode) {
+                        mergeStatsIntoNode(relatedNode, mergedStats);
+                    }
+                }
+            } catch (err) {
+                logger.debug('Не удалось распарсить статистику при загрузке дочерних', {
+                    id: categoryId,
+                    error: err && err.message,
+                });
+            }
             const parsed = Parser.parseChildren(html).map(child => ({ ...child }));
             logger.debug('Распарсено дочерних категорий', { id: categoryId, count: parsed.length });
             childrenCache.set(categoryId, parsed);
@@ -3542,27 +3575,7 @@
         logger.debug('Распарсена статистика', stats);
         const relatedNode = nodesMap.get(categoryId);
         if (relatedNode) {
-            if (stats.status) relatedNode.status = stats.status;
-            if (stats.kind) relatedNode.kind = stats.kind;
-            if (stats.digi) relatedNode.digi = stats.digi;
-            if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
-                relatedNode.commissionPercent = Number(stats.commissionPercent);
-                relatedNode.commissionRaw = null;
-            } else if (stats.commissionRaw) {
-                relatedNode.commissionRaw = stats.commissionRaw;
-                if (relatedNode.commissionPercent == null) {
-                    const normalized = normalizeCommissionPercent(stats.commissionRaw);
-                    if (normalized != null) {
-                        relatedNode.commissionPercent = normalized;
-                    }
-                }
-            }
-            if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
-                relatedNode.autoFinishHours = Number(stats.autoFinishHours);
-                relatedNode.autoFinishRaw = null;
-            } else if (stats.autoFinishRaw && relatedNode.autoFinishHours == null) {
-                relatedNode.autoFinishRaw = stats.autoFinishRaw;
-            }
+            mergeStatsIntoNode(relatedNode, stats);
         }
         statsCache.set(categoryId, stats);
         return stats;
