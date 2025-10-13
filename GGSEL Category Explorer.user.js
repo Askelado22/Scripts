@@ -211,6 +211,36 @@
         return `${formatNumber(amount, digits)}%`;
     };
 
+    const isBooleanLikeValue = (value) => {
+        const normalized = normalizeText(value);
+        return normalized === 'true'
+            || normalized === 'false'
+            || normalized === 'да'
+            || normalized === 'нет'
+            || normalized === 'вкл'
+            || normalized === 'выкл';
+    };
+
+    const isAutoFinishLabel = (normalizedLabel) => {
+        if (!normalizedLabel) return false;
+        return normalizedLabel.includes('автозаверш')
+            || normalizedLabel.includes('авто заверш')
+            || normalizedLabel.includes('задержка авто')
+            || normalizedLabel.includes('autofinish')
+            || normalizedLabel.includes('auto finish')
+            || normalizedLabel.includes('auto-complete')
+            || normalizedLabel.includes('auto complete');
+    };
+
+    const isAutoFinishToggleEntry = (normalizedLabel, normalizedValue) => {
+        if (!normalizedLabel) return false;
+        if (normalizedLabel.includes('enabled') || normalizedLabel.includes('включ')) {
+            return true;
+        }
+        if (!normalizedValue) return false;
+        return isBooleanLikeValue(normalizedValue);
+    };
+
     const formatAutoFinish = (hours, rawValue) => {
         if (hours != null && !Number.isNaN(Number(hours))) {
             const hoursValue = Number(hours);
@@ -220,9 +250,12 @@
             }
             const fractionDigits = Number.isInteger(daysValue) ? 0 : (Math.abs(daysValue) >= 10 ? 1 : 2);
             const daysText = formatNumber(daysValue, fractionDigits);
-            return `${daysText} d дней`;
+            return `${daysText} дн.`;
         }
-        return rawValue || '—';
+        if (rawValue && !isBooleanLikeValue(rawValue)) {
+            return rawValue;
+        }
+        return '—';
     };
 
     const getStatusClass = (status) => {
@@ -653,20 +686,18 @@
                     for (const row of Array.from(table.querySelectorAll('tr'))) {
                         const headerCell = row.querySelector('th');
                         if (!headerCell) continue;
-                        const headerText = (headerCell.textContent || '').trim().toLowerCase();
-                        if (
-                            !headerText.includes('автозаверш')
-                            && !headerText.includes('авто заверш')
-                            && !headerText.includes('задержка авто')
-                            && !headerText.includes('auto-complete')
-                            && !headerText.includes('auto complete')
-                        ) {
+                        const headerRaw = headerCell.textContent || '';
+                        const headerText = normalizeText(headerRaw);
+                        if (!isAutoFinishLabel(headerText)) {
                             continue;
                         }
                         const valueCell = row.querySelector('td');
                         if (!valueCell) continue;
                         const rawValue = (valueCell.textContent || '').trim();
                         if (!rawValue) continue;
+                        if (isAutoFinishToggleEntry(headerText, normalizeText(rawValue))) {
+                            continue;
+                        }
                         const numeric = parseFloat(rawValue.replace(',', '.'));
                         if (!Number.isNaN(numeric)) {
                             stats.autoFinishHours = numeric;
@@ -731,23 +762,27 @@
             };
 
             for (const { label, value } of labelPairs) {
-                if (label.includes('статус') || label.includes('status')) {
+                const normalizedLabel = normalizeText(label);
+                const normalizedValue = normalizeText(value);
+                if (!normalizedLabel) continue;
+
+                if (normalizedLabel.includes('статус') || normalizedLabel.includes('status')) {
                     setIfEmpty('status', value);
                 }
-                if ((label.includes('тип') || label.includes('kind')) && !label.includes('контент')) {
+                if ((normalizedLabel.includes('тип') || normalizedLabel.includes('kind')) && !normalizedLabel.includes('контент')) {
                     setIfEmpty('kind', value);
                 }
-                if (label.includes('content type')) {
+                if (normalizedLabel.includes('content type')) {
                     setIfEmpty('contentType', value);
                 }
-                if (label.includes('digi') || label.includes('catalog') || label.includes('каталог')) {
+                if (normalizedLabel.includes('digi') || normalizedLabel.includes('catalog') || normalizedLabel.includes('каталог')) {
                     if (/[\d\-]+/.test(value)) {
                         setIfEmpty('digi', value.replace(/[^\d]/g, ''));
                     } else {
                         setIfEmpty('digi', value);
                     }
                 }
-                if (label.includes('комис')) {
+                if (normalizedLabel.includes('комис')) {
                     const normalized = normalizeCommissionPercent(value);
                     if (normalized != null) {
                         stats.commissionPercent = normalized;
@@ -756,15 +791,10 @@
                         stats.commissionRaw = value;
                     }
                 }
-                if (
-                    label.includes('автозаверш')
-                    || label.includes('авто заверш')
-                    || label.includes('задержка авто')
-                    || label.includes('autofinish')
-                    || label.includes('auto finish')
-                    || label.includes('auto-complete')
-                    || label.includes('auto complete')
-                ) {
+                if (isAutoFinishLabel(normalizedLabel)) {
+                    if (isAutoFinishToggleEntry(normalizedLabel, normalizedValue)) {
+                        continue;
+                    }
                     const numeric = parseFloat(value.replace(',', '.'));
                     if (!Number.isNaN(numeric)) {
                         stats.autoFinishHours = numeric;
@@ -772,14 +802,15 @@
                     } else if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
                         stats.autoFinishRaw = value;
                     }
+                    continue;
                 }
-                if (label.includes('создан')) {
+                if (normalizedLabel.includes('создан')) {
                     setIfEmpty('createdAt', value);
                 }
-                if (label.includes('обновл')) {
+                if (normalizedLabel.includes('обновл')) {
                     setIfEmpty('updatedAt', value);
                 }
-                if (label.includes('id') && !stats.id) {
+                if (normalizedLabel.includes('id') && !stats.id) {
                     const match = value.match(/\d+/);
                     if (match) {
                         stats.id = match[0];
