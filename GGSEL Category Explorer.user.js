@@ -52,10 +52,12 @@
         'admin.ggsel.com',
         'back-office.staging.ggsel.com',
     ]);
+    const PRIMARY_ADMIN_ORIGIN = 'https://back-office.staging.ggsel.com';
     const DEFAULT_ADMIN_ORIGINS = [
+        PRIMARY_ADMIN_ORIGIN,
         'https://admin.ggsel.com',
-        'https://back-office.staging.ggsel.com',
     ];
+    const LEGACY_ADMIN_HOSTS = new Set(['admin.ggsel.com']);
 
     const normalizeAdminOrigin = (value) => {
         if (value == null) return null;
@@ -90,23 +92,26 @@
             const normalized = normalizeAdminOrigin(candidate);
             if (normalized) return normalized;
         }
-        return 'https://admin.ggsel.com';
+        return PRIMARY_ADMIN_ORIGIN;
     };
 
-    const loadStoredAdminOrigin = () => {
+    const upgradeLegacyAdminOrigin = (normalized) => {
         try {
-            const raw = localStorage.getItem(ADMIN_ORIGIN_STORAGE_KEY);
-            if (!raw) return null;
-            const normalized = normalizeAdminOrigin(raw);
-            if (!normalized) {
-                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
-                return null;
+            const url = new URL(normalized);
+            if (LEGACY_ADMIN_HOSTS.has(url.host.toLowerCase())) {
+                logger.info('Обновляем устаревший адрес админки до актуального', {
+                    from: normalized,
+                    to: PRIMARY_ADMIN_ORIGIN,
+                });
+                return PRIMARY_ADMIN_ORIGIN;
             }
-            return normalized;
         } catch (err) {
-            logger.debug('Не удалось прочитать сохранённый адрес админки', { error: err && err.message });
-            return null;
+            logger.debug('Не удалось нормализовать адрес админки для обновления', {
+                value: normalized,
+                error: err && err.message,
+            });
         }
+        return normalized;
     };
 
     const persistAdminOrigin = (origin) => {
@@ -118,6 +123,26 @@
             }
         } catch (err) {
             logger.debug('Не удалось сохранить адрес админки', { error: err && err.message });
+        }
+    };
+
+    const loadStoredAdminOrigin = () => {
+        try {
+            const raw = localStorage.getItem(ADMIN_ORIGIN_STORAGE_KEY);
+            if (!raw) return null;
+            const normalized = normalizeAdminOrigin(raw);
+            if (!normalized) {
+                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
+                return null;
+            }
+            const upgraded = upgradeLegacyAdminOrigin(normalized);
+            if (upgraded !== normalized) {
+                persistAdminOrigin(upgraded);
+            }
+            return upgraded;
+        } catch (err) {
+            logger.debug('Не удалось прочитать сохранённый адрес админки', { error: err && err.message });
+            return null;
         }
     };
 
