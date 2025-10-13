@@ -26,7 +26,7 @@
     phase: 'idle',
     market: 'RU',
     gameNameRu: '',
-    gameNameEn: '',
+    gameSearchName: '',
     useNick: false,
     useRegion: false,
     offerId: null,
@@ -133,6 +133,222 @@
     catch { navigator.clipboard?.writeText(text).catch(()=>{}); }
   }
 
+  const CLEAN_WORDS = [
+    'deluxe edition',
+    'definitive edition',
+    'ultimate edition',
+    'complete edition',
+    'gold edition',
+    'bundle',
+    'premium edition'
+  ];
+
+  function escapeRegExp(str){
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function buildSearchName(raw){
+    if(!raw) return '';
+    let normalized = raw;
+    for (const word of CLEAN_WORDS){
+      const re = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'gi');
+      normalized = normalized.replace(re, ' ');
+    }
+    normalized = normalized.replace(/\s{2,}/g, ' ');
+    return normalized.trim();
+  }
+
+  function normalizeForCompare(str){
+    return (str||'').toLowerCase().replace(/[^a-z0-9а-яё]+/g, '');
+  }
+
+  function levenshtein(a, b){
+    const s = a || '';
+    const t = b || '';
+    const m = s.length;
+    const n = t.length;
+    if (m === 0) return n;
+    if (n === 0) return m;
+    const dp = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++){
+      let prev = dp[0];
+      dp[0] = i;
+      for (let j = 1; j <= n; j++){
+        const temp = dp[j];
+        if (s[i - 1] === t[j - 1]) dp[j] = prev;
+        else dp[j] = Math.min(prev + 1, dp[j] + 1, dp[j - 1] + 1);
+        prev = temp;
+      }
+    }
+    return dp[n];
+  }
+
+  function similarity(a, b){
+    const s = normalizeForCompare(a);
+    const t = normalizeForCompare(b);
+    if (!s && !t) return 1;
+    if (!s || !t) return 0;
+    const dist = levenshtein(s, t);
+    const maxLen = Math.max(s.length, t.length) || 1;
+    return 1 - dist / maxLen;
+  }
+
+  function getCategoryInput(){
+    const direct = document.querySelector('input[placeholder="Категория размещения"]');
+    if (direct) return direct;
+    const path = document.querySelector('.style_selectedPath__ctPoJ');
+    if (path){
+      const wrap = path.closest('.ant-input-affix-wrapper');
+      if (wrap){
+        const input = wrap.querySelector('input.ant-input');
+        if (input) return input;
+      }
+    }
+    const fallback = [...document.querySelectorAll('input.ant-input')]
+      .find(el => el.closest('.style_input__') || el.closest('[class*="style_input"]'));
+    return fallback || null;
+  }
+
+  function findCategoryDropdown(){
+    return [...document.querySelectorAll('div')]
+      .find(el => {
+        const cls = el.className || '';
+        return /dropdown/i.test(cls) && isVisible(el) && el.querySelector('ul');
+      }) || null;
+  }
+
+  function findTreeOption(label, root=document){
+    const span = findByText('.style_option__xDscX span', label, { root, exact:true });
+    return span ? span.closest('.style_option__xDscX') : null;
+  }
+
+  async function waitForChildLevel(option){
+    const li = option?.closest('li');
+    if (!li) return null;
+    const existing = [...li.querySelectorAll('div')]
+      .find(el => (el.className||'').includes('childLevel') && isVisible(el));
+    if (existing) return existing;
+    const awaited = await waitFor(() => {
+      const candidate = [...li.querySelectorAll('div')]
+        .find(el => (el.className||'').includes('childLevel') && isVisible(el));
+      return candidate || null;
+    }, 4000);
+    return awaited;
+  }
+
+  async function clickTreePath(scopeEl, labels){
+    let scope = scopeEl || document;
+    for (let i = 0; i < labels.length; i++){
+      const label = labels[i];
+      let option = findTreeOption(label, scope);
+      if (!option && scope !== document) option = findTreeOption(label, document);
+      if (!option){
+        log(`❗ Не найдена категория «${label}».`);
+        return false;
+      }
+      realisticClick(option);
+      log(`Клик по категории «${label}».`);
+      await sleep(220);
+      if (i < labels.length - 1){
+        const child = await waitForChildLevel(option);
+        if (!child){
+          log(`❗ Не удалось открыть дочерние категории для «${label}».`);
+          return false;
+        }
+        scope = child;
+      }
+    }
+    return true;
+  }
+
+  let findPathInProgress = false;
+  async function findCategoryPath(){
+    if (findPathInProgress){
+      log('⚠️ Поиск пути уже выполняется.');
+      return;
+    }
+    findPathInProgress = true;
+    try {
+      if (!isCreatePage()){
+        log('❗ Поиск пути доступен на этапе создания/редактирования.');
+        return;
+      }
+      const query = (state.gameSearchName||'').trim() || buildSearchName(state.gameNameRu||'');
+      if (!query){
+        log('❗ Заполните название игры для поиска пути.');
+        return;
+      }
+      const input = await waitFor(() => getCategoryInput(), 7000);
+      if (!input){
+        log('❗ Поле «Категория размещения» не найдено.');
+        return;
+      }
+      const wrapper = input.closest('.ant-input-affix-wrapper') || input;
+      realisticClick(wrapper);
+      await sleep(150);
+      setReactValue(input, '');
+      await sleep(80);
+      setReactValue(input, query);
+      log(`Ищу путь категории по «${query}»...`);
+      await sleep(200);
+      const dropdown = await waitFor(() => findCategoryDropdown(), 5000);
+      if (!dropdown){
+        log('❗ Не удалось открыть выпадающий список категорий.');
+        return;
+      }
+      const options = [...dropdown.querySelectorAll('.style_option__xDscX')];
+      if (!options.length){
+        log('❗ В списке категорий нет вариантов.');
+        return;
+      }
+      const normalizedQuery = normalizeForCompare(query);
+      let best = null;
+      for (const opt of options){
+        const pathNode = opt.querySelector('.style_searchResultPath__Ep0Ky');
+        const pathText = (pathNode?.textContent || opt.textContent || '').replace(/\s+/g, ' ').trim();
+        const leafNode = pathNode?.querySelector('span:last-child');
+        const leafText = (leafNode?.textContent || '').trim() || pathText;
+        const leafNorm = normalizeForCompare(leafText);
+        const sim = similarity(normalizedQuery, leafNorm);
+        const exact = leafNorm === normalizedQuery;
+        if (!best || (exact && !best.exact) || sim > best.score){
+          best = { el: opt, score: sim, exact, text: pathText };
+        }
+      }
+      if (!best){
+        log('❗ Не найдено подходящих результатов.');
+        return;
+      }
+      if (!best.exact && best.score < 0.9){
+        log(`❗ Лучшее совпадение лишь ${(best.score*100).toFixed(1)}%. Выберите путь вручную.`);
+        return;
+      }
+      realisticClick(best.el);
+      log(`Выбран результат: ${best.text} (совпадение ${(best.score*100).toFixed(1)}%).`);
+      await sleep(350);
+      const pathWrapper = await waitFor(() => document.querySelector('.style_selectedPath__ctPoJ'), 4000);
+      if (!pathWrapper){
+        log('❗ Не удалось найти выбранный путь после выбора.');
+        return;
+      }
+      const trigger = pathWrapper.closest('.ant-input-affix-wrapper') || pathWrapper;
+      realisticClick(trigger);
+      await sleep(200);
+      const keysOption = await waitFor(() => findTreeOption('Ключи и гифты'), 5000);
+      if (!keysOption){
+        log('❗ Не найдена категория «Ключи и гифты».');
+        return;
+      }
+      const container = keysOption.closest('div[class*="childLevel"]') || document;
+      const ok = await clickTreePath(container, ['Ключи и гифты', 'Steam']);
+      if (ok){
+        log('Категория установлена: Ключи и гифты → Steam.');
+      }
+    } finally {
+      findPathInProgress = false;
+    }
+  }
+
   // ==========================
   // 🎛️ Панель
   // ==========================
@@ -144,11 +360,15 @@
 #vibe-panel label{display:block;font-size:12px;opacity:.9;margin-bottom:4px;}
 #vibe-panel input[type="text"],#vibe-panel textarea{width:100%;background:#12161c;color:#eee;border:1px solid #2d3440;border-radius:8px;padding:8px 10px;outline:none;}
 #vibe-panel input[type="text"]:focus,#vibe-panel textarea:focus{border-color:#5a9cff;}
+#vibe-panel .inline-controls{display:flex;gap:8px;align-items:center;}
+#vibe-panel .inline-controls input{flex:1 1 auto;}
+#vibe-panel .inline-controls .btn{margin:0;}
 #vibe-panel .chips{display:flex;gap:6px;flex-wrap:wrap;}
 #vibe-panel .chip{padding:4px 8px;background:#151a21;border:1px solid #2d3440;border-radius:999px;cursor:pointer;user-select:none;font-size:12px;}
 #vibe-panel .chip.active{border-color:#5a9cff;background:rgba(90,156,255,.15);}
 #vibe-panel .btn{width:100%;padding:10px 12px;background:#0e7a29;border:1px solid #19923a;color:#fff;border-radius:10px;cursor:pointer;font-weight:700;}
 #vibe-panel .btn.secondary{background:#19202a;border-color:#2e3a4a;color:#eaeef5;}
+#vibe-panel .btn.small{width:auto;padding:8px 12px;font-size:12px;}
 #vibe-panel .btn.warn{background:#3a1b1b;border-color:#6b2a2a;}
 #vibe-panel .tabs{display:flex;gap:6px;margin-bottom:8px;}
 #vibe-panel .tab{padding:6px 10px;border:1px solid #2d3440;border-radius:8px;cursor:pointer;background:#141a22;font-size:12px;}
@@ -168,7 +388,7 @@
       <div class="hd"><div>Auto Offer Wizard</div><div class="small">phase: <span id="vibe-phase">${state.phase}</span></div></div>
       <div class="bd">
         <div class="row"><label>Название игры (RU/KZ)</label><input id="vibe-game-ru" type="text" placeholder="Напр.: ARK: Survival Evolved"></div>
-        <div class="row"><label>Название (EN) — опционально</label><input id="vibe-game-en" type="text" placeholder="If blank — will use RU"></div>
+        <div class="row"><label>Название для поиска пути</label><div class="inline-controls"><input id="vibe-game-search" type="text" placeholder="Без Deluxe / Ultimate"><button class="btn secondary small" id="vibe-find-path">Найти путь</button></div></div>
         <div class="row"><label>Рынок</label><div class="chips"><div class="chip" data-market="RU">RU</div><div class="chip" data-market="KZ">KZ</div></div></div>
         <div class="row">
           <label>Описание (кэшируется)</label>
@@ -183,33 +403,88 @@
     document.body.appendChild(host);
 
     const gameRu = host.querySelector('#vibe-game-ru');
-    const gameEn = host.querySelector('#vibe-game-en');
+    const gameSearch = host.querySelector('#vibe-game-search');
+    const findPathBtn = host.querySelector('#vibe-find-path');
     const descArea = host.querySelector('#vibe-desc');
     const tabs=[...host.querySelectorAll('.tab')];
     const chipsMarket=[...host.querySelectorAll('.chip[data-market]')];
     const chipsFlags=[...host.querySelectorAll('.chip[data-flag]')];
 
     gameRu.value=state.gameNameRu||'';
-    gameEn.value=state.gameNameEn||'';
+
+    let lastAutoSearch = buildSearchName(state.gameNameRu||'');
+    let manualSearchTouched = false;
+
+    if (gameSearch){
+      gameSearch.value=state.gameSearchName||'';
+      if(!state.gameSearchName && lastAutoSearch){
+        state.gameSearchName = lastAutoSearch;
+        gameSearch.value = lastAutoSearch;
+        saveState();
+      }
+      if(!gameSearch.value && lastAutoSearch){
+        gameSearch.value = lastAutoSearch;
+        state.gameSearchName = lastAutoSearch;
+        saveState();
+      }
+      manualSearchTouched = !!state.gameSearchName && state.gameSearchName !== lastAutoSearch;
+    }
+
+    function applySearchAuto(force=false){
+      if (!gameSearch) return;
+      const auto = buildSearchName(state.gameNameRu||'');
+      lastAutoSearch = auto;
+      if(force || !manualSearchTouched || !gameSearch.value.trim()){
+        gameSearch.value = auto;
+        state.gameSearchName = auto;
+        manualSearchTouched = false;
+        saveState();
+      }
+    }
 
     let activeDTab = persist.get('activeDTab','ru');
     function renderDescTab(){ tabs.forEach(t=>t.classList.toggle('active', t.getAttribute('data-dtab')===activeDTab)); descArea.value = state.desc[activeDTab] || ''; }
     function renderMarket(){ chipsMarket.forEach(c=>c.classList.toggle('active', c.getAttribute('data-market')===state.market)); }
     function renderFlags(){ chipsFlags.forEach(c=>c.classList.toggle('active', !!state[c.getAttribute('data-flag')])); }
 
-    gameRu.addEventListener('input', ()=>{ state.gameNameRu=gameRu.value; saveState(); });
-    gameEn.addEventListener('input', ()=>{ state.gameNameEn=gameEn.value; saveState(); });
+    gameRu.addEventListener('input', ()=>{
+      state.gameNameRu=gameRu.value;
+      saveState();
+      manualSearchTouched = false;
+      applySearchAuto(true);
+    });
+    if (gameSearch){
+      gameSearch.addEventListener('input', ()=>{
+        manualSearchTouched = true;
+        state.gameSearchName = gameSearch.value.trim();
+        saveState();
+      });
+    }
     descArea.addEventListener('input', ()=>{ state.desc[activeDTab]=descArea.value; saveState(); });
     tabs.forEach(t=>t.addEventListener('click', ()=>{ activeDTab=t.getAttribute('data-dtab'); persist.set('activeDTab', activeDTab); renderDescTab(); }));
     chipsMarket.forEach(c=>c.addEventListener('click', ()=>{ state.market=c.getAttribute('data-market'); saveState(); renderMarket(); log(`Рынок переключен на ${state.market}`); }));
     chipsFlags.forEach(c=>c.addEventListener('click', ()=>{ const k=c.getAttribute('data-flag'); state[k]=!state[k]; saveState(); renderFlags(); log(`Флаг ${k} = ${state[k]?'ON':'OFF'}`); }));
+
+    if(findPathBtn){
+      findPathBtn.addEventListener('click', ()=>{
+        findCategoryPath().catch(err=>{
+          log(`❌ Поиск пути: ${err?.message||err}`);
+          console.error(err);
+        });
+      });
+    }
 
     host.querySelector('#vibe-run').addEventListener('click', onRun);
     host.querySelector('#vibe-continue').addEventListener('click', ()=> scheduleNext(50));
     host.querySelector('#vibe-reset').addEventListener('click', ()=>{
       state = Object.assign({}, DEF_STATE, { logs:[] });
       saveState(); renderMarket(); renderFlags(); renderDescTab();
-      gameRu.value=''; gameEn.value='';
+      gameRu.value='';
+      if (gameSearch){
+        gameSearch.value='';
+      }
+      manualSearchTouched = false;
+      lastAutoSearch = '';
       host.querySelector('#vibe-phase').textContent = state.phase;
       host.querySelector('#vibe-log-box').innerHTML='';
       document.querySelector('#vibe-id-badge').style.display='none';
@@ -390,7 +665,7 @@
     if(!titleEn || !descEnEl){ realisticClick(enTab); await sleep(250); titleEn = await waitForSelector('#titleEn'); descEnEl = await waitForSelector('#descriptionEn'); }
     if(!titleEn || !descEnEl){ log('❗ Не найдены EN поля (#titleEn / #descriptionEn)'); scheduleNext(500); return; }
 
-    const gameEn = state.gameNameEn?.trim() || state.gameNameRu?.trim();
+    const gameEn = state.gameSearchName?.trim() || state.gameNameRu?.trim();
     const enTitle = `${gameEn} – Steam – ${state.market} – auto`;
     setReactValue(titleEn, enTitle); log(`Название EN → ${enTitle}`);
 
