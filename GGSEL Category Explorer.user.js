@@ -484,27 +484,55 @@
 
         _fetchWithTimeout(url, options) {
             return new Promise((resolve, reject) => {
+                const shouldForceFallback = this._shouldBypassWindowFetch(url);
+                const invokeFallback = (error) => {
+                    if (typeof GM_xmlhttpRequest === 'function') {
+                        if (error) {
+                            logger.warn('Переход на GM_xmlhttpRequest', { url, error: error && error.message });
+                        } else {
+                            logger.debug('Используем GM_xmlhttpRequest из-за другого домена', { url });
+                        }
+                        this._fallbackRequest(url, options).then(resolve).catch(reject);
+                    } else {
+                        const err = error || new Error('GM_xmlhttpRequest недоступен');
+                        logger.error('Запрос не удался', { url, error: err && err.message });
+                        reject(err);
+                    }
+                };
+
+                if (shouldForceFallback) {
+                    invokeFallback();
+                    return;
+                }
+
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     controller.abort();
                     reject(new Error('timeout'));
                 }, REQUEST_TIMEOUT_MS);
-                const requestOptions = { ...options, signal: controller.signal, credentials: 'same-origin' };
+                const requestOptions = { ...options, signal: controller.signal, credentials: 'include' };
                 fetch(url, requestOptions).then(resp => {
                     clearTimeout(timeoutId);
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     return resp.text();
                 }).then(resolve).catch(err => {
                     clearTimeout(timeoutId);
-                    if (typeof GM_xmlhttpRequest === 'function') {
-                        logger.warn('Переход на GM_xmlhttpRequest', { url, error: err && err.message });
-                        this._fallbackRequest(url, options).then(resolve).catch(reject);
-                    } else {
-                        logger.error('Запрос не удался', { url, error: err && err.message });
-                        reject(err);
-                    }
+                    invokeFallback(err);
                 });
             });
+        }
+
+        _shouldBypassWindowFetch(url) {
+            try {
+                if (typeof location === 'undefined' || !location.origin) {
+                    return true;
+                }
+                const target = new URL(url);
+                return target.origin !== location.origin;
+            } catch (err) {
+                logger.warn('Не удалось сравнить origin, используем GM_xmlhttpRequest', { url, error: err && err.message });
+                return true;
+            }
         }
 
         // Фоллбек через GM_xmlhttpRequest
