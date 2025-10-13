@@ -3,6 +3,8 @@
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
 // @version      1.3.0
 // @match        *://*/*
+// @match        https://back-office.staging.ggsel.com/*
+// @match        https://admin.ggsel.com/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
