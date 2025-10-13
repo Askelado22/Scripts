@@ -290,7 +290,7 @@
       await sleep(80);
       setReactValue(input, query);
       log(`Ищу путь категории по «${query}»...`);
-      await sleep(200);
+      await sleep(1500);
       const dropdown = await waitFor(() => findCategoryDropdown(), 5000);
       if (!dropdown){
         log('❗ Не удалось открыть выпадающий список категорий.');
@@ -868,6 +868,15 @@
   async function phasePricingNext(){
     if(!isPricingPage()){ scheduleNext(600); return; }
     log('Фаза: Переход к «Инструкция для покупателя».');
+
+    const priceInput = await waitForSelector('#offerCost');
+    if (!priceInput){ log('❗ Поле цены #offerCost не найдено перед переходом.'); scheduleNext(600); return; }
+    const rawVal = priceInput.value ?? priceInput.getAttribute('value') ?? '';
+    if (String(rawVal).trim() !== '1'){
+      setReactValue(priceInput, '1');
+      log('Цена скорректирована до 1 перед переходом.');
+      await sleep(120);
+    }
 
     const nextBtn = await waitFor(()=> findByText('button span', 'Далее', { exact:true })?.closest('button'), 10000);
     if (!nextBtn){ log('❗ Кнопка «Далее» не найдена на Pricing. Нажмите её вручную и жмите «Продолжить».'); scheduleNext(800); return; }
