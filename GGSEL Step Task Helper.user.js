@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.2.0
+// @version      0.3.0
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -20,7 +20,8 @@
   const NS = 'vibe.ggsel.stepHelper';
   const DEFAULT_STATE = {
     idsRaw: '5140692\n5083916\n4919694\n5023639\n5107756\n5090632\n5137840\n5150184\n4924480\n5156903\n5449866\n5148216',
-    lastIndex: 0
+    lastIndex: 0,
+    currentId: null
   };
 
   const STORAGE = {
@@ -65,14 +66,15 @@
   }
 
   let state = Object.assign({}, DEFAULT_STATE, STORAGE.get('state', DEFAULT_STATE));
-  let currentId = extractOfferId(location.href);
+  let currentId = extractOfferId(location.href) ?? null;
 
   let panel;
   let nav;
   let textarea;
   let statusBox;
   let currentLabel;
-  let deleteButton;
+  let withdrawButton;
+  let returnButton;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,11 +100,13 @@
 
   function goToOffer(id) {
     if (!id) return;
-    const idx = parseIds(state.idsRaw).indexOf(id);
+    const ids = parseIds(state.idsRaw);
+    const idx = ids.indexOf(id);
     if (idx !== -1) {
       state.lastIndex = idx;
-      saveState();
     }
+    state.currentId = id;
+    saveState();
     location.href = buildEditUrl(id);
   }
 
@@ -193,6 +197,16 @@
     #ggsel-step-helper-panel .ggsel-helper-footer button.ggsel-delete-btn:hover {
       box-shadow: 0 6px 18px rgba(255, 107, 107, 0.35);
     }
+    #ggsel-step-helper-panel .ggsel-helper-footer button.ggsel-return-btn {
+      background: #f1b33f;
+      color: #241500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-footer button.ggsel-return-btn:hover {
+      box-shadow: 0 6px 18px rgba(241, 179, 63, 0.35);
+    }
     #ggsel-step-helper-panel .ggsel-helper-status {
       margin-top: 10px;
       font-size: 13px;
@@ -265,10 +279,11 @@
       <div class="ggsel-helper-status" id="ggsel-helper-status">Готово</div>
       <div class="ggsel-helper-footer">
         <div class="ggsel-helper-footer-left">
-          <button data-action="delete" class="ggsel-delete-btn" style="display:none;">Удалить</button>
+          <button data-action="return" class="ggsel-return-btn" style="display:none;">Вернуться к товару</button>
+          <button data-action="withdraw" class="ggsel-delete-btn" style="display:none;">Снять товар</button>
           <span>Текущий ID:</span>
         </div>
-        <strong id="ggsel-helper-current">${currentId ?? getCurrentTargetId() ?? '—'}</strong>
+        <strong id="ggsel-helper-current">${currentId ?? state.currentId ?? getCurrentTargetId() ?? '—'}</strong>
       </div>
     `;
     document.body.appendChild(panel);
@@ -284,7 +299,8 @@
     textarea = panel.querySelector('#ggsel-helper-ids');
     statusBox = panel.querySelector('#ggsel-helper-status');
     currentLabel = panel.querySelector('#ggsel-helper-current');
-    deleteButton = panel.querySelector('button[data-action="delete"]');
+    withdrawButton = panel.querySelector('button[data-action="withdraw"]');
+    returnButton = panel.querySelector('button[data-action="return"]');
 
     textarea.addEventListener('input', () => {
       state.idsRaw = textarea.value;
@@ -340,8 +356,9 @@
     const idx = ids.indexOf(id);
     if (idx !== -1) {
       state.lastIndex = idx;
-      saveState();
     }
+    state.currentId = id ?? null;
+    saveState();
     updateCurrentLabel();
     updateNavButtons();
   }
@@ -355,16 +372,24 @@
       if (prevBtn) prevBtn.disabled = true;
       if (nextBtn) nextBtn.disabled = true;
       state.lastIndex = 0;
+      if (currentId === null) {
+        state.currentId = null;
+      }
       saveState();
       updateCurrentLabel();
+      updateContextUi();
       return;
     }
     if (state.lastIndex < 0) state.lastIndex = 0;
     if (state.lastIndex >= ids.length) state.lastIndex = ids.length - 1;
+    if (currentId === null) {
+      state.currentId = ids[state.lastIndex];
+    }
     saveState();
     if (prevBtn) prevBtn.disabled = state.lastIndex <= 0;
     if (nextBtn) nextBtn.disabled = state.lastIndex >= ids.length - 1;
     updateCurrentLabel();
+    updateContextUi();
   }
 
   function navigate(step) {
@@ -379,9 +404,11 @@
       return;
     }
     state.lastIndex = nextIndex;
-    saveState();
     const targetId = ids[nextIndex];
+    state.currentId = targetId;
+    saveState();
     updateCurrentLabel();
+    updateContextUi();
     setStatus(`Переход к ${targetId}...`);
     goToOffer(targetId);
   }
@@ -403,7 +430,7 @@
     setStatus('Готово!');
   }
 
-  async function runDeleteAction() {
+  async function runWithdrawAction() {
     if (!isOnOffersList()) {
       setStatus('Кнопка доступна на странице со списком товаров');
       return false;
@@ -437,7 +464,22 @@
     }
 
     realisticClick(withdrawItem);
-    setStatus(`Товар ${targetId} снят с продажи (удален)`);
+    setStatus(`Товар ${targetId} снят с продажи`);
+    return true;
+  }
+
+  async function runReturnAction() {
+    if (!isOnOffersList()) {
+      setStatus('Кнопка доступна на странице со списком товаров');
+      return false;
+    }
+    const targetId = state.currentId ?? getCurrentTargetId();
+    if (!targetId) {
+      setStatus('Нет выбранного ID для возврата');
+      return false;
+    }
+    setStatus(`Открываем ${targetId}...`);
+    goToOffer(targetId);
     return true;
   }
 
@@ -550,7 +592,7 @@
   function getCurrentTargetId() {
     const ids = parseIds(state.idsRaw);
     if (!ids.length) {
-      return null;
+      return state.currentId ?? null;
     }
     let idx = state.lastIndex;
     if (idx < 0) idx = 0;
@@ -560,7 +602,7 @@
 
   function updateCurrentLabel() {
     if (!currentLabel) return;
-    const labelId = currentId ?? getCurrentTargetId();
+    const labelId = currentId ?? state.currentId ?? getCurrentTargetId();
     currentLabel.textContent = labelId ?? '—';
   }
 
@@ -612,8 +654,14 @@
   }
 
   function updateContextUi() {
-    if (!deleteButton) return;
-    deleteButton.style.display = isOnOffersList() ? '' : 'none';
+    if (!withdrawButton || !returnButton) return;
+    const onList = isOnOffersList();
+    const activeId = state.currentId ?? getCurrentTargetId();
+    const hasId = Boolean(activeId);
+    withdrawButton.style.display = onList ? '' : 'none';
+    returnButton.style.display = onList ? '' : 'none';
+    withdrawButton.disabled = !hasId;
+    returnButton.disabled = !hasId;
   }
 
   let hotkeysBound = false;
@@ -667,8 +715,10 @@
         await runStage3();
       } else if (action === 'runAll') {
         await runAll();
-      } else if (action === 'delete') {
-        await runDeleteAction();
+      } else if (action === 'withdraw') {
+        await runWithdrawAction();
+      } else if (action === 'return') {
+        await runReturnAction();
       }
     } catch (err) {
       setStatus(`Ошибка: ${err.message || err}`);
