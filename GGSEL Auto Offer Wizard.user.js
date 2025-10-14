@@ -1,17 +1,21 @@
 // ==UserScript==
 // @name         GGSEL Auto Offer Wizard — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      1.0.5
+// @version      1.1.0
 // @description  Автозаполнение offer'а: панель справа, FSM по шагам (create → pricing → instructions), логирование, кэш, «Никнейм»/«Регион», реалистичные клики Ant Select. Гарантированное переключение RU/EN в модалках (aria-selected="true") и без зависаний FSM (планировщик + watchdog локов). Старт возможен также с sellers-office edit/{id}.
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers/create*
 // @match        https://seller.ggsel.net/offers/edit/*
 // @match        https://sellers-office.ggsel.net/offers/edit/*
+// @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      seller.ggsel.net
+// @connect      sellers-office.ggsel.net
 // ==/UserScript==
 
 (function () {
@@ -21,6 +25,17 @@
   // 🔧 Состояние + утилиты
   // ==========================
   const NS = 'vibe.ggsel.autoOffer';
+  const ADMIN_ORIGINS = [
+    'https://seller.ggsel.net',
+    'https://sellers-office.ggsel.net'
+  ];
+  const ADMIN_HOSTS = ADMIN_ORIGINS.map((u) => {
+    try {
+      return new URL(u).host;
+    } catch {
+      return String(u || '').replace(/^https?:\/\//, '');
+    }
+  });
   const DEF_STATE = {
     started: false,
     phase: 'idle',
@@ -43,6 +58,21 @@
   function GM_GetValue(k, d){ try { return GM_getValue(k, d); } catch { return d; } }
 
   let state = Object.assign({}, DEF_STATE, persist.get('state', DEF_STATE));
+
+  const REMOTE_META_DEF = { preferredOrigin: ADMIN_ORIGINS[0], csrf: {}, cache: {} };
+  const storedRemoteMeta = persist.get('remoteMeta', REMOTE_META_DEF) || {};
+  let remoteMeta = {
+    preferredOrigin: ADMIN_ORIGINS.includes(storedRemoteMeta.preferredOrigin) ? storedRemoteMeta.preferredOrigin : ADMIN_ORIGINS[0],
+    csrf: storedRemoteMeta.csrf || {},
+    cache: storedRemoteMeta.cache || {}
+  };
+  function saveRemoteMeta(){
+    persist.set('remoteMeta', {
+      preferredOrigin: remoteMeta.preferredOrigin,
+      csrf: remoteMeta.csrf,
+      cache: remoteMeta.cache
+    });
+  }
 
   function saveState(){ persist.set('state', state); }
   function nowTs(){ return new Date().toLocaleTimeString(); }
@@ -131,6 +161,328 @@
   function copyToClipboard(text){
     try { GM_setClipboard(text); }
     catch { navigator.clipboard?.writeText(text).catch(()=>{}); }
+  }
+
+  const REMOTE_CACHE_LIMIT = 6;
+
+  function isAdminContext(){
+    return ADMIN_HOSTS.includes(location.host);
+  }
+
+  function isAdminUiContext(){
+    if (!isAdminContext()) return false;
+    return /\/offers\/(create|edit)/.test(location.pathname);
+  }
+
+  function getPreferredOrigin(){
+    if (remoteMeta?.preferredOrigin && ADMIN_ORIGINS.includes(remoteMeta.preferredOrigin)){
+      return remoteMeta.preferredOrigin;
+    }
+    return ADMIN_ORIGINS[0];
+  }
+
+  function makeOriginList(originOverride){
+    if (originOverride && ADMIN_ORIGINS.includes(originOverride)) return [originOverride];
+    const preferred = getPreferredOrigin();
+    const rest = ADMIN_ORIGINS.filter((o)=> o !== preferred);
+    return [preferred, ...rest];
+  }
+
+  function absoluteAdminUrl(path, originOverride){
+    const origin = originOverride || getPreferredOrigin();
+    if (!path) return origin;
+    if (/^https?:/i.test(path)) return path;
+    const base = origin.replace(/\/$/, '');
+    const suffix = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${suffix}`;
+  }
+
+  function headerStringToMap(str){
+    const map = {};
+    if (!str) return map;
+    for (const line of String(str).split(/\r?\n/)){
+      const idx = line.indexOf(':');
+      if (idx === -1) continue;
+      const key = line.slice(0, idx).trim().toLowerCase();
+      if (!key) continue;
+      map[key] = line.slice(idx + 1).trim();
+    }
+    return map;
+  }
+
+  async function requestWithRetry(factory, attempts = 3, delay = 350){
+    let lastErr;
+    for (let i = 0; i < attempts; i++){
+      try {
+        return await factory();
+      } catch (err){
+        lastErr = err;
+        if (i < attempts - 1){ await sleep(delay * (i + 1)); }
+      }
+    }
+    throw lastErr || new Error('Request failed');
+  }
+
+  function gmHttpRequest(opts){
+    const useGM = typeof GM_xmlhttpRequest === 'function';
+    if (useGM){
+      return new Promise((resolve, reject)=>{
+        try {
+          GM_xmlhttpRequest(Object.assign({}, opts, {
+            onload: (res)=> resolve(res),
+            onerror: (err)=> reject(err?.error || err),
+            ontimeout: ()=> reject(new Error('Timeout')),
+            withCredentials: true
+          }));
+        } catch (err){ reject(err); }
+      });
+    }
+    return fetch(opts.url, {
+      method: opts.method || 'GET',
+      headers: opts.headers,
+      body: opts.data,
+      credentials: 'include',
+      mode: 'cors'
+    }).then(async (resp)=>{
+      const text = await resp.text();
+      return {
+        status: resp.status,
+        statusText: resp.statusText,
+        responseText: text,
+        responseHeaders: Array.from(resp.headers.entries()).map(([k,v])=>`${k}: ${v}`).join('\n')
+      };
+    });
+  }
+
+  async function rawPrivilegedFetch(origin, path, options = {}){
+    const { method = 'GET', headers = {}, data = undefined, responseType = 'text', retries = 2 } = options;
+    const url = absoluteAdminUrl(path, origin);
+    const exec = () => gmHttpRequest({ url, method, headers, data, responseType });
+    const res = await requestWithRetry(exec, retries + 1);
+    return { res, url };
+  }
+
+  function processResponse(res, responseType, url){
+    const headersMap = headerStringToMap(res.responseHeaders);
+    const rawBody = res.responseText !== undefined ? res.responseText : res.response;
+    let body = rawBody;
+    if (responseType === 'json' && typeof rawBody === 'string'){
+      try { body = JSON.parse(rawBody); }
+      catch (err){ throw new Error(`JSON parse error for ${url}: ${err?.message || err}`); }
+    }
+    return {
+      status: res.status,
+      statusText: res.statusText,
+      headers: headersMap,
+      body
+    };
+  }
+
+  async function privilegedFetch(path, options = {}){
+    const {
+      method = 'GET',
+      headers = {},
+      data = undefined,
+      responseType = 'text',
+      retries = 2,
+      includeCsrf = false,
+      forceFreshCsrf = false,
+      origin: originOverride = null
+    } = options;
+
+    const origins = makeOriginList(originOverride);
+    let lastErr = null;
+    for (const origin of origins){
+      const hdrs = Object.assign({ 'X-Requested-With': 'XMLHttpRequest' }, headers);
+      if (includeCsrf){
+        const token = await ensureCsrfToken(forceFreshCsrf, origin);
+        if (token) hdrs['X-CSRF-TOKEN'] = token;
+      }
+      try {
+        const { res, url } = await rawPrivilegedFetch(origin, path, { method, headers: hdrs, data, responseType, retries });
+        remoteMeta.preferredOrigin = origin;
+        saveRemoteMeta();
+        const processed = processResponse(res, responseType, url);
+        processed.url = url;
+        return processed;
+      } catch (err){
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('All origins failed');
+  }
+
+  function parseRemoteHtml(html){
+    return new DOMParser().parseFromString(html, 'text/html');
+  }
+
+  function extractCsrfFromHtml(html){
+    if (!html) return null;
+    const doc = parseRemoteHtml(html);
+    const meta = doc.querySelector('meta[name="csrf-token"]');
+    if (meta?.content) return meta.content;
+    const input = doc.querySelector('input[name="_token"], input[name="csrf"]');
+    if (input?.value) return input.value;
+    return null;
+  }
+
+  async function ensureCsrfToken(force = false, originOverride = null){
+    const origin = originOverride && ADMIN_ORIGINS.includes(originOverride) ? originOverride : getPreferredOrigin();
+    if (!remoteMeta.csrf) remoteMeta.csrf = {};
+    const entry = remoteMeta.csrf[origin];
+    const age = entry ? Date.now() - entry.ts : Infinity;
+    if (!force && entry && age < 10 * 60 * 1000) return entry.token;
+    try {
+      const { res, url } = await rawPrivilegedFetch(origin, '/offers/create', {
+        method: 'GET',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        responseType: 'text',
+        retries: 1
+      });
+      const processed = processResponse(res, 'text', url);
+      const token = extractCsrfFromHtml(processed.body);
+      if (token){
+        remoteMeta.csrf[origin] = { token, ts: Date.now() };
+        remoteMeta.preferredOrigin = origin;
+        saveRemoteMeta();
+        return token;
+      }
+    } catch (err){
+      console.warn('CSRF fetch failed', origin, err);
+    }
+    return entry?.token || null;
+  }
+
+  function readCache(url, maxAge){
+    const cache = remoteMeta.cache || {};
+    const entry = cache[url];
+    if (!entry) return null;
+    if (maxAge && Date.now() - entry.ts > maxAge) return null;
+    return entry.body;
+  }
+
+  function findCachedPageLike(path, maxAge){
+    const cache = remoteMeta.cache || {};
+    if (!path) return null;
+    const now = Date.now();
+    let suffix = null;
+    try {
+      const u = new URL(path, getPreferredOrigin());
+      suffix = `${u.pathname}${u.search}`;
+    } catch {
+      suffix = path.startsWith('/') ? path : `/${path}`;
+    }
+    if (!suffix) return null;
+    for (const [url, entry] of Object.entries(cache)){
+      if (!entry) continue;
+      if (maxAge && now - (entry.ts || 0) > maxAge) continue;
+      try {
+        const u = new URL(url);
+        const candidate = `${u.pathname}${u.search}`;
+        if (candidate.endsWith(suffix)) return { url, entry };
+      } catch {
+        if (url.endsWith(suffix)) return { url, entry };
+      }
+    }
+    return null;
+  }
+
+  function storeCache(url, body){
+    if (!remoteMeta.cache) remoteMeta.cache = {};
+    remoteMeta.cache[url] = { ts: Date.now(), body };
+    const entries = Object.entries(remoteMeta.cache);
+    if (entries.length > REMOTE_CACHE_LIMIT){
+      entries.sort((a, b)=> a[1].ts - b[1].ts);
+      while (entries.length > REMOTE_CACHE_LIMIT){
+        const [key] = entries.shift();
+        delete remoteMeta.cache[key];
+      }
+    }
+    saveRemoteMeta();
+  }
+
+  async function fetchAdminPage(path, { maxAge = 120000, force = false, origin = null } = {}){
+    const resolvedUrl = absoluteAdminUrl(path, origin || undefined);
+    const cached = !force && readCache(resolvedUrl, maxAge);
+    if (cached){
+      return { url: resolvedUrl, html: cached, fromCache: true };
+    }
+    try {
+      const res = await privilegedFetch(path, { method: 'GET', retries: 2, origin });
+      const html = res.body;
+      const actualUrl = res.url || resolvedUrl;
+      if (typeof html === 'string'){ storeCache(actualUrl, html); }
+      return { url: actualUrl, html, fromCache: false };
+    } catch (err){
+      const fallback = readCache(resolvedUrl, maxAge);
+      if (fallback){
+        return { url: resolvedUrl, html: fallback, fromCache: true, fallback: true, error: err };
+      }
+      const alt = findCachedPageLike(path, maxAge);
+      if (alt){
+        return { url: alt.url, html: alt.entry.body, fromCache: true, fallback: true, error: err };
+      }
+      throw err;
+    }
+  }
+
+  function setupRemoteBridge(){
+    const api = {
+      origins: ADMIN_ORIGINS.slice(),
+      async fetchPage(path, opts){ return fetchAdminPage(path, opts); },
+      async fetchJson(path, opts = {}){
+        const { body } = await privilegedFetch(path, Object.assign({}, opts, { responseType: 'json' }));
+        return body;
+      },
+      async postForm(path, payload, opts = {}){
+        const body = typeof payload === 'string' ? payload : new URLSearchParams(payload || {}).toString();
+        return privilegedFetch(path, Object.assign({
+          method: 'POST',
+          data: body,
+          includeCsrf: true,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }
+        }, opts));
+      },
+      async ensureCsrf(payload){
+        const opts = typeof payload === 'object' && payload !== null ? payload : { force: !!payload };
+        const origin = opts.origin && ADMIN_ORIGINS.includes(opts.origin) ? opts.origin : getPreferredOrigin();
+        const token = await ensureCsrfToken(!!opts.force, origin);
+        const meta = (remoteMeta.csrf && remoteMeta.csrf[origin]) || null;
+        return { token, fetchedAt: meta?.ts || null, origin };
+      },
+      clearCache(){
+        remoteMeta.cache = {};
+        saveRemoteMeta();
+        return { cleared: true };
+      },
+      parseHtml(html){ return parseRemoteHtml(html); }
+    };
+
+    window.GGSEL_AOW = api;
+    window.dispatchEvent(new CustomEvent('ggsel:aow:ready', { detail: api }));
+
+    window.addEventListener('ggsel:aow:request', async (ev)=>{
+      const detail = ev?.detail || {};
+      if (!detail || !detail.id || !detail.action) return;
+      const send = (status, payload) => {
+        window.dispatchEvent(new CustomEvent('ggsel:aow:response', { detail: Object.assign({ id: detail.id, status }, payload) }));
+      };
+      try {
+        const handler = api[detail.action];
+        if (typeof handler !== 'function') throw new Error(`Unknown action: ${detail.action}`);
+        const result = await handler(detail.payload, detail.options || {});
+        send('ok', { result });
+      } catch (err){
+        send('error', { error: err?.message || String(err) });
+      }
+    });
+  }
+
+  let remoteBridgeReady = false;
+  function ensureRemoteBridge(){
+    if (remoteBridgeReady) return;
+    remoteBridgeReady = true;
+    setupRemoteBridge();
   }
 
   // ==========================
@@ -644,7 +996,7 @@
   // ==========================
   // 🚀 Bootstrap + URL watch
   // ==========================
-  function boot(){
+  function bootAdmin(){
     ensurePanel();
     if (state.started && state.phase && state.phase!=='done'){ log(`Восстанавливаю фазу: ${state.phase}`); scheduleNext(50); }
     setInterval(()=>{
@@ -656,6 +1008,16 @@
         scheduleNext(200);
       }
     }, 500);
+  }
+
+  function bootRemote(){
+    ensureRemoteBridge();
+  }
+
+  function boot(){
+    ensureRemoteBridge();
+    if (isAdminUiContext()) bootAdmin();
+    else if (!isAdminContext()) bootRemote();
   }
   boot();
 
