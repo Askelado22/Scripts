@@ -32,7 +32,8 @@
     offerId: null,
     lastUrl: location.href,
     desc: { ru: '', en: '', kz: '', kzEn: '' },
-    logs: []
+    logs: [],
+    panelPos: null
   };
   const persist = {
     set(k, v) { try { GM_setValue(`${NS}.${k}`, v); } catch { localStorage.setItem(`${NS}.${k}`, JSON.stringify(v)); } },
@@ -354,7 +355,7 @@
   // ==========================
   const css = `
 #vibe-panel{position:fixed;right:16px;top:96px;width:360px;z-index:999999;background:#0d0f12;color:#e7e7e7;border:1px solid #2a2f36;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.45);font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;}
-#vibe-panel .hd{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #242933;font-weight:700;}
+#vibe-panel .hd{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #242933;font-weight:700;cursor:move;user-select:none;}
 #vibe-panel .bd{padding:10px 12px;}
 #vibe-panel .row{margin-bottom:10px;}
 #vibe-panel label{display:block;font-size:12px;opacity:.9;margin-bottom:4px;}
@@ -401,6 +402,61 @@
         <div class="row"><label>Логи</label><div id="vibe-log-box"></div></div>
       </div>`;
     document.body.appendChild(host);
+
+    if (state.panelPos && typeof state.panelPos.left === 'number' && typeof state.panelPos.top === 'number'){
+      const maxLeft = Math.max(0, window.innerWidth - host.offsetWidth);
+      const maxTop = Math.max(0, window.innerHeight - host.offsetHeight);
+      const clampedLeft = Math.min(Math.max(state.panelPos.left, 0), maxLeft);
+      const clampedTop = Math.min(Math.max(state.panelPos.top, 0), maxTop);
+      host.style.left = `${clampedLeft}px`;
+      host.style.top = `${clampedTop}px`;
+      host.style.right = 'auto';
+    }
+
+    const dragState = { active: false };
+    const onDragMove = (e)=>{
+      if (!dragState.active) return;
+      const maxLeft = Math.max(0, window.innerWidth - host.offsetWidth);
+      const maxTop = Math.max(0, window.innerHeight - host.offsetHeight);
+      let nextLeft = e.clientX - dragState.offsetX;
+      let nextTop = e.clientY - dragState.offsetY;
+      if (Number.isFinite(maxLeft)) nextLeft = Math.min(Math.max(nextLeft, 0), maxLeft);
+      if (Number.isFinite(maxTop)) nextTop = Math.min(Math.max(nextTop, 0), maxTop);
+      host.style.left = `${nextLeft}px`;
+      host.style.top = `${nextTop}px`;
+      host.style.right = 'auto';
+    };
+    const onDragEnd = ()=>{
+      if (!dragState.active) return;
+      dragState.active = false;
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragEnd);
+      document.removeEventListener('mouseleave', onDragEnd);
+      const left = parseFloat(host.style.left);
+      const top = parseFloat(host.style.top);
+      if (!Number.isNaN(left) && !Number.isNaN(top)){
+        state.panelPos = { left, top };
+        saveState();
+      }
+    };
+
+    const header = host.querySelector('.hd');
+    if (header){
+      header.addEventListener('mousedown', (e)=>{
+        if (e.button !== 0) return;
+        const rect = host.getBoundingClientRect();
+        dragState.active = true;
+        dragState.offsetX = e.clientX - rect.left;
+        dragState.offsetY = e.clientY - rect.top;
+        host.style.left = `${rect.left}px`;
+        host.style.top = `${rect.top}px`;
+        host.style.right = 'auto';
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+        document.addEventListener('mouseleave', onDragEnd);
+        e.preventDefault();
+      });
+    }
 
     const gameRu = host.querySelector('#vibe-game-ru');
     const gameSearch = host.querySelector('#vibe-game-search');
@@ -713,11 +769,30 @@
 
   // helper: модал «Добавление параметра»
   async function openAddParamModal(){
-    let addBtn = [...document.querySelectorAll('button')].find(b=>/Добавить/i.test(b.textContent));
+    if ([...document.querySelectorAll('.ant-modal-content')].some(isVisible)){
+      const closed = await waitFor(()=> ![...document.querySelectorAll('.ant-modal-content')].some(isVisible), 5000);
+      if (!closed){
+        log('⚠️ Предыдущий модал не закрылся за 5 секунд. Продолжаю попытку открыть новый.');
+      }
+    }
+
+    const addBtn = [...document.querySelectorAll('button')]
+      .filter(b=>/Добавить/i.test((b.textContent||'')) && !b.closest('.ant-modal'))
+      [0];
     if(!addBtn){ log('❗ Кнопка «Добавить» для параметра не найдена'); return null; }
+
     realisticClick(addBtn);
     log('Открываю модал «Добавление параметра»...');
-    const modal = await waitForSelector('.ant-modal-content');
+
+    const modal = await waitFor(()=> [...document.querySelectorAll('.ant-modal-content')].find(isVisible), 8000);
+
+    if (!modal){
+      log('❗ Не удалось открыть модал «Добавление параметра»');
+      return null;
+    }
+
+    await waitFor(()=> modal.querySelector('.ant-modal-body'), 4000);
+    await sleep(100);
     return modal;
   }
 
