@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.2
+// @version      0.3.3
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -835,38 +835,79 @@
   function handleHotkeys(event) {
     if (event.defaultPrevented || event.repeat) return;
     if (isTypingTarget(event.target)) return;
+
+    const code = event.code;
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     let action = null;
-    switch (key) {
-      case '1':
+
+    switch (code) {
+      case 'Digit1':
+      case 'Numpad1':
         action = 'stage1';
         break;
-      case '2':
+      case 'Digit2':
+      case 'Numpad2':
         action = 'stage2';
         break;
-      case '3':
+      case 'Digit3':
+      case 'Numpad3':
         action = 'stage3';
         break;
-      case '4':
+      case 'Digit4':
+      case 'Numpad4':
         action = 'runAll';
         break;
-      case 'a':
+      case 'KeyA':
         action = 'navPrev';
         break;
-      case 'd':
+      case 'KeyD':
         action = 'navNext';
         break;
-      case 's':
+      case 'KeyS':
         action = 'return';
         break;
-      case 'w':
+      case 'KeyW':
         action = 'withdraw';
         break;
-      case 'e':
+      case 'KeyE':
         action = 'save';
         break;
       default:
-        return;
+        break;
+    }
+
+    if (!action) {
+      switch (key) {
+        case '1':
+          action = 'stage1';
+          break;
+        case '2':
+          action = 'stage2';
+          break;
+        case '3':
+          action = 'stage3';
+          break;
+        case '4':
+          action = 'runAll';
+          break;
+        case 'a':
+          action = 'navPrev';
+          break;
+        case 'd':
+          action = 'navNext';
+          break;
+        case 's':
+          action = 'return';
+          break;
+        case 'w':
+          action = 'withdraw';
+          break;
+        case 'e':
+          action = 'save';
+          break;
+        default:
+          return;
+      }
     }
     event.preventDefault();
     runAction(action);
