@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.1
+// @version      0.3.2
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -127,8 +127,15 @@
       backdrop-filter: blur(10px);
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
+    #ggsel-step-helper-panel .ggsel-helper-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
     #ggsel-step-helper-panel h3 {
-      margin: 0 0 12px;
+      margin: 0;
       font-size: 18px;
       font-weight: 600;
     }
@@ -152,7 +159,7 @@
       gap: 8px;
       margin-top: 12px;
     }
-    #ggsel-step-helper-panel button {
+    #ggsel-step-helper-panel button:not(.ggsel-helper-help-btn) {
       background: #3fa9f5;
       color: #0d1017;
       border: none;
@@ -162,15 +169,82 @@
       cursor: pointer;
       transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
-    #ggsel-step-helper-panel button:hover {
+    #ggsel-step-helper-panel button:not(.ggsel-helper-help-btn):hover {
       transform: translateY(-1px);
       box-shadow: 0 6px 18px rgba(63, 169, 245, 0.4);
     }
-    #ggsel-step-helper-panel button:disabled {
+    #ggsel-step-helper-panel button:not(.ggsel-helper-help-btn):disabled {
       opacity: 0.4;
       cursor: not-allowed;
       transform: none;
       box-shadow: none;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-btn {
+      background: rgba(255, 255, 255, 0.18);
+      color: #ffffff;
+      border-radius: 50%;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      cursor: help;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-btn:hover,
+    #ggsel-step-helper-panel .ggsel-helper-help:focus-within .ggsel-helper-help-btn {
+      background: rgba(255, 255, 255, 0.3);
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-tooltip {
+      display: none;
+      position: absolute;
+      top: 36px;
+      right: 0;
+      width: 220px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.92);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      font-size: 13px;
+      line-height: 1.5;
+      z-index: 10;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help:hover .ggsel-helper-help-tooltip,
+    #ggsel-step-helper-panel .ggsel-helper-help:focus-within .ggsel-helper-help-tooltip {
+      display: block;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-tooltip strong {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-tooltip ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 4px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-tooltip li {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-help-tooltip kbd {
+      background: rgba(255, 255, 255, 0.16);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 12px;
+      color: #fff;
     }
     #ggsel-step-helper-panel .ggsel-helper-footer {
       margin-top: 12px;
@@ -267,7 +341,26 @@
     panel = document.createElement('div');
     panel.id = 'ggsel-step-helper-panel';
     panel.innerHTML = `
-      <h3>GGSEL Step Helper</h3>
+      <div class="ggsel-helper-header">
+        <h3>GGSEL Step Helper</h3>
+        <div class="ggsel-helper-help">
+          <button type="button" class="ggsel-helper-help-btn" aria-label="Подсказка по горячим клавишам">?</button>
+          <div class="ggsel-helper-help-tooltip">
+            <strong>Горячие клавиши</strong>
+            <ul>
+              <li><kbd>1</kbd><span>Этап 1</span></li>
+              <li><kbd>2</kbd><span>Этап 2</span></li>
+              <li><kbd>3</kbd><span>Этап 3</span></li>
+              <li><kbd>4</kbd><span>Сделать всё</span></li>
+              <li><kbd>A</kbd><span>Предыдущий товар</span></li>
+              <li><kbd>D</kbd><span>Следующий товар</span></li>
+              <li><kbd>S</kbd><span>Вернуться к товару</span></li>
+              <li><kbd>W</kbd><span>Снять товар</span></li>
+              <li><kbd>E</kbd><span>Сохранить прогресс</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
       <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">ID товаров (по одному в строке)</label>
       <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
       <div class="ggsel-helper-actions">
@@ -742,8 +835,9 @@
   function handleHotkeys(event) {
     if (event.defaultPrevented || event.repeat) return;
     if (isTypingTarget(event.target)) return;
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     let action = null;
-    switch (event.key) {
+    switch (key) {
       case '1':
         action = 'stage1';
         break;
@@ -756,6 +850,21 @@
       case '4':
         action = 'runAll';
         break;
+      case 'a':
+        action = 'navPrev';
+        break;
+      case 'd':
+        action = 'navNext';
+        break;
+      case 's':
+        action = 'return';
+        break;
+      case 'w':
+        action = 'withdraw';
+        break;
+      case 'e':
+        action = 'save';
+        break;
       default:
         return;
     }
@@ -765,6 +874,14 @@
 
   async function runAction(action) {
     if (!action) return;
+    if (action === 'navPrev') {
+      navigate(-1);
+      return;
+    }
+    if (action === 'navNext') {
+      navigate(1);
+      return;
+    }
     disableControls(true);
     try {
       if (action === 'stage1') {
@@ -779,6 +896,8 @@
         await runWithdrawAction();
       } else if (action === 'return') {
         await runReturnAction();
+      } else if (action === 'save') {
+        await runSaveAction();
       }
     } catch (err) {
       setStatus(`Ошибка: ${err.message || err}`);
@@ -786,6 +905,24 @@
     } finally {
       disableControls(false);
     }
+  }
+
+  async function runSaveAction() {
+    const candidates = ['Сохранить и далее', 'Сохранить и опубликовать'];
+    for (const text of candidates) {
+      const button = findButtonByText(text);
+      if (button) {
+        if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
+          setStatus(`Кнопка "${text}" недоступна`);
+          return false;
+        }
+        realisticClick(button);
+        setStatus(`Нажата кнопка "${text}"`);
+        return true;
+      }
+    }
+    setStatus('Не найдены кнопки сохранения');
+    return false;
   }
 
   function realisticClick(el) {
