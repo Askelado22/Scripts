@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.6
+// @version      0.3.7
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -785,6 +785,22 @@
         realisticClick(nextBtn);
         setStatus('Переходим к этапу 3...');
         await sleep(400);
+        let stage3Ready = await waitFor(() => document.querySelector('#instructions_ru'), 2000);
+        if (!stage3Ready) {
+          const retryBtn = findButtonByText('Сохранить и далее');
+          if (!retryBtn) {
+            setStatus('Не найдена кнопка "Сохранить и далее" для перехода к этапу 3');
+            return false;
+          }
+          setStatus('Страница не переключилась, повторно нажимаем "Сохранить и далее"...');
+          realisticClick(retryBtn);
+          await sleep(400);
+        }
+        stage3Ready = await waitFor(() => document.querySelector('#instructions_ru'), 20000);
+        if (!stage3Ready) {
+          setStatus('Не удалось перейти к этапу 3');
+          return false;
+        }
       } else {
         setStatus('Не найдена кнопка "Сохранить и далее"');
         return false;
