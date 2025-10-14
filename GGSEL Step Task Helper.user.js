@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.4
+// @version      0.3.5
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -21,7 +21,9 @@
   const DEFAULT_STATE = {
     idsRaw: '5140692\n5083916\n4919694\n5023639\n5107756\n5090632\n5137840\n5150184\n4924480\n5156903\n5449866\n5148216',
     lastIndex: 0,
-    currentId: null
+    currentId: null,
+    autoMode: false,
+    autoFollowup: false
   };
 
   const STORAGE = {
@@ -77,6 +79,10 @@
   let returnButton;
   let progressFill;
   let progressValue;
+  let autoModeCheckbox;
+
+  let autoWithdrawTimer = null;
+  let autoWithdrawRunning = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -140,6 +146,55 @@
       margin: 0;
       font-size: 18px;
       font-weight: 600;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-ids-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      gap: 12px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      cursor: pointer;
+      user-select: none;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-switch {
+      position: relative;
+      width: 36px;
+      height: 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.25);
+      transition: background 0.2s ease;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #0d1017;
+      transition: transform 0.2s ease;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle input:checked + .ggsel-helper-switch {
+      background: #3fa9f5;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle input:checked + .ggsel-helper-switch::after {
+      transform: translateX(18px);
     }
     #ggsel-step-helper-panel textarea {
       width: 100%;
@@ -393,7 +448,13 @@
           </div>
         </div>
       </div>
-      <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">ID товаров (по одному в строке)</label>
+      <label class="ggsel-helper-ids-label">ID товаров (по одному в строке)
+        <span class="ggsel-helper-auto-toggle" title="Автоматически публиковать и снимать товары">
+          <input type="checkbox" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
+          <span class="ggsel-helper-switch"></span>
+          <span>Само</span>
+        </span>
+      </label>
       <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
       <div class="ggsel-helper-progress">
         <div class="ggsel-helper-progress-track" aria-hidden="true">
@@ -434,6 +495,18 @@
     returnButton = panel.querySelector('button[data-action="return"]');
     progressFill = panel.querySelector('.ggsel-helper-progress-fill');
     progressValue = panel.querySelector('#ggsel-helper-progress-value');
+    autoModeCheckbox = panel.querySelector('#ggsel-helper-auto');
+
+    if (autoModeCheckbox) {
+      autoModeCheckbox.addEventListener('change', () => {
+        state.autoMode = autoModeCheckbox.checked;
+        if (!state.autoMode) {
+          state.autoFollowup = false;
+        }
+        saveState();
+        updateContextUi();
+      });
+    }
 
     textarea.addEventListener('input', () => {
       state.idsRaw = textarea.value;
@@ -573,6 +646,8 @@
   }
 
   async function runAll() {
+    state.autoFollowup = false;
+    saveState();
     setStatus('Этап 1/3 — URL перенаправления...');
     const ok1 = await runStage1({ autoNext: true });
     if (!ok1) return;
@@ -586,7 +661,29 @@
     setStatus('Этап 3/3 — Инструкции...');
     const ok3 = await runStage3();
     if (!ok3) return;
-    setStatus('Готово!');
+    if (state.autoMode) {
+      const publishBtn = findButtonByText('Сохранить и опубликовать');
+      if (!publishBtn) {
+        setStatus('Не найдена кнопка "Сохранить и опубликовать"');
+        state.autoFollowup = false;
+        saveState();
+        return;
+      }
+      if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
+        setStatus('Кнопка "Сохранить и опубликовать" недоступна');
+        state.autoFollowup = false;
+        saveState();
+        return;
+      }
+      state.autoFollowup = true;
+      saveState();
+      setStatus('Публикуем товар...');
+      realisticClick(publishBtn);
+    } else {
+      state.autoFollowup = false;
+      saveState();
+      setStatus('Готово!');
+    }
   }
 
   async function runWithdrawAction() {
@@ -885,6 +982,59 @@
     returnButton.style.display = onList ? '' : 'none';
     withdrawButton.disabled = !hasId;
     returnButton.disabled = !hasId;
+    if (autoModeCheckbox) {
+      autoModeCheckbox.checked = !!state.autoMode;
+    }
+    if (onList && state.autoMode && state.autoFollowup) {
+      scheduleAutoWithdraw();
+    } else {
+      cancelAutoWithdraw();
+    }
+  }
+
+  function cancelAutoWithdraw() {
+    if (autoWithdrawTimer) {
+      clearTimeout(autoWithdrawTimer);
+      autoWithdrawTimer = null;
+    }
+  }
+
+  function scheduleAutoWithdraw() {
+    if (autoWithdrawRunning || autoWithdrawTimer) return;
+    if (!state.autoMode || !state.autoFollowup) return;
+    if (!isOnOffersList()) return;
+    const targetId = getCurrentTargetId();
+    if (!targetId) return;
+    autoWithdrawTimer = setTimeout(() => {
+      autoWithdrawTimer = null;
+      autoProcessOnOffersList();
+    }, 1500);
+  }
+
+  async function autoProcessOnOffersList() {
+    if (autoWithdrawRunning) return;
+    if (!state.autoMode || !state.autoFollowup) return;
+    if (!isOnOffersList()) return;
+    const targetId = getCurrentTargetId();
+    if (!targetId) return;
+    autoWithdrawRunning = true;
+    disableControls(true);
+    try {
+      const success = await runWithdrawAction();
+      state.autoFollowup = false;
+      saveState();
+      cancelAutoWithdraw();
+      if (success) {
+        await sleep(400);
+        navigate(1);
+      }
+    } finally {
+      disableControls(false);
+      autoWithdrawRunning = false;
+      if (state.autoMode && state.autoFollowup && isOnOffersList()) {
+        scheduleAutoWithdraw();
+      }
+    }
   }
 
   let hotkeysBound = false;
