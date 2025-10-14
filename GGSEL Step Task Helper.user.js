@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.1.0
+// @version      0.1.1
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers/create*
@@ -10,6 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
+// @run-at       document-end
 // ==/UserScript==
 
 (function () {
@@ -64,9 +65,12 @@
 
   let state = Object.assign({}, DEFAULT_STATE, STORAGE.get('state', DEFAULT_STATE));
   let currentId = extractOfferId(location.href);
-  if (currentId) {
-    syncIndexById(currentId);
-  }
+
+  let panel;
+  let nav;
+  let textarea;
+  let statusBox;
+  let currentLabel;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -210,87 +214,116 @@
     }
   `;
 
-  GM_addStyle(styles);
-
-  const panel = document.createElement('div');
-  panel.id = 'ggsel-step-helper-panel';
-  panel.innerHTML = `
-    <h3>GGSEL Step Helper</h3>
-    <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">ID товаров (по одному в строке)</label>
-    <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
-    <div class="ggsel-helper-actions">
-      <button data-action="stage1">Этап 1</button>
-      <button data-action="stage2">Этап 2</button>
-      <button data-action="stage3">Этап 3</button>
-      <button data-action="runAll">Сделать всё</button>
-    </div>
-    <div class="ggsel-helper-status" id="ggsel-helper-status">Готово</div>
-    <div class="ggsel-helper-footer">
-      <span>Текущий ID:</span>
-      <strong id="ggsel-helper-current">${currentId ?? '—'}</strong>
-    </div>
-  `;
-  document.body.appendChild(panel);
-
-  const nav = document.createElement('div');
-  nav.id = 'ggsel-step-helper-nav';
-  nav.innerHTML = `
-    <button data-nav="prev">Предыдущий</button>
-    <button data-nav="next">Следующий</button>
-  `;
-  document.body.appendChild(nav);
-
-  const textarea = panel.querySelector('#ggsel-helper-ids');
-  const statusBox = panel.querySelector('#ggsel-helper-status');
-  const currentLabel = panel.querySelector('#ggsel-helper-current');
-
-  textarea.addEventListener('input', () => {
-    state.idsRaw = textarea.value;
-    saveState();
-    updateNavButtons();
-  });
-
-  panel.addEventListener('click', async (event) => {
-    const button = event.target.closest('button[data-action]');
-    if (!button) return;
-    const action = button.dataset.action;
-    disableControls(true);
-    try {
-      if (action === 'stage1') {
-        await runStage1();
-      } else if (action === 'stage2') {
-        await runStage2();
-      } else if (action === 'stage3') {
-        await runStage3();
-      } else if (action === 'runAll') {
-        await runAll();
-      }
-    } catch (err) {
-      setStatus(`Ошибка: ${err.message || err}`);
-      console.error('[GGSEL Step Helper] Ошибка действия', err);
-    } finally {
-      disableControls(false);
+  function addStyle(cssText) {
+    if (typeof GM_addStyle === 'function') {
+      GM_addStyle(cssText);
+    } else {
+      const style = document.createElement('style');
+      style.textContent = cssText;
+      document.head.appendChild(style);
     }
-  });
+  }
 
-  nav.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-nav]');
-    if (!button) return;
-    const direction = button.dataset.nav;
-    navigate(direction === 'next' ? 1 : -1);
-  });
+  function initUi() {
+    if (panel || !document.body) {
+      return;
+    }
+
+    addStyle(styles);
+
+    panel = document.createElement('div');
+    panel.id = 'ggsel-step-helper-panel';
+    panel.innerHTML = `
+      <h3>GGSEL Step Helper</h3>
+      <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">ID товаров (по одному в строке)</label>
+      <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
+      <div class="ggsel-helper-actions">
+        <button data-action="stage1">Этап 1</button>
+        <button data-action="stage2">Этап 2</button>
+        <button data-action="stage3">Этап 3</button>
+        <button data-action="runAll">Сделать всё</button>
+      </div>
+      <div class="ggsel-helper-status" id="ggsel-helper-status">Готово</div>
+      <div class="ggsel-helper-footer">
+        <span>Текущий ID:</span>
+        <strong id="ggsel-helper-current">${currentId ?? '—'}</strong>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    nav = document.createElement('div');
+    nav.id = 'ggsel-step-helper-nav';
+    nav.innerHTML = `
+      <button data-nav="prev">Предыдущий</button>
+      <button data-nav="next">Следующий</button>
+    `;
+    document.body.appendChild(nav);
+
+    textarea = panel.querySelector('#ggsel-helper-ids');
+    statusBox = panel.querySelector('#ggsel-helper-status');
+    currentLabel = panel.querySelector('#ggsel-helper-current');
+
+    textarea.addEventListener('input', () => {
+      state.idsRaw = textarea.value;
+      saveState();
+      updateNavButtons();
+    });
+
+    panel.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      disableControls(true);
+      try {
+        if (action === 'stage1') {
+          await runStage1();
+        } else if (action === 'stage2') {
+          await runStage2();
+        } else if (action === 'stage3') {
+          await runStage3();
+        } else if (action === 'runAll') {
+          await runAll();
+        }
+      } catch (err) {
+        setStatus(`Ошибка: ${err.message || err}`);
+        console.error('[GGSEL Step Helper] Ошибка действия', err);
+      } finally {
+        disableControls(false);
+      }
+    });
+
+    nav.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-nav]');
+      if (!button) return;
+      const direction = button.dataset.nav;
+      navigate(direction === 'next' ? 1 : -1);
+    });
+
+    if (currentId) {
+      syncIndexById(currentId);
+    } else {
+      updateNavButtons();
+      setStatus('Готово');
+    }
+  }
 
   function disableControls(isDisabled) {
-    panel.querySelectorAll('button[data-action]').forEach((btn) => {
-      btn.disabled = isDisabled;
-    });
-    nav.querySelectorAll('button[data-nav]').forEach((btn) => {
-      btn.disabled = isDisabled;
-    });
+    if (panel) {
+      panel.querySelectorAll('button[data-action]').forEach((btn) => {
+        btn.disabled = isDisabled;
+      });
+    }
+    if (nav) {
+      nav.querySelectorAll('button[data-nav]').forEach((btn) => {
+        btn.disabled = isDisabled;
+      });
+    }
   }
 
   function setStatus(message) {
-    statusBox.textContent = message;
+    if (statusBox) {
+      statusBox.textContent = message;
+    }
   }
 
   function syncIndexById(id) {
@@ -300,16 +333,20 @@
       state.lastIndex = idx;
       saveState();
     }
-    currentLabel.textContent = id ?? '—';
+    if (currentLabel) {
+      currentLabel.textContent = id ?? '—';
+    }
     updateNavButtons();
   }
 
   function updateNavButtons() {
     const ids = parseIds(state.idsRaw);
+    if (!nav) return;
     const prevBtn = nav.querySelector('button[data-nav="prev"]');
     const nextBtn = nav.querySelector('button[data-nav="next"]');
     if (!ids.length) {
-      prevBtn.disabled = nextBtn.disabled = true;
+      if (prevBtn) prevBtn.disabled = true;
+      if (nextBtn) nextBtn.disabled = true;
       state.lastIndex = 0;
       saveState();
       return;
@@ -317,8 +354,8 @@
     if (state.lastIndex < 0) state.lastIndex = 0;
     if (state.lastIndex >= ids.length) state.lastIndex = ids.length - 1;
     saveState();
-    prevBtn.disabled = state.lastIndex <= 0;
-    nextBtn.disabled = state.lastIndex >= ids.length - 1;
+    if (prevBtn) prevBtn.disabled = state.lastIndex <= 0;
+    if (nextBtn) nextBtn.disabled = state.lastIndex >= ids.length - 1;
   }
 
   function navigate(step) {
@@ -499,7 +536,7 @@
     const rect = el.getBoundingClientRect();
     const x = rect.left + Math.min(rect.width - 1, Math.max(1, rect.width / 2));
     const y = rect.top + Math.min(rect.height - 1, Math.max(1, rect.height / 2));
-    const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }; 
+    const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
     try {
       el.dispatchEvent(new PointerEvent('pointerdown', opts));
       el.dispatchEvent(new MouseEvent('mousedown', opts));
@@ -511,7 +548,14 @@
     }
   }
 
-  // синхронизация после навигации SPA
+  function ensureUi() {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initUi, { once: true });
+    } else {
+      initUi();
+    }
+  }
+
   const observer = new MutationObserver(() => {
     const newId = extractOfferId(location.href);
     if (newId && newId !== currentId) {
@@ -519,8 +563,19 @@
       syncIndexById(newId);
     }
   });
-  observer.observe(document.body, { childList: true, subtree: true });
 
-  updateNavButtons();
-  setStatus('Готово');
+  ensureUi();
+
+  const startObserving = () => {
+    if (document.body && !observer.started) {
+      observer.observe(document.body, { childList: true, subtree: true });
+      observer.started = true;
+    }
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startObserving, { once: true });
+  } else {
+    startObserving();
+  }
 })();
