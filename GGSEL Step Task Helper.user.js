@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.0
+// @version      0.3.1
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -442,7 +442,7 @@
     }
 
     setStatus(`Ищем товар ${targetId}...`);
-    const row = await waitFor(() => findOffersRow(targetId), 10000);
+    const row = await findRowAcrossPages(targetId);
     if (!row) {
       setStatus(`Товар ${targetId} не найден на странице`);
       return false;
@@ -543,7 +543,7 @@
       setStatus('Не найдено поле инструкции RU');
       return false;
     }
-    setReactValue(ruField, `Спасибо за покупку! Будем рады положительному отзыву :)\n\nНажмите кнопку "Получить товар"`);
+    setReactValue(ruField, `Спасибо за покупку! Будем рады положительному отзыву :)`);
 
     const enTab = await waitFor(() => findTabByText('EN'), 5000);
     if (!enTab) {
@@ -560,7 +560,7 @@
       setStatus('Не найдено поле инструкции EN');
       return false;
     }
-    setReactValue(enField, `Thank you for your purchase! We will be glad to receive a positive review :)\n\nClick the "Get the product" button`);
+    setReactValue(enField, `Thank you for your purchase! We will be glad to receive a positive review :)`);
     setStatus('Инструкции обновлены');
     return true;
   }
@@ -647,6 +647,66 @@
       return null;
     }
     return link.closest('tr') || link.closest('li') || link.closest('.ant-list-item') || link.closest('div');
+  }
+
+  function getActivePaginationPage() {
+    const active = document.querySelector('.ant-pagination-item-active');
+    return active ? active.textContent.trim() : null;
+  }
+
+  function getNextPaginationButton() {
+    const nextLi = document.querySelector('.ant-pagination-next:not(.ant-pagination-disabled)');
+    if (!nextLi) {
+      return null;
+    }
+    return nextLi.querySelector('button') || nextLi;
+  }
+
+  async function findRowAcrossPages(id) {
+    const visitedPages = new Set();
+    let loops = 0;
+    while (loops < 50) {
+      const row = await waitFor(() => findOffersRow(id), 2000);
+      if (row) {
+        return row;
+      }
+
+      const nextBtn = getNextPaginationButton();
+      if (!nextBtn) {
+        return null;
+      }
+
+      const currentPage = getActivePaginationPage();
+      if (currentPage) {
+        visitedPages.add(currentPage);
+        setStatus(`Товар не найден на странице ${currentPage}, переключаемся далее...`);
+      } else {
+        setStatus('Товар не найден, переключаемся далее...');
+      }
+
+      realisticClick(nextBtn);
+
+      const changedTo = await waitFor(() => {
+        const label = getActivePaginationPage();
+        if (!label || label === currentPage) {
+          return null;
+        }
+        return label;
+      }, 5000);
+
+      if (!changedTo) {
+        return null;
+      }
+
+      if (visitedPages.has(changedTo)) {
+        return null;
+      }
+      visitedPages.add(changedTo);
+
+      await sleep(500);
+      loops += 1;
+    }
+    return null;
   }
 
   function isOnOffersList() {
