@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.7
+// @version      0.3.8
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -697,10 +697,14 @@
       return false;
     }
 
-    setStatus(`Ищем товар ${targetId}...`);
-    const row = await findRowAcrossPages(targetId);
+    setStatus(`Ищем товар ${targetId} через поиск...`);
+    const row = await filterOffersById(targetId);
     if (!row) {
-      setStatus(`Товар ${targetId} не найден на странице`);
+      if (!getOffersSearchInput()) {
+        setStatus('Поле поиска товаров не найдено');
+      } else {
+        setStatus(`Товар ${targetId} не найден в результатах поиска`);
+      }
       return false;
     }
 
@@ -939,63 +943,36 @@
     return link.closest('tr') || link.closest('li') || link.closest('.ant-list-item') || link.closest('div');
   }
 
-  function getActivePaginationPage() {
-    const active = document.querySelector('.ant-pagination-item-active');
-    return active ? active.textContent.trim() : null;
+  function getOffersSearchInput() {
+    return document.querySelector('input[placeholder="Название или id"]');
   }
 
-  function getNextPaginationButton() {
-    const nextLi = document.querySelector('.ant-pagination-next:not(.ant-pagination-disabled)');
-    if (!nextLi) {
+  async function filterOffersById(id) {
+    const input = await waitFor(() => getOffersSearchInput(), 5000);
+    if (!input) {
       return null;
     }
-    return nextLi.querySelector('button') || nextLi;
-  }
 
-  async function findRowAcrossPages(id) {
-    const visitedPages = new Set();
-    let loops = 0;
-    while (loops < 50) {
-      const row = await waitFor(() => findOffersRow(id), 2000);
-      if (row) {
-        return row;
-      }
-
-      const nextBtn = getNextPaginationButton();
-      if (!nextBtn) {
-        return null;
-      }
-
-      const currentPage = getActivePaginationPage();
-      if (currentPage) {
-        visitedPages.add(currentPage);
-        setStatus(`Товар не найден на странице ${currentPage}, переключаемся далее...`);
-      } else {
-        setStatus('Товар не найден, переключаемся далее...');
-      }
-
-      realisticClick(nextBtn);
-
-      const changedTo = await waitFor(() => {
-        const label = getActivePaginationPage();
-        if (!label || label === currentPage) {
-          return null;
-        }
-        return label;
-      }, 5000);
-
-      if (!changedTo) {
-        return null;
-      }
-
-      if (visitedPages.has(changedTo)) {
-        return null;
-      }
-      visitedPages.add(changedTo);
-
-      await sleep(500);
-      loops += 1;
+    const currentValue = input.value.trim();
+    if (currentValue !== id) {
+      setReactValue(input, id);
+    } else {
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     }
+
+    const spinnerVisible = () => document.querySelector('.ant-spin-spinning');
+    if (spinnerVisible()) {
+      await waitFor(() => !spinnerVisible(), 5000, 100);
+    } else {
+      await sleep(200);
+    }
+
+    const row = await waitFor(() => findOffersRow(id), 4000);
+    if (row) {
+      return row;
+    }
+
     return null;
   }
 
