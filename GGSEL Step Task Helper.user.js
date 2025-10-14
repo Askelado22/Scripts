@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.1.1
+// @version      0.2.0
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
+// @match        https://seller.ggsel.net/offers
 // @match        https://seller.ggsel.net/offers/create*
 // @match        https://seller.ggsel.net/offers/edit/*
 // @grant        GM_addStyle
@@ -71,6 +72,7 @@
   let textarea;
   let statusBox;
   let currentLabel;
+  let deleteButton;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -173,6 +175,23 @@
       align-items: center;
       font-size: 13px;
       color: rgba(255,255,255,0.8);
+      gap: 12px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-footer-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-footer button.ggsel-delete-btn {
+      background: #ff6b6b;
+      color: #1a0f0f;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-footer button.ggsel-delete-btn:hover {
+      box-shadow: 0 6px 18px rgba(255, 107, 107, 0.35);
     }
     #ggsel-step-helper-panel .ggsel-helper-status {
       margin-top: 10px;
@@ -245,8 +264,11 @@
       </div>
       <div class="ggsel-helper-status" id="ggsel-helper-status">Готово</div>
       <div class="ggsel-helper-footer">
-        <span>Текущий ID:</span>
-        <strong id="ggsel-helper-current">${currentId ?? '—'}</strong>
+        <div class="ggsel-helper-footer-left">
+          <button data-action="delete" class="ggsel-delete-btn" style="display:none;">Удалить</button>
+          <span>Текущий ID:</span>
+        </div>
+        <strong id="ggsel-helper-current">${currentId ?? getCurrentTargetId() ?? '—'}</strong>
       </div>
     `;
     document.body.appendChild(panel);
@@ -262,6 +284,7 @@
     textarea = panel.querySelector('#ggsel-helper-ids');
     statusBox = panel.querySelector('#ggsel-helper-status');
     currentLabel = panel.querySelector('#ggsel-helper-current');
+    deleteButton = panel.querySelector('button[data-action="delete"]');
 
     textarea.addEventListener('input', () => {
       state.idsRaw = textarea.value;
@@ -269,27 +292,11 @@
       updateNavButtons();
     });
 
-    panel.addEventListener('click', async (event) => {
+    panel.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
       const action = button.dataset.action;
-      disableControls(true);
-      try {
-        if (action === 'stage1') {
-          await runStage1();
-        } else if (action === 'stage2') {
-          await runStage2();
-        } else if (action === 'stage3') {
-          await runStage3();
-        } else if (action === 'runAll') {
-          await runAll();
-        }
-      } catch (err) {
-        setStatus(`Ошибка: ${err.message || err}`);
-        console.error('[GGSEL Step Helper] Ошибка действия', err);
-      } finally {
-        disableControls(false);
-      }
+      runAction(action);
     });
 
     nav.addEventListener('click', (event) => {
@@ -299,12 +306,14 @@
       navigate(direction === 'next' ? 1 : -1);
     });
 
+    updateContextUi();
     if (currentId) {
       syncIndexById(currentId);
     } else {
       updateNavButtons();
       setStatus('Готово');
     }
+    bindHotkeys();
   }
 
   function disableControls(isDisabled) {
@@ -333,9 +342,7 @@
       state.lastIndex = idx;
       saveState();
     }
-    if (currentLabel) {
-      currentLabel.textContent = id ?? '—';
-    }
+    updateCurrentLabel();
     updateNavButtons();
   }
 
@@ -349,6 +356,7 @@
       if (nextBtn) nextBtn.disabled = true;
       state.lastIndex = 0;
       saveState();
+      updateCurrentLabel();
       return;
     }
     if (state.lastIndex < 0) state.lastIndex = 0;
@@ -356,6 +364,7 @@
     saveState();
     if (prevBtn) prevBtn.disabled = state.lastIndex <= 0;
     if (nextBtn) nextBtn.disabled = state.lastIndex >= ids.length - 1;
+    updateCurrentLabel();
   }
 
   function navigate(step) {
@@ -372,6 +381,7 @@
     state.lastIndex = nextIndex;
     saveState();
     const targetId = ids[nextIndex];
+    updateCurrentLabel();
     setStatus(`Переход к ${targetId}...`);
     goToOffer(targetId);
   }
@@ -391,6 +401,44 @@
     const ok3 = await runStage3();
     if (!ok3) return;
     setStatus('Готово!');
+  }
+
+  async function runDeleteAction() {
+    if (!isOnOffersList()) {
+      setStatus('Кнопка доступна на странице со списком товаров');
+      return false;
+    }
+    const targetId = getCurrentTargetId();
+    if (!targetId) {
+      setStatus('Нет выбранного ID для удаления');
+      return false;
+    }
+
+    setStatus(`Ищем товар ${targetId}...`);
+    const row = await waitFor(() => findOffersRow(targetId), 10000);
+    if (!row) {
+      setStatus(`Товар ${targetId} не найден на странице`);
+      return false;
+    }
+
+    const triggers = Array.from(row.querySelectorAll('.ant-dropdown-trigger'));
+    const menuTrigger = triggers.length ? triggers[triggers.length - 1] : null;
+    if (!menuTrigger) {
+      setStatus('Не найдена кнопка действий товара');
+      return false;
+    }
+
+    realisticClick(menuTrigger);
+
+    const withdrawItem = await waitFor(() => findDropdownItem('Снять с продажи'), 5000);
+    if (!withdrawItem) {
+      setStatus('Не найден пункт "Снять с продажи"');
+      return false;
+    }
+
+    realisticClick(withdrawItem);
+    setStatus(`Товар ${targetId} снят с продажи (удален)`);
+    return true;
   }
 
   async function runStage1({ autoNext = false } = {}) {
@@ -499,6 +547,23 @@
     });
   }
 
+  function getCurrentTargetId() {
+    const ids = parseIds(state.idsRaw);
+    if (!ids.length) {
+      return null;
+    }
+    let idx = state.lastIndex;
+    if (idx < 0) idx = 0;
+    if (idx >= ids.length) idx = ids.length - 1;
+    return ids[idx];
+  }
+
+  function updateCurrentLabel() {
+    if (!currentLabel) return;
+    const labelId = currentId ?? getCurrentTargetId();
+    currentLabel.textContent = labelId ?? '—';
+  }
+
   function setReactValue(element, value) {
     if (!element) return;
     const proto = element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -526,6 +591,91 @@
 
   function findTabByText(text) {
     return Array.from(document.querySelectorAll('[role="tab"]')).find((tab) => tab.textContent.trim().toLowerCase() === text.toLowerCase()) || null;
+  }
+
+  function findDropdownItem(text) {
+    const normalized = text.trim().toLowerCase();
+    return Array.from(document.querySelectorAll('.ant-dropdown-menu-item'))
+      .find((item) => item.textContent.trim().toLowerCase() === normalized && item.offsetParent !== null) || null;
+  }
+
+  function findOffersRow(id) {
+    const link = document.querySelector(`a[href="/offers/edit/${id}"]`);
+    if (!link) {
+      return null;
+    }
+    return link.closest('tr') || link.closest('li') || link.closest('.ant-list-item') || link.closest('div');
+  }
+
+  function isOnOffersList() {
+    return location.pathname === '/offers' || location.pathname === '/offers/';
+  }
+
+  function updateContextUi() {
+    if (!deleteButton) return;
+    deleteButton.style.display = isOnOffersList() ? '' : 'none';
+  }
+
+  let hotkeysBound = false;
+
+  function bindHotkeys() {
+    if (hotkeysBound) return;
+    window.addEventListener('keydown', handleHotkeys, true);
+    hotkeysBound = true;
+  }
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = target.tagName;
+    const editable = target.isContentEditable;
+    return editable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+
+  function handleHotkeys(event) {
+    if (event.defaultPrevented || event.repeat) return;
+    if (isTypingTarget(event.target)) return;
+    let action = null;
+    switch (event.key) {
+      case '1':
+        action = 'stage1';
+        break;
+      case '2':
+        action = 'stage2';
+        break;
+      case '3':
+        action = 'stage3';
+        break;
+      case '4':
+        action = 'runAll';
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    runAction(action);
+  }
+
+  async function runAction(action) {
+    if (!action) return;
+    disableControls(true);
+    try {
+      if (action === 'stage1') {
+        await runStage1();
+      } else if (action === 'stage2') {
+        await runStage2();
+      } else if (action === 'stage3') {
+        await runStage3();
+      } else if (action === 'runAll') {
+        await runAll();
+      } else if (action === 'delete') {
+        await runDeleteAction();
+      }
+    } catch (err) {
+      setStatus(`Ошибка: ${err.message || err}`);
+      console.error('[GGSEL Step Helper] Ошибка действия', err);
+    } finally {
+      disableControls(false);
+    }
   }
 
   function realisticClick(el) {
@@ -558,10 +708,15 @@
 
   const observer = new MutationObserver(() => {
     const newId = extractOfferId(location.href);
-    if (newId && newId !== currentId) {
+    if (newId !== currentId) {
       currentId = newId;
-      syncIndexById(newId);
+      if (newId) {
+        syncIndexById(newId);
+      } else {
+        updateCurrentLabel();
+      }
     }
+    updateContextUi();
   });
 
   ensureUi();
