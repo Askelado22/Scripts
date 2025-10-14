@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.5
+// @version      0.3.6
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -748,7 +748,7 @@
     setReactValue(input, 'https://key-steam.store/gift');
     setStatus('URL перенаправления заполнен');
     if (autoNext) {
-      const nextBtn = findButtonByText('Сохранить и далее');
+      const nextBtn = await waitFor(() => findButtonByText('Сохранить и далее'), 10000);
       if (nextBtn) {
         realisticClick(nextBtn);
         setStatus('Переходим к этапу 2...');
@@ -780,7 +780,7 @@
     }
     setStatus('"Безлимитный" активирован');
     if (autoNext) {
-      const nextBtn = findButtonByText('Сохранить и далее');
+      const nextBtn = await waitFor(() => findButtonByText('Сохранить и далее'), 10000);
       if (nextBtn) {
         realisticClick(nextBtn);
         setStatus('Переходим к этапу 3...');
@@ -882,9 +882,23 @@
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  function findButtonByText(text) {
-    text = text.trim().toLowerCase();
-    return Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent.trim().toLowerCase() === text) || null;
+  function findButtonByText(text, { visibleOnly = true } = {}) {
+    const normalized = text.trim().toLowerCase();
+    return (
+      Array.from(document.querySelectorAll('button')).find((btn) => {
+        if (btn.textContent.trim().toLowerCase() !== normalized) {
+          return false;
+        }
+        return !visibleOnly || isElementVisible(btn);
+      }) || null
+    );
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    if (el.offsetParent !== null) return true;
+    const rects = el.getClientRects?.();
+    return rects && rects.length > 0;
   }
 
   function findSegmentLabel(labelText) {
