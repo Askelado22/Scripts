@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.3
+// @version      0.3.4
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -75,6 +75,8 @@
   let currentLabel;
   let withdrawButton;
   let returnButton;
+  let progressFill;
+  let progressValue;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -152,6 +154,36 @@
     }
     #ggsel-step-helper-panel textarea:focus {
       outline: 2px solid #3fa9f5;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-progress {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 12px 0 8px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-progress-track {
+      position: relative;
+      flex: 1;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.18);
+      overflow: hidden;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-progress-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 0%;
+      background: #3fa9f5;
+      border-radius: inherit;
+      transition: width 0.2s ease;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-progress-value {
+      font-size: 13px;
+      font-weight: 600;
+      min-width: 60px;
+      text-align: right;
     }
     #ggsel-step-helper-panel .ggsel-helper-actions {
       display: grid;
@@ -363,6 +395,12 @@
       </div>
       <label style="display:block;font-size:13px;font-weight:500;margin-bottom:6px;">ID товаров (по одному в строке)</label>
       <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
+      <div class="ggsel-helper-progress">
+        <div class="ggsel-helper-progress-track" aria-hidden="true">
+          <div class="ggsel-helper-progress-fill"></div>
+        </div>
+        <span class="ggsel-helper-progress-value" id="ggsel-helper-progress-value">0/0</span>
+      </div>
       <div class="ggsel-helper-actions">
         <button data-action="stage1">Этап 1</button>
         <button data-action="stage2">Этап 2</button>
@@ -394,6 +432,8 @@
     currentLabel = panel.querySelector('#ggsel-helper-current');
     withdrawButton = panel.querySelector('button[data-action="withdraw"]');
     returnButton = panel.querySelector('button[data-action="return"]');
+    progressFill = panel.querySelector('.ggsel-helper-progress-fill');
+    progressValue = panel.querySelector('#ggsel-helper-progress-value');
 
     textarea.addEventListener('input', () => {
       state.idsRaw = textarea.value;
@@ -422,6 +462,7 @@
       updateNavButtons();
       setStatus('Готово');
     }
+    updateProgress();
     bindHotkeys();
   }
 
@@ -458,7 +499,10 @@
 
   function updateNavButtons() {
     const ids = parseIds(state.idsRaw);
-    if (!nav) return;
+    if (!nav) {
+      updateCurrentLabel();
+      return;
+    }
     const prevBtn = nav.querySelector('button[data-nav="prev"]');
     const nextBtn = nav.querySelector('button[data-nav="next"]');
     if (!ids.length) {
@@ -500,10 +544,32 @@
     const targetId = ids[nextIndex];
     state.currentId = targetId;
     saveState();
-    updateCurrentLabel();
-    updateContextUi();
+    updateNavButtons();
     setStatus(`Переход к ${targetId}...`);
     goToOffer(targetId);
+  }
+
+  function updateProgress() {
+    if (!progressFill || !progressValue) return;
+    const ids = parseIds(state.idsRaw);
+    const total = ids.length;
+    let index = -1;
+    if (total) {
+      const candidate = currentId ?? state.currentId ?? null;
+      if (candidate) {
+        index = ids.indexOf(candidate);
+      }
+      if (index === -1) {
+        let fallback = state.lastIndex;
+        if (fallback < 0) fallback = 0;
+        if (fallback >= total) fallback = total - 1;
+        index = total ? fallback : -1;
+      }
+    }
+    const currentNumber = index >= 0 ? index + 1 : 0;
+    const percent = total ? Math.max(0, Math.min(100, (currentNumber / total) * 100)) : 0;
+    progressFill.style.width = `${percent}%`;
+    progressValue.textContent = total ? `${currentNumber}/${total}` : '0/0';
   }
 
   async function runAll() {
@@ -694,9 +760,13 @@
   }
 
   function updateCurrentLabel() {
-    if (!currentLabel) return;
+    if (!currentLabel) {
+      updateProgress();
+      return;
+    }
     const labelId = currentId ?? state.currentId ?? getCurrentTargetId();
     currentLabel.textContent = labelId ?? '—';
+    updateProgress();
   }
 
   function setReactValue(element, value) {
