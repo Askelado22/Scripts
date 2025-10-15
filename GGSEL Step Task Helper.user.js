@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.3.9
+// @version      0.4.0
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -83,6 +83,9 @@
   let autoModeCheckbox;
   let collapseButton;
   let fabButton;
+
+  const NEXT_BUTTON_LABELS = ['Далее', 'Сохранить и далее'];
+  const SAVE_BUTTON_LABELS = ['Далее', 'Сохранить и далее', 'Сохранить и опубликовать'];
 
   let autoWithdrawTimer = null;
   let autoWithdrawRunning = false;
@@ -861,13 +864,13 @@
       return false;
     }
     if (autoNext) {
-      const nextBtn = await waitFor(() => findButtonByText('Сохранить и далее'), 10000);
+      const nextBtn = await waitFor(() => findButtonByAnyText(NEXT_BUTTON_LABELS), 10000);
       if (nextBtn) {
         realisticClick(nextBtn);
         setStatus('Переходим к этапу 2...');
         await sleep(400);
       } else {
-        setStatus('Не найдена кнопка "Сохранить и далее"');
+        setStatus(`Не найдена кнопка ${formatButtonNames(NEXT_BUTTON_LABELS)}`);
         return false;
       }
     }
@@ -893,19 +896,19 @@
     }
     setStatus('"Безлимитный" активирован');
     if (autoNext) {
-      const nextBtn = await waitFor(() => findButtonByText('Сохранить и далее'), 10000);
+      const nextBtn = await waitFor(() => findButtonByAnyText(NEXT_BUTTON_LABELS), 10000);
       if (nextBtn) {
         realisticClick(nextBtn);
         setStatus('Переходим к этапу 3...');
         await sleep(400);
         let stage3Ready = await waitFor(() => document.querySelector('#instructions_ru'), 2000);
         if (!stage3Ready) {
-          const retryBtn = findButtonByText('Сохранить и далее');
+          const retryBtn = findButtonByAnyText(NEXT_BUTTON_LABELS);
           if (!retryBtn) {
-            setStatus('Не найдена кнопка "Сохранить и далее" для перехода к этапу 3');
+            setStatus(`Не найдена кнопка ${formatButtonNames(NEXT_BUTTON_LABELS)} для перехода к этапу 3`);
             return false;
           }
-          setStatus('Страница не переключилась, повторно нажимаем "Сохранить и далее"...');
+          setStatus(`Страница не переключилась, повторно нажимаем ${formatButtonNames(NEXT_BUTTON_LABELS)}...`);
           realisticClick(retryBtn);
           await sleep(400);
         }
@@ -915,7 +918,7 @@
           return false;
         }
       } else {
-        setStatus('Не найдена кнопка "Сохранить и далее"');
+        setStatus(`Не найдена кнопка ${formatButtonNames(NEXT_BUTTON_LABELS)}`);
         return false;
       }
     }
@@ -1041,6 +1044,10 @@
     return hasImage;
   }
 
+  function formatButtonNames(labels) {
+    return labels.map((label) => `«${label}»`).join(' / ');
+  }
+
   function findButtonByText(text, { visibleOnly = true } = {}) {
     const normalized = text.trim().toLowerCase();
     return (
@@ -1051,6 +1058,16 @@
         return !visibleOnly || isElementVisible(btn);
       }) || null
     );
+  }
+
+  function findButtonByAnyText(texts, options) {
+    for (const text of texts) {
+      const button = findButtonByText(text, options);
+      if (button) {
+        return button;
+      }
+    }
+    return null;
   }
 
   function isElementVisible(el) {
@@ -1319,8 +1336,7 @@
   }
 
   async function runSaveAction() {
-    const candidates = ['Сохранить и далее', 'Сохранить и опубликовать'];
-    for (const text of candidates) {
+    for (const text of SAVE_BUTTON_LABELS) {
       const button = findButtonByText(text);
       if (button) {
         if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
