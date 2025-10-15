@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.0
+// @version      0.4.1
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -390,6 +390,13 @@
       box-shadow: 0 0 0 3px rgba(255, 77, 79, 0.35);
       transition: outline 0.15s ease, box-shadow 0.15s ease;
     }
+    .ggsel-helper-success-outline {
+      outline: 3px solid rgba(82, 196, 26, 0.95) !important;
+      outline-offset: 2px;
+      border-radius: 10px !important;
+      box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.35);
+      transition: outline 0.15s ease, box-shadow 0.15s ease;
+    }
     #ggsel-helper-fab {
       position: fixed;
       top: 16px;
@@ -405,6 +412,8 @@
       cursor: pointer;
       z-index: 2147483645;
       display: none;
+      align-items: center;
+      justify-content: center;
     }
     #ggsel-helper-fab:hover {
       box-shadow: 0 16px 28px rgba(63, 169, 245, 0.6);
@@ -641,7 +650,7 @@
       nav.style.display = collapsed ? 'none' : '';
     }
     if (fabButton) {
-      fabButton.style.display = collapsed ? '' : 'none';
+      fabButton.style.display = collapsed ? 'flex' : 'none';
     }
   }
 
@@ -1014,22 +1023,23 @@
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  function markError(element, hasError) {
+  function setValidationState(element, state) {
     if (!element) return;
-    element.classList.toggle('ggsel-helper-error-outline', !!hasError);
+    element.classList.toggle('ggsel-helper-error-outline', state === 'error');
+    element.classList.toggle('ggsel-helper-success-outline', state === 'success');
   }
 
   function validateCategoryPath() {
-    const wrapper = document.querySelector('span.ant-input-affix-wrapper-readonly');
-    if (!wrapper) {
+    const selectedPath = document.querySelector('[class*="style_selectedPath"]');
+    const wrapper = selectedPath?.closest('span.ant-input-affix-wrapper-readonly');
+    if (!wrapper || !selectedPath) {
       return false;
     }
-    const selectedPath = wrapper.querySelector('[class*="style_selectedPath"]');
     const text = selectedPath?.textContent || '';
     const hasGifts = text.includes('Ключи и гифты');
     const hasSteam = text.includes('Steam');
     const isValid = hasGifts && hasSteam;
-    markError(wrapper, !isValid);
+    setValidationState(wrapper, isValid ? 'success' : 'error');
     return isValid;
   }
 
@@ -1038,9 +1048,12 @@
     if (!wrapper) {
       return false;
     }
-    const highlightTarget = wrapper?.closest('[class*="style_previewUploadContainer"]') || wrapper;
-    const hasImage = !!wrapper?.querySelector('.ant-upload-list-item');
-    markError(highlightTarget, !hasImage);
+    const highlightTarget = wrapper.closest('[class*="style_previewUploadContainer"]') || wrapper;
+    if (!highlightTarget) {
+      return false;
+    }
+    const hasImage = !!wrapper.querySelector('.ant-upload-list-item');
+    setValidationState(highlightTarget, hasImage ? 'success' : 'error');
     return hasImage;
   }
 
@@ -1152,6 +1165,11 @@
       scheduleAutoWithdraw();
     } else {
       cancelAutoWithdraw();
+    }
+
+    if (!onList && document.querySelector('#redirectUrl')) {
+      validateCategoryPath();
+      validateCoverImage();
     }
   }
 
