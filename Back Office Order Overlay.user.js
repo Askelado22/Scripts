@@ -18,7 +18,18 @@
   const txt = n => (n ? n.textContent.trim() : '');
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   const isEmptyVal = v => !v || v === '-' || v === '—' || v === 'null' || v === 'undefined';
+  const esc = (str) => {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch] || ch));
+  };
   const copy = (s) => { try { navigator.clipboard?.writeText(s); } catch {} };
+  const profileCache = new Map();
 
   function findH(selector, text) {
     return Array.from(document.querySelectorAll(selector))
@@ -47,6 +58,61 @@
     if (!el) return '';
     const a = Array.from(el.querySelectorAll('a')).find(x => norm(x.textContent).toLowerCase().includes(labelPart.toLowerCase()));
     return a ? a.href : '';
+  }
+
+  async function fetchProfileData(url) {
+    if (!url) return null;
+    try {
+      const absolute = new URL(url, location.origin).href;
+      if (profileCache.has(absolute)) return profileCache.get(absolute);
+      const res = await fetch(absolute, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const data = parseProfileHtml(html, absolute);
+      profileCache.set(absolute, data);
+      return data;
+    } catch (e) {
+      log('Failed to load profile', url, e);
+      return { error: true, url };
+    }
+  }
+
+  function parseProfileHtml(html, url) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const firstBox = doc.querySelector('.content .box');
+    const title = norm(txt(firstBox?.querySelector('.box-title')));
+    const dl = firstBox?.querySelector('dl');
+    const fields = [];
+    if (dl) {
+      const dts = Array.from(dl.querySelectorAll('dt'));
+      const seen = new Set();
+      for (const dt of dts) {
+        const label = norm(txt(dt));
+        const dd = dt.nextElementSibling;
+        if (!label || !dd) continue;
+        const value = norm(txt(dd));
+        if (isEmptyVal(value) || seen.has(label)) continue;
+        seen.add(label);
+        fields.push({ label, value });
+      }
+    }
+
+    const chatLinkEl = Array.from(doc.querySelectorAll('a')).find(a => norm(txt(a)).toLowerCase().includes('написать в лс'));
+    const relatedDropdown = Array.from(doc.querySelectorAll('.dropdown')).find(drop => {
+      const btn = drop.querySelector('button');
+      return btn && norm(txt(btn)).toLowerCase().includes('просмотр связанных данных');
+    });
+    const relatedLinks = relatedDropdown
+      ? Array.from(relatedDropdown.querySelectorAll('ul li a')).map(a => ({
+        label: norm(txt(a)),
+        href: new URL(a.getAttribute('href') || a.href, url).href,
+      })).filter(link => link.label && link.href)
+      : [];
+
+    const chatLink = chatLinkEl ? new URL(chatLinkEl.getAttribute('href') || chatLinkEl.href, url).href : '';
+
+    return { title, fields, chatLink, relatedLinks, url };
   }
 
   // ---------- collect ----------
@@ -189,9 +255,11 @@
 .vui-total b{font-size:16px}
 .vui-actions .vui-btn{margin-left:8px}
 
-.vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2}
 .vui-btn--primary{background:var(--vui-accent);color:#111}
 .vui-btn--danger{border-color:#4a2222;background:#2a1212}
+.vui-btn--ghost{background:transparent}
+.vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024}
 
 .vui-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}
 .vui-col-7{grid-column:span 7}
@@ -212,17 +280,109 @@
 .vui-mini__head{gap:12px}
 .vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text)}
 .vui-metaBox{flex:1}
+.vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.vui-mini__head{align-items:flex-start}
 .vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .vui-name{font-weight:700;color:var(--vui-text);text-decoration:none}
 .vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text)}
 .vui-badge.ip{cursor:pointer}
 .vui-muted{opacity:.7;color:var(--vui-muted)}
 
+.vui-profileDetails{display:none;padding:12px 14px;border-top:1px dashed #222;background:#0f1012;border-bottom-left-radius:12px;border-bottom-right-radius:12px}
+.vui-profileDetails.open{display:block}
+.vui-profileDetails .vui-empty{color:var(--vui-muted);font-size:13px}
+.vui-detailGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:4px}
+.vui-detailItem{padding:10px;border:1px solid #1f2023;border-radius:10px;background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:4px}
+.vui-detailLabel{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
+.vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word}
+.vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+
 .vui-old-hidden{display:none!important}
 `;
     const s = document.createElement('style');
     s.textContent = css;
     document.head.appendChild(s);
+  }
+
+  function renderProfileDetails(profile, fallbackUrl) {
+    if (!profile || profile.error) {
+      const openBtn = fallbackUrl
+        ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть профиль</a></div>`
+        : '';
+      return `<div class="vui-empty">Не удалось загрузить данные профиля.</div>${openBtn}`;
+    }
+
+    const detailItems = (profile.fields || []).map(field => `
+      <div class="vui-detailItem">
+        <div class="vui-detailLabel">${esc(field.label)}</div>
+        <div class="vui-detailValue">${esc(field.value)}</div>
+      </div>
+    `).join('');
+
+    const detailsBlock = detailItems
+      ? `<div class="vui-detailGrid">${detailItems}</div>`
+      : '<div class="vui-empty">Нет данных профиля.</div>';
+
+    const openProfileBtn = fallbackUrl
+      ? `<a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть профиль</a>`
+      : '';
+
+    const relatedButtons = (profile.relatedLinks || [])
+      .map(link => `<a class="vui-btn" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(link.label)}</a>`)
+      .join('');
+
+    const actionsBlock = (openProfileBtn || relatedButtons)
+      ? `<div class="vui-relatedActions">${openProfileBtn}${relatedButtons}</div>`
+      : '';
+
+    return `${detailsBlock}${actionsBlock}`;
+  }
+
+  function applyProfileData(wrap, role, profile, fallbackUrl) {
+    const panel = wrap?.querySelector(`.vui-profileDetails[data-role="${role}"]`);
+    if (!panel) return;
+    panel.innerHTML = renderProfileDetails(profile, fallbackUrl);
+
+    const chatBtn = wrap.querySelector(`.vui-chatBtn[data-role="${role}"]`);
+    if (chatBtn) {
+      if (profile && !profile.error && profile.chatLink) {
+        chatBtn.href = profile.chatLink;
+        chatBtn.style.display = 'inline-flex';
+      } else {
+        chatBtn.style.display = 'none';
+      }
+    }
+  }
+
+  function setupProfileToggles(wrap) {
+    wrap?.querySelectorAll('.vui-profileToggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const role = btn.dataset.role;
+        const panel = wrap.querySelector(`.vui-profileDetails[data-role="${role}"]`);
+        if (!panel) return;
+        const open = !panel.classList.contains('open');
+        panel.classList.toggle('open', open);
+        btn.classList.toggle('is-open', open);
+      });
+    });
+  }
+
+  function loadProfileSections(data, wrap) {
+    const jobs = [];
+    if (data.seller.profile) {
+      jobs.push(fetchProfileData(data.seller.profile)
+        .then(profile => applyProfileData(wrap, 'seller', profile, data.seller.profile))
+        .catch(() => applyProfileData(wrap, 'seller', { error: true }, data.seller.profile)));
+    }
+    if (data.buyer.profile) {
+      jobs.push(fetchProfileData(data.buyer.profile)
+        .then(profile => applyProfileData(wrap, 'buyer', profile, data.buyer.profile))
+        .catch(() => applyProfileData(wrap, 'buyer', { error: true }, data.buyer.profile)));
+    }
+
+    if (jobs.length) {
+      Promise.allSettled(jobs).then(() => log('Profile panels updated.'));
+    }
   }
 
   // ---------- build ----------
@@ -328,8 +488,14 @@
                 </div>
                 ${safe(data.seller.email) ? `<div class="vui-metaRow"><span>${data.seller.email}</span></div>` : ''}
               </div>
-              ${data.seller.profile ? `<a class="vui-btn" href="${data.seller.profile}">Профиль</a>` : ''}
+              <div class="vui-mini__actions">
+                <a class="vui-btn vui-btn--primary vui-chatBtn" data-role="seller" target="_blank" rel="noopener noreferrer" style="display:none;">Чат</a>
+                ${data.seller.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="seller">Профиль</button>` : ''}
+              </div>
             </header>
+            <div class="vui-profileDetails" data-role="seller">
+              ${data.seller.profile ? '<div class="vui-empty">Загрузка профиля…</div>' : '<div class="vui-empty">Ссылка на профиль не найдена.</div>'}
+            </div>
           </article>
 
           <article class="vui-mini">
@@ -345,8 +511,14 @@
                   ${safe(data.buyer.ip) ? `<span class="vui-badge vui-badge ip" title="Клик — скопировать IP">${data.buyer.ip}</span>` : ''}
                 </div>
               </div>
-              ${data.buyer.profile ? `<a class="vui-btn" href="${data.buyer.profile}">Профиль</a>` : ''}
+              <div class="vui-mini__actions">
+                <a class="vui-btn vui-btn--primary vui-chatBtn" data-role="buyer" target="_blank" rel="noopener noreferrer" style="display:none;">Чат</a>
+                ${data.buyer.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="buyer">Профиль</button>` : ''}
+              </div>
             </header>
+            <div class="vui-profileDetails" data-role="buyer">
+              ${data.buyer.profile ? '<div class="vui-empty">Загрузка профиля…</div>' : '<div class="vui-empty">Ссылка на профиль не найдена.</div>'}
+            </div>
           </article>
 
           ${data.reviewExists ? `
@@ -380,9 +552,11 @@
     const content = document.querySelector('section.content');
     content?.insertBefore(wrap, content.firstElementChild?.nextElementSibling || content.firstChild);
 
+    setupProfileToggles(wrap);
     // copy handlers
     wrap.querySelector('.vui-badge.ip')?.addEventListener('click', () => copy(data.buyer.ip));
     wrap.querySelector('.vui-uuid')?.addEventListener('click', () => copy(data.order.uuid));
+    return wrap;
   }
 
   // ---------- main ----------
@@ -395,7 +569,8 @@
     log('Collected:', data);
 
     hideOld(data.domRefs);
-    buildUI(data);
+    const wrap = buildUI(data);
+    loadProfileSections(data, wrap);
     log('Overlay ready (namespaced styles).');
   }
 
