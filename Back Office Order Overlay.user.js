@@ -400,7 +400,7 @@
   function injectStyles() {
     const css = `
 :root{
-  --vui-bg:#050506;
+  --vui-bg:#13141a;
   --vui-card:#111214;
   --vui-line:#1e1f22;
   --vui-text:#eaeaea;
@@ -438,10 +438,8 @@ body{color-scheme:dark;}
 .vui-headStat b{font-size:15px;}
 .vui-headFooter{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;}
 .vui-headActions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;}
-.vui-orderNumber{border:none;background:transparent;color:var(--vui-text);font:inherit;padding:0 6px;cursor:pointer;border-radius:6px;transition:background .2s ease,color .2s ease;position:relative;}
-.vui-orderNumber::after{content:'копировать';position:absolute;left:50%;bottom:-18px;transform:translateX(-50%);font-size:11px;color:var(--vui-muted);opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.vui-orderNumber{border:none;background:transparent;color:var(--vui-text);font:inherit;padding:0 6px;cursor:pointer;border-radius:6px;transition:background .2s ease,color .2s ease;}
 .vui-orderNumber:hover{color:var(--vui-accent);background:rgba(76,155,255,.08);}
-.vui-orderNumber:hover::after{opacity:1;}
 .vui-orderNumber:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-isCopied{animation:vuiCopyPulse .9s ease-out;}
 .vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text);}
@@ -477,6 +475,9 @@ body{color-scheme:dark;}
 .vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .vui-name{font-weight:700;color:var(--vui-text);text-decoration:none;}
+.vui-copyable{border:none;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer;text-align:left;position:relative;transition:color .2s ease;}
+.vui-copyable:hover{color:var(--vui-accent);}
+.vui-copyable:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
 .vui-productTitle:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
 .vui-productTitle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
@@ -487,6 +488,7 @@ body{color-scheme:dark;}
 .vui-linkAction:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text);}
 .vui-badge.ip{cursor:pointer;}
+.vui-copyable.vui-isCopied{color:var(--vui-accent);text-shadow:0 0 10px rgba(76,155,255,.4);}
 .vui-muted{opacity:.7;color:var(--vui-muted);}
 .vui-profileDetails{display:none;padding:12px 14px;border-top:1px dashed #222;background:#0f1012;border-bottom-left-radius:12px;border-bottom-right-radius:12px;}
 .vui-profileDetails.open{display:block;}
@@ -511,12 +513,12 @@ body{color-scheme:dark;}
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
 .vui-productDescription{margin-top:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;color:var(--vui-text);}
 .vui-desc{margin:0;display:flex;flex-direction:column;}
-.vui-descToggle{appearance:none;border:none;background:none;color:inherit;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-weight:600;padding:12px 14px;cursor:pointer;transition:color .2s ease;}
+.vui-descToggle{appearance:none;border:none;background:none;color:inherit;text-align:left;display:flex;flex-direction:row;align-items:center;gap:12px;font-weight:600;padding:12px 14px;cursor:pointer;transition:color .2s ease;}
 .vui-descToggle[disabled]{cursor:default;}
 .vui-descToggle[disabled]:hover{color:inherit;}
 .vui-descToggle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-descToggle:hover{color:var(--vui-accent);}
-.vui-descToggleText{font-size:12px;color:var(--vui-accent);letter-spacing:.04em;text-transform:uppercase;}
+.vui-descToggleText{font-size:12px;color:var(--vui-accent);letter-spacing:.04em;text-transform:uppercase;margin-left:auto;}
 .vui-desc[data-collapsible="false"] .vui-descToggle{cursor:default;}
 .vui-desc[data-collapsible="false"] .vui-descToggle:hover{color:inherit;}
 .vui-desc[data-collapsible="false"] .vui-descToggleText{color:var(--vui-muted);}
@@ -525,7 +527,13 @@ body{color-scheme:dark;}
 .vui-descBody{padding:12px 14px;border-top:1px dashed #1f2023;line-height:1.5;display:flex;flex-direction:column;gap:8px;}
 .vui-descBody p{margin:0;line-height:1.5;}
 .vui-descBody p+p{margin-top:4px;}
-.vui-footerNote{margin-top:24px;padding:12px 0 24px;color:var(--vui-muted);font-size:12px;text-align:center;border-top:1px solid var(--vui-line);}
+.vui-footerNote{margin-top:0;padding:12px 0 24px;color:var(--vui-muted);font-size:12px;text-align:center;border-top:1px solid var(--vui-line);}
+.vui-acc>summary{cursor:pointer;display:flex;align-items:center;gap:8px;font-weight:600;list-style:none;color:inherit;transition:color .2s ease;}
+.vui-acc>summary::-webkit-details-marker{display:none;}
+.vui-acc>summary::after{content:'▾';margin-left:auto;font-size:12px;color:var(--vui-muted);transition:transform .2s ease,color .2s ease;}
+.vui-acc[open]>summary::after{transform:rotate(180deg);}
+.vui-acc>summary:hover{color:var(--vui-accent);}
+.vui-acc>summary:hover::after{color:var(--vui-accent);}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody{max-height:7.2em;overflow:hidden;position:relative;}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody::after{content:'';position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(0deg,var(--vui-card) 0%,rgba(17,18,20,0) 70%);pointer-events:none;}
 .vui-badge.ip.vui-isCopied,.vui-orderNumber.vui-isCopied{box-shadow:0 0 0 0 rgba(76,155,255,.4);}
@@ -1023,7 +1031,7 @@ body{color-scheme:dark;}
                   <a class="vui-name" href="${data.seller.profile || '#'}">${safe(data.seller.name)}</a>
                   ${rate(data.seller.rating) ? `<span class="vui-badge">${rate(data.seller.rating)}</span>` : ''}
                 </div>
-                ${safe(data.seller.email) ? `<div class="vui-metaRow"><span>${data.seller.email}</span></div>` : ''}
+                ${safe(data.seller.email) ? `<div class="vui-metaRow"><button class="vui-copyable" type="button" data-copy-value="${esc(data.seller.email)}" title="Клик — скопировать email">${esc(data.seller.email)}</button></div>` : ''}
               </div>
               <div class="vui-mini__actions">
                 ${data.seller.profile ? `<a class="vui-btn vui-btn--ghost" data-chat-role="seller" style="display:none;">Чат</a>` : ''}
@@ -1043,7 +1051,7 @@ body{color-scheme:dark;}
                   <a class="vui-name" href="${data.buyer.profile || '#'}">${safe(data.buyer.name)}</a>
                 </div>
                 <div class="vui-metaRow">
-                  ${safe(data.buyer.email) ? `<span>${data.buyer.email}</span>` : ''}
+                  ${safe(data.buyer.email) ? `<button class="vui-copyable" type="button" data-copy-value="${esc(data.buyer.email)}" title="Клик — скопировать email">${esc(data.buyer.email)}</button>` : ''}
                   ${safe(data.buyer.ip) ? `<span class="vui-badge vui-badge ip" title="Клик — скопировать IP">${data.buyer.ip}</span>` : ''}
                 </div>
               </div>
@@ -1110,6 +1118,15 @@ body{color-scheme:dark;}
         if (targetValue) copy(targetValue, orderNumberEl);
       });
     }
+
+    wrap.querySelectorAll('[data-copy-value]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        const value = btn.getAttribute('data-copy-value');
+        if (!value) return;
+        event.preventDefault();
+        copy(value, btn);
+      });
+    });
 
     const productTitleEl = wrap.querySelector('[data-product-title]');
     if (productTitleEl) {
