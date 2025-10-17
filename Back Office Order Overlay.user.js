@@ -415,7 +415,8 @@ body{color-scheme:dark;}
   padding:0 16px 32px;
 }
 .vui-wrap *{box-sizing:border-box;}
-.vui-topGrid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px;margin-top:16px;}
+.vui-topGrid{display:flex;gap:16px;margin-top:16px;align-items:flex-start;flex-wrap:wrap;}
+.vui-topGrid>.vui-head{flex:1 1 55%;min-width:320px;}
 .vui-head{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;}
 .vui-headTitle{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .vui-headLine{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
@@ -436,7 +437,7 @@ body{color-scheme:dark;}
 .vui-chronoMoment{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:600;color:var(--vui-text);}
 .vui-chronoTime{font-size:13px;}
 .vui-chronoDate{font-size:12px;color:var(--vui-muted);}
-.vui-topSide{display:flex;flex-direction:column;gap:12px;}
+.vui-topSide{display:flex;flex-direction:column;gap:12px;flex:1 1 35%;min-width:280px;}
 .vui-actionsBar{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2;}
 .vui-btn--primary{background:var(--vui-accent);color:#111;}
@@ -459,6 +460,11 @@ body{color-scheme:dark;}
 .vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .vui-name{font-weight:700;color:var(--vui-text);text-decoration:none;}
+.vui-linkAction{cursor:pointer;color:inherit;text-decoration:none;position:relative;display:inline-flex;align-items:center;gap:4px;padding-bottom:2px;}
+.vui-linkAction::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;background:transparent;transition:background .2s ease;}
+.vui-linkAction:hover{color:var(--vui-accent);}
+.vui-linkAction:hover::after{background:var(--vui-accent);}
+.vui-linkAction:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text);}
 .vui-badge.ip{cursor:pointer;}
 .vui-muted{opacity:.7;color:var(--vui-muted);}
@@ -470,9 +476,9 @@ body{color-scheme:dark;}
 .vui-detailLabel{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
 .vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word;}
 .vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
-.vui-card--chat{display:flex;flex-direction:column;min-height:360px;}
-.vui-card--chat .vui-card__body{flex:1;display:flex;padding:0;}
-.vui-chatBox{flex:1;overflow:auto;min-height:0;padding:12px 14px;display:flex;flex-direction:column;gap:12px;}
+.vui-card--chat{display:flex;flex-direction:column;}
+.vui-card--chat .vui-card__body{padding:0;}
+.vui-chatBox{max-height:70vh;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px;}
 .vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center;}
 .vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02);}
 .vui-chatAvatar{width:40px;height:40px;border-radius:10px;background:#1f2023;display:grid;place-items:center;font-weight:700;color:var(--vui-text);overflow:hidden;}
@@ -487,7 +493,7 @@ body{color-scheme:dark;}
 .vui-productDescription p:last-child{margin-bottom:0;}
 .vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
-  .vui-topGrid{grid-template-columns:1fr;}
+  .vui-topGrid{flex-direction:column;}
   .vui-grid{grid-template-columns:1fr;}
 }
 @media(max-width:1024px){
@@ -540,15 +546,6 @@ body{color-scheme:dark;}
     if (!panel) return;
     panel.innerHTML = renderProfileDetails(profile, fallbackUrl);
 
-    const chatBtn = wrap.querySelector(`.vui-chatBtn[data-role="${role}"]`);
-    if (chatBtn) {
-      if (profile && !profile.error && profile.chatLink) {
-        chatBtn.href = profile.chatLink;
-        chatBtn.style.display = 'inline-flex';
-      } else {
-        chatBtn.style.display = 'none';
-      }
-    }
   }
 
   function setupProfileToggles(wrap) {
@@ -582,19 +579,13 @@ body{color-scheme:dark;}
     }
   }
 
-  function renderChatContent(chat, fallbackUrl) {
+  function renderChatContent(chat) {
     if (!chat || chat.error) {
-      const openBtn = fallbackUrl
-        ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
-        : '';
-      return `<div class="vui-empty">Не удалось загрузить диалог.</div>${openBtn}`;
+      return `<div class="vui-empty">Не удалось загрузить диалог.</div>`;
     }
 
     if (!chat.messages || !chat.messages.length) {
-      const openBtn = fallbackUrl
-        ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
-        : '';
-      return `<div class="vui-empty">Диалог пуст.</div>${openBtn}`;
+      return `<div class="vui-empty">Диалог пуст.</div>`;
     }
 
     const items = chat.messages.map(msg => {
@@ -617,11 +608,7 @@ body{color-scheme:dark;}
       `;
     }).join('');
 
-    const openBtn = fallbackUrl
-      ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
-      : '';
-
-    return `${items}${openBtn}`;
+    return `${items}`;
   }
 
   function loadChatSection(data, wrap) {
@@ -632,10 +619,10 @@ body{color-scheme:dark;}
 
     fetchChatData(data.actions.chat)
       .then(chat => {
-        panel.innerHTML = renderChatContent(chat, data.actions.chat);
+        panel.innerHTML = renderChatContent(chat);
       })
       .catch(() => {
-        panel.innerHTML = renderChatContent({ error: true }, data.actions.chat);
+        panel.innerHTML = renderChatContent({ error: true });
       });
   }
 
@@ -746,8 +733,17 @@ body{color-scheme:dark;}
     const totalBlock = safe(data.cost.total)
       ? `<div class="vui-headStat"><span class="vui-muted">Итого</span><b>${esc(data.cost.total)}</b></div>`
       : '';
+    const rewardLabelTop = data.actions.reward
+      ? `<a class="vui-muted vui-linkAction" href="${data.actions.reward}">Награда продавцу</a>`
+      : '<span class="vui-muted">Награда продавцу</span>';
+    const paymentLabel = data.actions.ps
+      ? `<a class="vui-linkAction" href="${data.actions.ps}">Платёжная система</a>`
+      : 'Платёжная система';
+    const rewardLabelPayment = data.actions.reward
+      ? `<a class="vui-linkAction" href="${data.actions.reward}">Награда продавцу</a>`
+      : 'Награда продавцу';
     const rewardBlock = safe(data.cost.seller_reward)
-      ? `<div class="vui-headStat"><span class="vui-muted">Награда продавцу</span><b>${esc(data.cost.seller_reward)}</b></div>`
+      ? `<div class="vui-headStat">${rewardLabelTop}<b>${esc(data.cost.seller_reward)}</b></div>`
       : '';
     const statsMarkup = totalBlock || rewardBlock
       ? `<div class="vui-headStats">${totalBlock}${rewardBlock}</div>`
@@ -757,8 +753,6 @@ body{color-scheme:dark;}
       data.actions.close ? `<a class="vui-btn" href="${data.actions.close}">Закрыть сделку</a>` : '',
       data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${data.actions.refund}">Возврат</a>` : '',
       data.actions.edit ? `<a class="vui-btn" href="${data.actions.edit}">Редактировать</a>` : '',
-      data.actions.ps ? `<a class="vui-btn" href="${data.actions.ps}">Платёжная система</a>` : '',
-      data.actions.reward ? `<a class="vui-btn" href="${data.actions.reward}">Награда продавцу</a>` : '',
     ].filter(Boolean).join('');
 
     const wrap = document.createElement('div');
@@ -788,7 +782,6 @@ body{color-scheme:dark;}
                 ${safe(data.seller.email) ? `<div class="vui-metaRow"><span>${data.seller.email}</span></div>` : ''}
               </div>
               <div class="vui-mini__actions">
-                <a class="vui-btn vui-btn--primary vui-chatBtn" data-role="seller" target="_blank" rel="noopener noreferrer" style="display:none;">Чат</a>
                 ${data.seller.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="seller">Профиль</button>` : ''}
               </div>
             </header>
@@ -811,7 +804,6 @@ body{color-scheme:dark;}
                 </div>
               </div>
               <div class="vui-mini__actions">
-                <a class="vui-btn vui-btn--primary vui-chatBtn" data-role="buyer" target="_blank" rel="noopener noreferrer" style="display:none;">Чат</a>
                 ${data.buyer.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="buyer">Профиль</button>` : ''}
               </div>
             </header>
@@ -850,12 +842,12 @@ body{color-scheme:dark;}
           <article class="vui-card">
             <header class="vui-card__head"><div class="vui-title">Оплата и комиссии</div></header>
             <div class="vui-card__body" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
-              ${safe(data.order.payment_system) ? `<div class="vui-line"><span>Платёжная система</span><b>${data.order.payment_system}</b></div>` : ''}
+              ${safe(data.order.payment_system) ? `<div class="vui-line"><span>${paymentLabel}</span><b>${data.order.payment_system}</b></div>` : ''}
               ${safe(data.order.quantity) ? `<div class="vui-line"><span>Количество</span><b>${data.order.quantity}</b></div>` : ''}
               ${safe(data.cost.fee_cat) ? `<div class="vui-line"><span>Комиссия категории</span><b>${data.cost.fee_cat}${safe(data.cost.fee_cat_pct) ? ` (${data.cost.fee_cat_pct})` : ''}</b></div>` : ''}
               ${safe(data.cost.fee_ps) ? `<div class="vui-line"><span>Комиссия ПС</span><b>${data.cost.fee_ps}${safe(data.cost.fee_ps_pct) ? ` (${data.cost.fee_ps_pct})` : ''}</b></div>` : ''}
               ${safe(data.cost.total) ? `<div class="vui-line"><span>Итого</span><b>${data.cost.total}</b></div>` : ''}
-              ${safe(data.cost.seller_reward) ? `<div class="vui-line"><span>Награда продавцу</span><b>${data.cost.seller_reward}</b></div>` : ''}
+              ${safe(data.cost.seller_reward) ? `<div class="vui-line"><span>${rewardLabelPayment}</span><b>${data.cost.seller_reward}</b></div>` : ''}
             </div>
           </article>
 
@@ -870,8 +862,7 @@ body{color-scheme:dark;}
           ${data.actions.chat ? `
           <article class="vui-card vui-card--chat">
             <header class="vui-card__head">
-              <div class="vui-title">Диалог</div>
-              <a class="vui-btn vui-btn--ghost" href="${data.actions.chat}" target="_blank" rel="noopener noreferrer">Открыть оригинал</a>
+              <div class="vui-title">${data.actions.chat ? `<a class="vui-linkAction" href="${data.actions.chat}" target="_blank" rel="noopener noreferrer">Диалог</a>` : 'Диалог'}</div>
             </header>
             <div class="vui-card__body">
               <div class="vui-chatBox" data-chat-panel>
