@@ -389,102 +389,111 @@
   // ---------- styles (fully namespaced) ----------
   function injectStyles() {
     const css = `
-.vui-wrap{ --vui-bg:#0b0b0c; --vui-card:#111214; --vui-line:#1e1f22; --vui-text:#eaeaea; --vui-muted:#9aa1a7;
-          --vui-accent:#ffd369; --vui-ok:#2ea043; --vui-info:#2f81f7; --vui-danger:#f85149; margin-top:12px; }
-.vui-wrap *{ box-sizing:border-box; }
-.vui-head{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:18px;align-items:start;padding:14px 16px;border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card)}
-.vui-headMain{display:flex;flex-direction:column;gap:10px}
-.vui-headSide{display:flex;flex-direction:column;gap:12px}
-.vui-headLine{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.vui-head h1{margin:0;font-size:18px;color:var(--vui-text)}
-.vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text)}
-.vui-chip--success{background:rgba(46,160,67,.15);border-color:#295f36;color:#43d17a}
-.vui-chip--info{background:rgba(47,129,247,.15);border-color:#2f81f7;color:#9ec3ff}
-.vui-chip--warn{background:rgba(255,211,105,.15);border-color:#977f2d;color:#ffd369}
-.vui-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--vui-muted);align-items:center}
-.vui-headMeta{display:flex;gap:18px;flex-wrap:wrap;justify-content:space-between;align-items:flex-start}
-.vui-headAmounts{display:flex;gap:16px;flex-wrap:wrap}
-.vui-headAmount{display:flex;flex-direction:column;gap:2px;color:var(--vui-text);font-size:13px}
-.vui-headAmount b{font-size:15px}
-.vui-uuidBadge{padding:4px 8px;border-radius:8px;border:1px dashed #333;color:var(--vui-muted);cursor:pointer;font-size:12px}
-.vui-uuidBadge:hover{color:var(--vui-text);border-color:var(--vui-accent)}
-.vui-chrono{position:relative;display:flex;gap:18px;align-items:flex-start;padding-top:8px;margin-top:4px}
-.vui-chrono::before{content:"";position:absolute;top:18px;left:8px;right:8px;height:2px;background:#1f2023}
-.vui-chronoItem{position:relative;flex:1;min-width:120px;padding-top:12px}
-.vui-chronoItem::after{content:"";position:absolute;top:9px;left:8px;width:12px;height:12px;border-radius:50%;background:var(--vui-card);border:2px solid var(--vui-accent)}
-.vui-chronoTop{display:flex;align-items:center;gap:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
-.vui-chronoLabel{font-weight:600}
-.vui-chronoTime{font-weight:600;color:var(--vui-text);text-transform:none;font-size:13px;letter-spacing:0}
-.vui-chronoDate{margin-top:4px;color:var(--vui-muted);font-size:12px}
-.vui-chrono--single::before{display:none}
-.vui-actionsBar{margin-top:20px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-
-.vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2}
-.vui-btn--primary{background:var(--vui-accent);color:#111}
-.vui-btn--danger{border-color:#4a2222;background:#2a1212}
-.vui-btn--ghost{background:transparent}
-.vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024}
-
-.vui-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}
-.vui-col-8{grid-column:span 8}
-.vui-col-4{grid-column:span 4}
-@media(max-width:1200px){.vui-head{grid-template-columns:1fr}.vui-col-8,.vui-col-4{grid-column:span 12}}
-
-.vui-card,.vui-mini{border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card);margin-bottom:16px;color:var(--vui-text)}
-.vui-card__head,.vui-mini__head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px dashed #222}
-.vui-card__body{padding:12px 14px}
-.vui-title{font-weight:700}
-.vui-line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #1a1a1a}
-.vui-line:last-child{border-bottom:0}
-.vui-card--note{background:#1c170a;border-color:#3b2f16}
-
-.vui-headSide .vui-mini{margin-bottom:12px}
-.vui-mini__head{gap:12px}
-.vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text)}
-.vui-metaBox{flex:1}
-.vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.vui-mini__head{align-items:flex-start}
-.vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.vui-name{font-weight:700;color:var(--vui-text);text-decoration:none}
-.vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text)}
-.vui-badge.ip{cursor:pointer}
-.vui-muted{opacity:.7;color:var(--vui-muted)}
-
-.vui-profileDetails{display:none;padding:12px 14px;border-top:1px dashed #222;background:#0f1012;border-bottom-left-radius:12px;border-bottom-right-radius:12px}
-.vui-profileDetails.open{display:block}
-.vui-profileDetails .vui-empty{color:var(--vui-muted);font-size:13px}
-.vui-detailGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:4px}
-.vui-detailItem{padding:10px;border:1px solid #1f2023;border-radius:10px;background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:4px}
-.vui-detailLabel{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
-.vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word}
-.vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
-
-.vui-card--chat{display:flex;flex-direction:column;max-height:48vh}
-.vui-card--chat .vui-card__body{flex:1;display:flex;padding:0}
-.vui-chatBox{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px}
-.vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center}
-.vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02)}
-.vui-chatAvatar{width:40px;height:40px;border-radius:10px;background:#1f2023;display:grid;place-items:center;font-weight:700;color:var(--vui-text);overflow:hidden}
-.vui-chatAvatar img{width:100%;height:100%;object-fit:cover;border-radius:10px}
-.vui-chatHead{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.vui-chatAuthor{font-weight:600;color:var(--vui-text)}
-.vui-chatMeta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--vui-muted);gap:2px}
-.vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
-.vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word}
-
-.vui-productDescription{margin-top:12px;padding:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;line-height:1.5;color:var(--vui-text)}
-.vui-productDescription p{margin:0 0 8px}
-.vui-productDescription p:last-child{margin-bottom:0}
-
-.vui-old-hidden{display:none!important}
+:root{
+  --vui-bg:#050506;
+  --vui-card:#111214;
+  --vui-line:#1e1f22;
+  --vui-text:#eaeaea;
+  --vui-muted:#9aa1a7;
+  --vui-accent:#ffd369;
+  --vui-ok:#2ea043;
+  --vui-info:#2f81f7;
+  --vui-danger:#f85149;
+}
+body, .skin-blue .wrapper, .content-wrapper{
+  background:var(--vui-bg)!important;
+  color:var(--vui-text);
+}
+body{color-scheme:dark;}
+.content{background:transparent;}
+.content-header{display:none!important;}
+.vui-wrap{
+  margin-top:0;
+  display:flex;
+  flex-direction:column;
+  gap:20px;
+  padding:0 16px 32px;
+}
+.vui-wrap *{box-sizing:border-box;}
+.vui-topGrid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px;margin-top:16px;}
+.vui-head{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;}
+.vui-headTitle{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.vui-headLine{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.vui-head h1{margin:0;font-size:20px;color:var(--vui-text);}
+.vui-headStatus{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.vui-headStats{display:flex;gap:16px;flex-wrap:wrap;}
+.vui-headStat{display:flex;flex-direction:column;gap:2px;color:var(--vui-text);font-size:13px;}
+.vui-headStat b{font-size:15px;}
+.vui-uuidBadge{padding:4px 8px;border-radius:8px;border:1px dashed #333;color:var(--vui-muted);cursor:pointer;font-size:12px;}
+.vui-uuidBadge:hover{color:var(--vui-text);border-color:var(--vui-accent);}
+.vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text);}
+.vui-chip--success{background:rgba(46,160,67,.15);border-color:#295f36;color:#43d17a;}
+.vui-chip--info{background:rgba(47,129,247,.15);border-color:#2f81f7;color:#9ec3ff;}
+.vui-chip--warn{background:rgba(255,211,105,.15);border-color:#977f2d;color:#ffd369;}
+.vui-chrono{display:flex;flex-wrap:wrap;gap:20px;padding-top:12px;border-top:1px dashed #1f2023;margin-top:4px;}
+.vui-chronoItem{min-width:160px;display:flex;flex-direction:column;gap:4px;}
+.vui-chronoLabel{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
+.vui-chronoMoment{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:600;color:var(--vui-text);}
+.vui-chronoTime{font-size:13px;}
+.vui-chronoDate{font-size:12px;color:var(--vui-muted);}
+.vui-topSide{display:flex;flex-direction:column;gap:12px;}
+.vui-actionsBar{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+.vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2;}
+.vui-btn--primary{background:var(--vui-accent);color:#111;}
+.vui-btn--danger{border-color:#4a2222;background:#2a1212;}
+.vui-btn--ghost{background:transparent;}
+.vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
+.vui-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px;}
+.vui-main{display:flex;flex-direction:column;gap:16px;}
+.vui-side{display:flex;flex-direction:column;gap:16px;}
+.vui-card,.vui-mini{border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card);color:var(--vui-text);}
+.vui-card__head,.vui-mini__head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px dashed #222;}
+.vui-card__body{padding:12px 14px;}
+.vui-title{font-weight:700;}
+.vui-line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #1a1a1a;}
+.vui-line:last-child{border-bottom:0;}
+.vui-card--note{background:#1c170a;border-color:#3b2f16;}
+.vui-mini__head{gap:12px;align-items:flex-start;}
+.vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text);}
+.vui-metaBox{flex:1;}
+.vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+.vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.vui-name{font-weight:700;color:var(--vui-text);text-decoration:none;}
+.vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text);}
+.vui-badge.ip{cursor:pointer;}
+.vui-muted{opacity:.7;color:var(--vui-muted);}
+.vui-profileDetails{display:none;padding:12px 14px;border-top:1px dashed #222;background:#0f1012;border-bottom-left-radius:12px;border-bottom-right-radius:12px;}
+.vui-profileDetails.open{display:block;}
+.vui-profileDetails .vui-empty{color:var(--vui-muted);font-size:13px;}
+.vui-detailGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:4px;}
+.vui-detailItem{padding:10px;border:1px solid #1f2023;border-radius:10px;background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:4px;}
+.vui-detailLabel{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
+.vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word;}
+.vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
+.vui-card--chat{display:flex;flex-direction:column;min-height:360px;}
+.vui-card--chat .vui-card__body{flex:1;display:flex;padding:0;}
+.vui-chatBox{flex:1;overflow:auto;min-height:0;padding:12px 14px;display:flex;flex-direction:column;gap:12px;}
+.vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center;}
+.vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02);}
+.vui-chatAvatar{width:40px;height:40px;border-radius:10px;background:#1f2023;display:grid;place-items:center;font-weight:700;color:var(--vui-text);overflow:hidden;}
+.vui-chatAvatar img{width:100%;height:100%;object-fit:cover;border-radius:10px;}
+.vui-chatHead{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.vui-chatAuthor{font-weight:600;color:var(--vui-text);}
+.vui-chatMeta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--vui-muted);gap:2px;}
+.vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
+.vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
+.vui-productDescription{margin-top:12px;padding:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;line-height:1.5;color:var(--vui-text);}
+.vui-productDescription p{margin:0 0 8px;}
+.vui-productDescription p:last-child{margin-bottom:0;}
+.vui-old-hidden{display:none!important;}
+@media(max-width:1200px){
+  .vui-topGrid{grid-template-columns:1fr;}
+  .vui-grid{grid-template-columns:1fr;}
+}
 @media(max-width:1024px){
-  .vui-head{grid-template-columns:1fr}
-  .vui-headSide{display:grid;grid-template-columns:1fr;gap:12px}
-  .vui-actionsBar{justify-content:flex-start}
-  .vui-chrono{flex-direction:column;align-items:flex-start;padding-top:0}
-  .vui-chrono::before{display:none}
-  .vui-chronoItem{min-width:auto;margin-top:12px;padding-left:0}
-  .vui-chronoItem::after{left:0}
+  .vui-actionsBar{justify-content:flex-start;}
+  .vui-chrono{padding-top:8px;}
+  .vui-chronoItem{min-width:140px;}
 }
 `;
     const s = document.createElement('style');
@@ -716,20 +725,32 @@
         return String(a.raw).localeCompare(String(b.raw));
       });
     const chronologyMarkup = chronology.length
-      ? `<div class="${chronology.length > 1 ? 'vui-chrono' : 'vui-chrono vui-chrono--single'}">${chronology.map(item => {
-          const timeBlock = item.time
-            ? `<span class="vui-chronoTime">${esc(item.time)}</span>`
-            : '';
-          const dateBlock = item.date
-            ? `<div class="vui-chronoDate">${esc(item.date)}</div>`
-            : '';
-          return `
-            <div class="vui-chronoItem">
-              <div class="vui-chronoTop"><span class="vui-chronoLabel">${esc(item.label)}</span>${timeBlock}</div>
-              ${dateBlock}
+      ? `<div class="vui-chrono">${chronology.map(item => `
+          <div class="vui-chronoItem">
+            <div class="vui-chronoLabel">${esc(item.label)}</div>
+            <div class="vui-chronoMoment">
+              ${item.time ? `<span class="vui-chronoTime">${esc(item.time)}</span>` : ''}
+              ${item.date ? `<span class="vui-chronoDate">${esc(item.date)}</span>` : ''}
             </div>
-          `;
-        }).join('')}</div>`
+          </div>
+        `).join('')}</div>`
+      : '';
+
+    const statusChip = safe(data.order.status)
+      ? `<span class="${chip(data.order.status)}">${esc(data.order.status)}</span>`
+      : '';
+    const statusBlock = statusChip ? `<div class="vui-headStatus">${statusChip}</div>` : '';
+    const uuidBadge = safe(data.order.uuid)
+      ? `<span class="vui-uuidBadge" data-uuid title="Клик — скопировать UUID">${esc(data.order.uuid)}</span>`
+      : '';
+    const totalBlock = safe(data.cost.total)
+      ? `<div class="vui-headStat"><span class="vui-muted">Итого</span><b>${esc(data.cost.total)}</b></div>`
+      : '';
+    const rewardBlock = safe(data.cost.seller_reward)
+      ? `<div class="vui-headStat"><span class="vui-muted">Награда продавцу</span><b>${esc(data.cost.seller_reward)}</b></div>`
+      : '';
+    const statsMarkup = totalBlock || rewardBlock
+      ? `<div class="vui-headStats">${totalBlock}${rewardBlock}</div>`
       : '';
 
     const bottomButtons = [
@@ -742,29 +763,23 @@
 
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
-
     wrap.innerHTML = `
-      <section class="vui-head">
-        <div class="vui-headMain">
+      <section class="vui-topGrid">
+        <article class="vui-head">
           <div class="vui-headLine">
-            <h1>${data.order.number ? `Заказ №${data.order.number}` : 'Заказ'}</h1>
-            ${safe(data.order.uuid) ? `<span class="vui-uuidBadge" data-uuid title="Клик — скопировать UUID">${data.order.uuid}</span>` : ''}
-          </div>
-          <div class="vui-headMeta">
-            <div class="vui-meta">
-              ${safe(data.order.status) ? `<span class="${chip(data.order.status)}">${data.order.status}</span>` : ''}
+            <div class="vui-headTitle">
+              <h1>${data.order.number ? `Заказ №${esc(data.order.number)}` : 'Заказ'}</h1>
+              ${uuidBadge}
             </div>
-            <div class="vui-headAmounts">
-              ${safe(data.cost.total) ? `<div class="vui-headAmount"><span class="vui-muted">Итого</span><b>${data.cost.total}</b></div>` : ''}
-              ${safe(data.cost.seller_reward) ? `<div class="vui-headAmount"><span class="vui-muted">Награда продавцу</span><b>${data.cost.seller_reward}</b></div>` : ''}
-            </div>
+            ${statusBlock}
           </div>
+          ${statsMarkup}
           ${chronologyMarkup}
-        </div>
-        <div class="vui-headSide">
+        </article>
+        <div class="vui-topSide">
           <article class="vui-mini">
             <header class="vui-mini__head">
-              <div class="vui-avatar">${(data.seller.name || 'U').slice(0,2).toUpperCase()}</div>
+              <div class="vui-avatar">${esc((data.seller.name || 'U').slice(0,2).toUpperCase())}</div>
               <div class="vui-metaBox">
                 <div class="vui-metaRow">
                   <a class="vui-name" href="${data.seller.profile || '#'}">${safe(data.seller.name)}</a>
@@ -784,7 +799,7 @@
 
           <article class="vui-mini">
             <header class="vui-mini__head">
-              <div class="vui-avatar">${(data.buyer.name || 'U').slice(0,2).toUpperCase()}</div>
+              <div class="vui-avatar">${esc((data.buyer.name || 'U').slice(0,2).toUpperCase())}</div>
               <div class="vui-metaBox">
                 <div class="vui-metaRow">
                   <a class="vui-name" href="${data.buyer.profile || '#'}">${safe(data.buyer.name)}</a>
@@ -808,7 +823,7 @@
       </section>
 
       <section class="vui-grid">
-        <div class="vui-col-8">
+        <div class="vui-main">
           <article class="vui-card">
             <header class="vui-card__head">
               <div class="vui-title">${safe(data.product.title)}</div>
@@ -851,7 +866,7 @@
           </article>` : ''}
         </div>
 
-        <div class="vui-col-4">
+        <div class="vui-side">
           ${data.actions.chat ? `
           <article class="vui-card vui-card--chat">
             <header class="vui-card__head">
