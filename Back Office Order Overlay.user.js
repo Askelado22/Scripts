@@ -39,7 +39,17 @@
       "'": '&#39;',
     }[ch] || ch));
   };
-  const copy = (s) => { try { navigator.clipboard?.writeText(s); } catch {} };
+  const copy = (value, target) => {
+    if (!value) return;
+    try { navigator.clipboard?.writeText(value); } catch {}
+    if (target) {
+      target.classList.remove('vui-isCopied');
+      // force reflow to restart animation
+      void target.offsetWidth; // eslint-disable-line no-void
+      target.classList.add('vui-isCopied');
+      setTimeout(() => target.classList.remove('vui-isCopied'), 900);
+    }
+  };
   const profileCache = new Map();
   const chatCache = new Map();
   const productCache = new Map();
@@ -432,6 +442,7 @@ body{color-scheme:dark;}
 .vui-orderNumber:hover{color:var(--vui-accent);background:rgba(76,155,255,.08);}
 .vui-orderNumber:hover::after{opacity:1;}
 .vui-orderNumber:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
+.vui-isCopied{animation:vuiCopyPulse .9s ease-out;}
 .vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text);}
 .vui-chip--success{background:rgba(46,160,67,.15);border-color:#295f36;color:#43d17a;}
 .vui-chip--info{background:rgba(47,129,247,.15);border-color:#2f81f7;color:#9ec3ff;}
@@ -498,23 +509,25 @@ body{color-scheme:dark;}
 .vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
 .vui-productDescription{margin-top:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;color:var(--vui-text);}
-.vui-desc{margin:0;}
-.vui-desc>summary{cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:8px;list-style:none;font-weight:600;padding:12px 14px;transition:color .2s ease;}
-.vui-desc>summary::-webkit-details-marker{display:none;}
-.vui-desc>summary::after{content:'Развернуть';font-size:12px;color:var(--vui-accent);letter-spacing:.04em;align-self:flex-end;}
-.vui-desc[open]>summary{border-bottom:1px dashed #1f2023;color:var(--vui-accent);}
-.vui-desc[open]>summary::after{content:'Свернуть';}
-.vui-desc[data-empty="true"]>summary::after{content:'';}
-.vui-desc[data-collapsible="false"]>summary{cursor:default;}
-.vui-desc[data-collapsible="false"]>summary:hover{color:var(--vui-text);}
-.vui-desc[data-collapsible="false"]>summary::after{content:'';}
-.vui-desc>summary:hover{color:var(--vui-accent);}
-.vui-descSnippet{font-size:13px;color:var(--vui-muted);line-height:1.5;width:100%;}
-.vui-descSnippet p{margin:0;}
-.vui-descBody{padding:12px 14px;border-top:1px dashed #1f2023;}
-.vui-descRest{display:none;flex-direction:column;gap:8px;line-height:1.5;}
-.vui-desc[open] .vui-descRest{display:flex;}
+.vui-desc{margin:0;display:flex;flex-direction:column;}
+.vui-descToggle{appearance:none;border:none;background:none;color:inherit;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-weight:600;padding:12px 14px;cursor:pointer;transition:color .2s ease;}
+.vui-descToggle[disabled]{cursor:default;}
+.vui-descToggle[disabled]:hover{color:inherit;}
+.vui-descToggle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
+.vui-descToggle:hover{color:var(--vui-accent);}
+.vui-descToggleText{font-size:12px;color:var(--vui-accent);letter-spacing:.04em;text-transform:uppercase;}
+.vui-desc[data-collapsible="false"] .vui-descToggle{cursor:default;}
+.vui-desc[data-collapsible="false"] .vui-descToggle:hover{color:inherit;}
+.vui-desc[data-collapsible="false"] .vui-descToggleText{color:var(--vui-muted);}
+.vui-desc[data-empty="true"] .vui-descToggleText{display:none;}
+.vui-desc[data-collapsible="true"] .vui-descToggle{border-bottom:1px dashed #1f2023;}
+.vui-descBody{padding:12px 14px;border-top:1px dashed #1f2023;line-height:1.5;display:flex;flex-direction:column;gap:8px;}
 .vui-descBody p{margin:0;line-height:1.5;}
+.vui-descBody p+p{margin-top:4px;}
+.vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody{max-height:7.2em;overflow:hidden;position:relative;}
+.vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody::after{content:'';position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(0deg,var(--vui-card) 0%,rgba(17,18,20,0) 70%);pointer-events:none;}
+.vui-badge.ip.vui-isCopied,.vui-orderNumber.vui-isCopied{box-shadow:0 0 0 0 rgba(76,155,255,.4);}
+@keyframes vuiCopyPulse{0%{box-shadow:0 0 0 0 rgba(76,155,255,.5);background:rgba(76,155,255,.2);}100%{box-shadow:0 0 0 36px rgba(76,155,255,0);background:transparent;}}
 .vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
   .vui-layout{grid-template-columns:1fr;}
@@ -682,9 +695,8 @@ body{color-scheme:dark;}
 
   function renderProductDescription(productData) {
     const errorState = {
-      previewHtml: '<div class="vui-empty">Не удалось загрузить описание товара.</div>',
-      restHtml: '',
-      hasRest: false,
+      html: '<div class="vui-empty">Не удалось загрузить описание товара.</div>',
+      collapsible: false,
       isEmpty: true,
     };
 
@@ -695,80 +707,28 @@ body{color-scheme:dark;}
     const plain = cleanMultiline(productData.description || '');
     if (!plain) {
       return {
-        previewHtml: '<div class="vui-empty">Описание товара отсутствует.</div>',
-        restHtml: '',
-        hasRest: false,
+        html: '<div class="vui-empty">Описание товара отсутствует.</div>',
+        collapsible: false,
         isEmpty: true,
       };
     }
 
-    const rawParagraphs = plain
-      .split(/\n+/)
-      .map(line => line.trim())
+    const blocks = plain
+      .split(/\n{2,}/)
+      .map(chunk => chunk.trim())
       .filter(Boolean);
 
-    const previewLimit = 240;
-    const previewParts = [];
-    const restParts = [];
-    let remaining = previewLimit;
+    const html = blocks.map(block => {
+      const lines = block.split(/\n+/).map(line => esc(line)).join('<br>');
+      return `<p>${lines}</p>`;
+    }).join('');
 
-    const splitForPreview = (text, limit) => {
-      if (text.length <= limit) {
-        return { preview: text, rest: '' };
-      }
-      const slice = text.slice(0, limit);
-      const lastSpace = slice.lastIndexOf(' ');
-      const cutIndex = lastSpace > limit * 0.6 ? lastSpace : limit;
-      return {
-        preview: text.slice(0, cutIndex).trimEnd(),
-        rest: text.slice(cutIndex).trimStart(),
-      };
-    };
-
-    for (let i = 0; i < rawParagraphs.length; i += 1) {
-      const text = rawParagraphs[i];
-      if (remaining <= 0) {
-        restParts.push(text);
-        continue;
-      }
-
-      if (text.length <= remaining) {
-        previewParts.push(text);
-        remaining -= text.length;
-        continue;
-      }
-
-      const split = splitForPreview(text, remaining);
-      if (split.preview) {
-        previewParts.push(split.preview);
-      }
-      if (split.rest) {
-        restParts.push(split.rest);
-      }
-      for (let j = i + 1; j < rawParagraphs.length; j += 1) {
-        restParts.push(rawParagraphs[j]);
-      }
-      remaining = 0;
-      break;
-    }
-
-    const hasRest = restParts.length > 0;
-    const previewHtml = previewParts.length
-      ? previewParts.map((text, index) => {
-        const isLast = index === previewParts.length - 1;
-        const suffix = hasRest && isLast ? '…' : '';
-        return `<p>${esc(text)}${suffix}</p>`;
-      }).join('')
-      : '<div class="vui-empty">Описание товара отсутствует.</div>';
-
-    const restHtml = hasRest
-      ? restParts.map(text => `<p>${esc(text)}</p>`).join('')
-      : '';
+    const approxLines = plain.split('\n').length;
+    const collapsible = approxLines > 4 || plain.length > 480;
 
     return {
-      previewHtml,
-      restHtml,
-      hasRest,
+      html,
+      collapsible,
       isEmpty: false,
     };
   }
@@ -778,46 +738,72 @@ body{color-scheme:dark;}
     const container = wrap?.querySelector('[data-product-description]');
     if (!container) return;
 
-    const previewEl = container.querySelector('[data-desc-preview]');
-    const restEl = container.querySelector('[data-desc-rest]');
-    const detailsEl = container.querySelector('.vui-desc');
-    if (previewEl) previewEl.innerHTML = '<p class="vui-muted">Загрузка описания…</p>';
-    if (restEl) restEl.innerHTML = '';
-    if (detailsEl) {
-      detailsEl.setAttribute('data-collapsible', 'false');
-      detailsEl.removeAttribute('open');
-      detailsEl.removeAttribute('data-empty');
+    const descEl = container.querySelector('.vui-desc');
+    const bodyEl = container.querySelector('[data-desc-body]');
+    if (bodyEl) bodyEl.innerHTML = '<p class="vui-muted">Загрузка описания…</p>';
+    const toggleEl = container.querySelector('[data-desc-toggle]');
+    const toggleTextEl = container.querySelector('[data-desc-toggle-text]');
+    if (toggleEl) {
+      toggleEl.disabled = true;
+      toggleEl.addEventListener('click', () => {
+        if (toggleEl.disabled || !descEl) return;
+        const expanded = descEl.getAttribute('data-expanded') === 'true';
+        const nextExpanded = !expanded;
+        descEl.setAttribute('data-expanded', nextExpanded ? 'true' : 'false');
+        toggleEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+        if (toggleTextEl) toggleTextEl.textContent = nextExpanded ? 'Свернуть' : 'Развернуть';
+      });
     }
+    if (descEl) {
+      descEl.setAttribute('data-collapsible', 'false');
+      descEl.setAttribute('data-expanded', 'true');
+      descEl.removeAttribute('data-empty');
+    }
+    if (toggleEl) toggleEl.setAttribute('aria-expanded', 'true');
+    if (toggleTextEl) toggleTextEl.textContent = '';
 
     fetchProductData(data.product.link_admin)
       .then(productData => {
         const rendered = renderProductDescription(productData);
-        if (previewEl) previewEl.innerHTML = rendered.previewHtml;
-        if (restEl) restEl.innerHTML = rendered.restHtml;
-        if (detailsEl) {
+        if (bodyEl) bodyEl.innerHTML = rendered.html;
+        if (descEl) {
           if (rendered.isEmpty) {
-            detailsEl.setAttribute('data-empty', 'true');
+            descEl.setAttribute('data-empty', 'true');
+            descEl.setAttribute('data-expanded', 'true');
           } else {
-            detailsEl.removeAttribute('data-empty');
+            descEl.removeAttribute('data-empty');
           }
-          if (rendered.hasRest) {
-            detailsEl.setAttribute('data-collapsible', 'true');
-            detailsEl.removeAttribute('open');
+          if (rendered.collapsible) {
+            descEl.setAttribute('data-collapsible', 'true');
+            descEl.setAttribute('data-expanded', 'false');
+            if (toggleEl) toggleEl.setAttribute('aria-expanded', 'false');
+            if (toggleTextEl) toggleTextEl.textContent = 'Развернуть';
           } else {
-            detailsEl.setAttribute('data-collapsible', 'false');
-            detailsEl.removeAttribute('open');
+            descEl.setAttribute('data-collapsible', 'false');
+            descEl.setAttribute('data-expanded', 'true');
+            if (toggleEl) toggleEl.setAttribute('aria-expanded', 'true');
+            if (toggleTextEl) toggleTextEl.textContent = '';
           }
+        }
+        if (descEl && rendered.collapsible && toggleEl) {
+          toggleEl.disabled = false;
+        } else if (toggleEl) {
+          toggleEl.disabled = true;
         }
       })
       .catch(() => {
         const rendered = renderProductDescription({ error: true });
-        if (previewEl) previewEl.innerHTML = rendered.previewHtml;
-        if (restEl) restEl.innerHTML = rendered.restHtml;
-        if (detailsEl) {
-          detailsEl.setAttribute('data-empty', 'true');
-          detailsEl.setAttribute('data-collapsible', 'false');
-          detailsEl.removeAttribute('open');
+        if (bodyEl) bodyEl.innerHTML = rendered.html;
+        if (descEl) {
+          descEl.setAttribute('data-empty', 'true');
+          descEl.setAttribute('data-collapsible', 'false');
+          descEl.setAttribute('data-expanded', 'true');
         }
+        if (toggleEl) {
+          toggleEl.setAttribute('aria-expanded', 'true');
+          toggleEl.disabled = true;
+        }
+        if (toggleTextEl) toggleTextEl.textContent = '';
       });
   }
 
@@ -932,15 +918,13 @@ body{color-scheme:dark;}
 
     const productDescriptionBlock = data.product.link_admin
       ? `<div class="vui-productDescription" data-product-description>
-          <details class="vui-desc" data-collapsible="false">
-            <summary>
+          <div class="vui-desc" data-collapsible="false" data-expanded="true">
+            <button class="vui-descToggle" type="button" data-desc-toggle aria-expanded="true">
               <span>Описание товара</span>
-              <div class="vui-descSnippet" data-desc-preview><p class="vui-muted">Загрузка описания…</p></div>
-            </summary>
-            <div class="vui-descBody" data-desc-body>
-              <div class="vui-descRest" data-desc-rest></div>
-            </div>
-          </details>
+              <span class="vui-descToggleText" data-desc-toggle-text></span>
+            </button>
+            <div class="vui-descBody" data-desc-body><p class="vui-muted">Загрузка описания…</p></div>
+          </div>
         </div>`
       : '';
 
@@ -1073,7 +1057,6 @@ body{color-scheme:dark;}
           </article>` : ''}
         </div>
       </section>
-      ${bottomButtons ? `<section class="vui-actionsBar">${bottomButtons}</section>` : ''}
     `;
 
     const content = document.querySelector('section.content');
@@ -1081,7 +1064,10 @@ body{color-scheme:dark;}
 
     setupProfileToggles(wrap);
     // copy handlers
-    wrap.querySelector('.vui-badge.ip')?.addEventListener('click', () => copy(data.buyer.ip));
+    const ipBadge = wrap.querySelector('.vui-badge.ip');
+    if (ipBadge) {
+      ipBadge.addEventListener('click', () => copy(data.buyer.ip, ipBadge));
+    }
     const orderNumberEl = wrap.querySelector('[data-order-number]');
     if (orderNumberEl) {
       orderNumberEl.addEventListener('click', (event) => {
@@ -1089,14 +1075,14 @@ body{color-scheme:dark;}
         const targetValue = useUuid ? orderUuidValue : orderNumberValue;
         if (!targetValue) return;
         event.preventDefault();
-        copy(targetValue);
+        copy(targetValue, orderNumberEl);
       });
       orderNumberEl.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         const useUuid = event.altKey && orderUuidValue;
         const targetValue = useUuid ? orderUuidValue : orderNumberValue;
-        if (targetValue) copy(targetValue);
+        if (targetValue) copy(targetValue, orderNumberEl);
       });
     }
 
