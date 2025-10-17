@@ -415,8 +415,8 @@ body{color-scheme:dark;}
   padding:0 16px 32px;
 }
 .vui-wrap *{box-sizing:border-box;}
-.vui-topGrid{display:flex;gap:16px;margin-top:16px;align-items:flex-start;flex-wrap:wrap;}
-.vui-topGrid>.vui-head{flex:1 1 55%;min-width:320px;}
+.vui-layout{display:grid;gap:16px;margin-top:16px;grid-template-columns:minmax(0,7fr) minmax(0,5fr);align-items:flex-start;}
+.vui-layoutMain,.vui-layoutSide{display:flex;flex-direction:column;gap:16px;}
 .vui-head{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;}
 .vui-headTitle{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .vui-headLine{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
@@ -437,16 +437,13 @@ body{color-scheme:dark;}
 .vui-chronoMoment{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:600;color:var(--vui-text);}
 .vui-chronoTime{font-size:13px;}
 .vui-chronoDate{font-size:12px;color:var(--vui-muted);}
-.vui-topSide{display:flex;flex-direction:column;gap:12px;flex:1 1 35%;min-width:280px;}
 .vui-actionsBar{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2;}
 .vui-btn--primary{background:var(--vui-accent);color:#111;}
 .vui-btn--danger{border-color:#4a2222;background:#2a1212;}
 .vui-btn--ghost{background:transparent;}
 .vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
-.vui-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px;}
-.vui-main{display:flex;flex-direction:column;gap:16px;}
-.vui-side{display:flex;flex-direction:column;gap:16px;}
+.vui-layoutSide{min-width:280px;}
 .vui-card,.vui-mini{border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card);color:var(--vui-text);}
 .vui-card__head,.vui-mini__head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px dashed #222;}
 .vui-card__body{padding:12px 14px;}
@@ -489,13 +486,17 @@ body{color-scheme:dark;}
 .vui-chatMeta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--vui-muted);gap:2px;}
 .vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
-.vui-productDescription{margin-top:12px;padding:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;line-height:1.5;color:var(--vui-text);}
-.vui-productDescription p{margin:0 0 8px;}
-.vui-productDescription p:last-child{margin-bottom:0;}
+.vui-productDescription{margin-top:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;color:var(--vui-text);}
+.vui-desc{margin:0;}
+.vui-desc>summary{cursor:pointer;display:flex;align-items:center;gap:12px;justify-content:space-between;list-style:none;font-weight:600;padding:12px 14px;}
+.vui-desc>summary::-webkit-details-marker{display:none;}
+.vui-desc[open]>summary{border-bottom:1px dashed #1f2023;}
+.vui-descPreview{font-size:12px;color:var(--vui-muted);margin-left:auto;text-align:right;}
+.vui-descBody{padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto;}
+.vui-descBody p{margin:0;line-height:1.5;}
 .vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
-  .vui-topGrid{flex-direction:column;}
-  .vui-grid{grid-template-columns:1fr;}
+  .vui-layout{grid-template-columns:1fr;}
 }
 @media(max-width:1024px){
   .vui-actionsBar{justify-content:flex-start;}
@@ -660,21 +661,39 @@ body{color-scheme:dark;}
   }
 
   function renderProductDescription(productData) {
+    const errorState = {
+      preview: 'Не удалось загрузить описание',
+      body: '<div class="vui-empty">Не удалось загрузить описание товара.</div>',
+    };
+
     if (!productData || productData.error) {
-      return '<div class="vui-empty">Не удалось загрузить описание товара.</div>';
-    }
-    if (!productData.description) {
-      return '<div class="vui-empty">Описание товара отсутствует.</div>';
+      return errorState;
     }
 
-    const paragraphs = productData.description
+    const plain = cleanMultiline(productData.description || '');
+    if (!plain) {
+      return {
+        preview: 'Описание отсутствует',
+        body: '<div class="vui-empty">Описание товара отсутствует.</div>',
+      };
+    }
+
+    const paragraphs = plain
       .split(/\n+/)
       .map(line => line.trim())
       .filter(Boolean)
       .map(line => `<p>${esc(line)}</p>`)
       .join('');
 
-    return paragraphs || '<div class="vui-empty">Описание товара отсутствует.</div>';
+    const normalizedPreview = plain.replace(/\s+/g, ' ').trim();
+    const preview = normalizedPreview.length > 120
+      ? `${normalizedPreview.slice(0, 120).trim()}…`
+      : normalizedPreview;
+
+    return {
+      preview,
+      body: paragraphs || '<div class="vui-empty">Описание товара отсутствует.</div>',
+    };
   }
 
   function loadProductSection(data, wrap) {
@@ -682,12 +701,21 @@ body{color-scheme:dark;}
     const container = wrap?.querySelector('[data-product-description]');
     if (!container) return;
 
+    const previewEl = container.querySelector('[data-desc-preview]');
+    const bodyEl = container.querySelector('[data-desc-body]');
+    if (previewEl) previewEl.textContent = 'Загрузка описания…';
+    if (bodyEl) bodyEl.innerHTML = '<div class="vui-empty">Загрузка описания…</div>';
+
     fetchProductData(data.product.link_admin)
       .then(productData => {
-        container.innerHTML = renderProductDescription(productData);
+        const rendered = renderProductDescription(productData);
+        if (previewEl) previewEl.textContent = rendered.preview;
+        if (bodyEl) bodyEl.innerHTML = rendered.body;
       })
       .catch(() => {
-        container.innerHTML = renderProductDescription({ error: true });
+        const rendered = renderProductDescription({ error: true });
+        if (previewEl) previewEl.textContent = rendered.preview;
+        if (bodyEl) bodyEl.innerHTML = rendered.body;
       });
   }
 
@@ -790,20 +818,85 @@ body{color-scheme:dark;}
 
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
-    wrap.innerHTML = `
-      <section class="vui-topGrid">
-        <article class="vui-head">
-          <div class="vui-headLine">
-            <div class="vui-headTitle">
-              <h1>${data.order.number ? `Заказ №${esc(data.order.number)}` : 'Заказ'}</h1>
-              ${uuidBadge}
+    const categoryLine = safe(data.product.category)
+      ? `<div class="vui-line"><span>${data.product.link_category ? `<a class="vui-linkAction" href="${data.product.link_category}">Категория</a>` : 'Категория'}</span><b>${data.product.category}</b></div>`
+      : '';
+
+    const productButtons = [
+      data.product.link_admin ? `<a class="vui-btn" href="${data.product.link_admin}">Открыть товар</a>` : '',
+      data.product.link_public ? `<a class="vui-btn" href="${data.product.link_public}" target="_blank">На GGSel</a>` : '',
+    ].filter(Boolean);
+
+    const productDescriptionBlock = data.product.link_admin
+      ? `<div class="vui-productDescription" data-product-description>
+          <details class="vui-desc">
+            <summary>
+              <span>Описание товара</span>
+              <span class="vui-descPreview" data-desc-preview>Загрузка описания…</span>
+            </summary>
+            <div class="vui-descBody" data-desc-body>
+              <div class="vui-empty">Загрузка описания…</div>
             </div>
-            ${statusBlock}
-          </div>
-          ${statsMarkup}
-          ${chronologyMarkup}
-        </article>
-        <div class="vui-topSide">
+          </details>
+        </div>`
+      : '';
+
+    wrap.innerHTML = `
+      <section class="vui-layout">
+        <div class="vui-layoutMain">
+          <article class="vui-head">
+            <div class="vui-headLine">
+              <div class="vui-headTitle">
+                <h1>${data.order.number ? `Заказ №${esc(data.order.number)}` : 'Заказ'}</h1>
+                ${uuidBadge}
+              </div>
+              ${statusBlock}
+            </div>
+            ${statsMarkup}
+            ${chronologyMarkup}
+          </article>
+
+          <article class="vui-card">
+            <header class="vui-card__head">
+              <div class="vui-title">${safe(data.product.title)}</div>
+              ${safe(data.product.status) ? `<span class="vui-chip vui-chip--info">${data.product.status}</span>` : ''}
+            </header>
+            <div class="vui-card__body">
+              ${categoryLine}
+              ${safe(data.product.delivery_type) ? `<div class="vui-line"><span>Тип выдачи</span><b>${data.product.delivery_type}</b></div>` : ''}
+              ${Array.isArray(data.product.options) && data.product.options.length ? `
+                <details class="vui-acc"><summary>Выбранные опции</summary>
+                  <ul style="margin:8px 0 0 18px;">
+                    ${data.product.options.map(li => `<li>${li}</li>`).join('')}
+                  </ul>
+                </details>` : ''}
+              ${productDescriptionBlock}
+              ${productButtons.length ? `<div class="vui-line" style="border-bottom:0;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:6px;">
+                ${productButtons.join('')}
+              </div>` : ''}
+            </div>
+          </article>
+
+          <article class="vui-card">
+            <header class="vui-card__head"><div class="vui-title">Оплата и комиссии</div></header>
+            <div class="vui-card__body" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+              ${safe(data.order.payment_system) ? `<div class="vui-line"><span>${paymentLabel}</span><b>${data.order.payment_system}</b></div>` : ''}
+              ${safe(data.order.quantity) ? `<div class="vui-line"><span>Количество</span><b>${data.order.quantity}</b></div>` : ''}
+              ${safe(data.cost.fee_cat) ? `<div class="vui-line"><span>Комиссия категории</span><b>${data.cost.fee_cat}${safe(data.cost.fee_cat_pct) ? ` (${data.cost.fee_cat_pct})` : ''}</b></div>` : ''}
+              ${safe(data.cost.fee_ps) ? `<div class="vui-line"><span>Комиссия ПС</span><b>${data.cost.fee_ps}${safe(data.cost.fee_ps_pct) ? ` (${data.cost.fee_ps_pct})` : ''}</b></div>` : ''}
+              ${safe(data.cost.total) ? `<div class="vui-line"><span>Итого</span><b>${data.cost.total}</b></div>` : ''}
+              ${safe(data.cost.seller_reward) ? `<div class="vui-line"><span>${rewardLabelPayment}</span><b>${data.cost.seller_reward}</b></div>` : ''}
+            </div>
+          </article>
+
+          ${safe(data.order.admin_comment) ? `
+          <article class="vui-card vui-card--note">
+            <header class="vui-card__head"><div class="vui-title">Комментарий админа</div></header>
+            <div class="vui-card__body"><p>${data.order.admin_comment}</p></div>
+          </article>` : ''}
+        </div>
+
+        <div class="vui-layoutSide">
           <article class="vui-mini">
             <header class="vui-mini__head">
               <div class="vui-avatar">${esc((data.seller.name || 'U').slice(0,2).toUpperCase())}</div>
@@ -845,54 +938,7 @@ body{color-scheme:dark;}
               ${data.buyer.profile ? '<div class="vui-empty">Загрузка профиля…</div>' : '<div class="vui-empty">Ссылка на профиль не найдена.</div>'}
             </div>
           </article>
-        </div>
-      </section>
 
-      <section class="vui-grid">
-        <div class="vui-main">
-          <article class="vui-card">
-            <header class="vui-card__head">
-              <div class="vui-title">${safe(data.product.title)}</div>
-              ${safe(data.product.status) ? `<span class="vui-chip vui-chip--info">${data.product.status}</span>` : ''}
-            </header>
-            <div class="vui-card__body">
-              ${safe(data.product.category) ? `<div class="vui-line"><span>Категория</span><b>${data.product.category}</b></div>` : ''}
-              ${safe(data.product.delivery_type) ? `<div class="vui-line"><span>Тип выдачи</span><b>${data.product.delivery_type}</b></div>` : ''}
-              ${Array.isArray(data.product.options) && data.product.options.length ? `
-                <details class="vui-acc"><summary>Выбранные опции</summary>
-                  <ul style="margin:8px 0 0 18px;">
-                    ${data.product.options.map(li => `<li>${li}</li>`).join('')}
-                  </ul>
-                </details>` : ''}
-              ${data.product.link_admin ? '<div class="vui-productDescription" data-product-description><div class="vui-empty">Загрузка описания…</div></div>' : ''}
-              <div class="vui-line" style="border-bottom:0;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:6px;">
-                ${data.product.link_admin ? `<a class="vui-btn" href="${data.product.link_admin}">Открыть товар</a>` : ''}
-                ${data.product.link_public ? `<a class="vui-btn" href="${data.product.link_public}" target="_blank">На GGSel</a>` : ''}
-                ${data.product.link_category ? `<a class="vui-btn" href="${data.product.link_category}">Категория</a>` : ''}
-              </div>
-            </div>
-          </article>
-
-          <article class="vui-card">
-            <header class="vui-card__head"><div class="vui-title">Оплата и комиссии</div></header>
-            <div class="vui-card__body" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
-              ${safe(data.order.payment_system) ? `<div class="vui-line"><span>${paymentLabel}</span><b>${data.order.payment_system}</b></div>` : ''}
-              ${safe(data.order.quantity) ? `<div class="vui-line"><span>Количество</span><b>${data.order.quantity}</b></div>` : ''}
-              ${safe(data.cost.fee_cat) ? `<div class="vui-line"><span>Комиссия категории</span><b>${data.cost.fee_cat}${safe(data.cost.fee_cat_pct) ? ` (${data.cost.fee_cat_pct})` : ''}</b></div>` : ''}
-              ${safe(data.cost.fee_ps) ? `<div class="vui-line"><span>Комиссия ПС</span><b>${data.cost.fee_ps}${safe(data.cost.fee_ps_pct) ? ` (${data.cost.fee_ps_pct})` : ''}</b></div>` : ''}
-              ${safe(data.cost.total) ? `<div class="vui-line"><span>Итого</span><b>${data.cost.total}</b></div>` : ''}
-              ${safe(data.cost.seller_reward) ? `<div class="vui-line"><span>${rewardLabelPayment}</span><b>${data.cost.seller_reward}</b></div>` : ''}
-            </div>
-          </article>
-
-          ${safe(data.order.admin_comment) ? `
-          <article class="vui-card vui-card--note">
-            <header class="vui-card__head"><div class="vui-title">Комментарий админа</div></header>
-            <div class="vui-card__body"><p>${data.order.admin_comment}</p></div>
-          </article>` : ''}
-        </div>
-
-        <div class="vui-side">
           ${data.actions.chat ? `
           <article class="vui-card vui-card--chat">
             <header class="vui-card__head">
