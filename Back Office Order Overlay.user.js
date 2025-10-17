@@ -481,6 +481,7 @@ body{color-scheme:dark;}
 .vui-chatBox{max-height:70vh;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px;}
 .vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center;}
 .vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02);}
+.vui-chatMsg--seller{background:rgba(76,123,255,.16);border-color:rgba(76,123,255,.4);}
 .vui-chatAvatar{width:40px;height:40px;border-radius:10px;background:#1f2023;display:grid;place-items:center;font-weight:700;color:var(--vui-text);overflow:hidden;}
 .vui-chatAvatar img{width:100%;height:100%;object-fit:cover;border-radius:10px;}
 .vui-chatHead{display:flex;justify-content:space-between;align-items:center;gap:10px;}
@@ -530,12 +531,16 @@ body{color-scheme:dark;}
       ? `<a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть профиль</a>`
       : '';
 
+    const chatBtn = profile.chatLink
+      ? `<a class="vui-btn vui-btn--ghost" href="${esc(profile.chatLink)}" target="_blank" rel="noopener noreferrer">Чат</a>`
+      : '';
+
     const relatedButtons = (profile.relatedLinks || [])
       .map(link => `<a class="vui-btn" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(link.label)}</a>`)
       .join('');
 
-    const actionsBlock = (openProfileBtn || relatedButtons)
-      ? `<div class="vui-relatedActions">${openProfileBtn}${relatedButtons}</div>`
+    const actionsBlock = (chatBtn || openProfileBtn || relatedButtons)
+      ? `<div class="vui-relatedActions">${chatBtn}${openProfileBtn}${relatedButtons}</div>`
       : '';
 
     return `${detailsBlock}${actionsBlock}`;
@@ -545,6 +550,21 @@ body{color-scheme:dark;}
     const panel = wrap?.querySelector(`.vui-profileDetails[data-role="${role}"]`);
     if (!panel) return;
     panel.innerHTML = renderProfileDetails(profile, fallbackUrl);
+
+    const chatButton = wrap?.querySelector(`[data-chat-role="${role}"]`);
+    if (chatButton) {
+      if (profile && profile.chatLink) {
+        chatButton.setAttribute('href', profile.chatLink);
+        chatButton.style.display = '';
+        chatButton.setAttribute('target', '_blank');
+        chatButton.setAttribute('rel', 'noopener noreferrer');
+      } else {
+        chatButton.removeAttribute('href');
+        chatButton.style.display = 'none';
+        chatButton.removeAttribute('target');
+        chatButton.removeAttribute('rel');
+      }
+    }
 
   }
 
@@ -579,7 +599,7 @@ body{color-scheme:dark;}
     }
   }
 
-  function renderChatContent(chat) {
+  function renderChatContent(chat, context = {}) {
     if (!chat || chat.error) {
       return `<div class="vui-empty">Не удалось загрузить диалог.</div>`;
     }
@@ -588,14 +608,22 @@ body{color-scheme:dark;}
       return `<div class="vui-empty">Диалог пуст.</div>`;
     }
 
+    const normalizeName = (value) => norm(value || '').toLowerCase();
+    const sellerNames = Array.isArray(context.sellerNames) && context.sellerNames.length
+      ? context.sellerNames
+      : [context.sellerName];
+    const sellerSet = new Set(sellerNames.filter(Boolean).map(normalizeName));
+
     const items = chat.messages.map(msg => {
       const avatar = msg.avatar
         ? `<div class="vui-chatAvatar"><img src="${esc(msg.avatar)}" alt="" /></div>`
         : `<div class="vui-chatAvatar">${esc((msg.author || 'U').slice(0, 2).toUpperCase())}</div>`;
       const status = msg.status ? `<div class="vui-chatStatus">${esc(msg.status)}</div>` : '';
       const timestamp = msg.timestamp ? `<div>${esc(msg.timestamp)}</div>` : '';
+      const isSeller = sellerSet.size ? sellerSet.has(normalizeName(msg.author)) : false;
+      const msgClass = isSeller ? 'vui-chatMsg vui-chatMsg--seller' : 'vui-chatMsg';
       return `
-        <div class="vui-chatMsg">
+        <div class="${msgClass}">
           ${avatar}
           <div>
             <div class="vui-chatHead">
@@ -617,9 +645,14 @@ body{color-scheme:dark;}
 
     panel.innerHTML = '<div class="vui-empty">Загрузка диалога…</div>';
 
+    const context = {
+      sellerNames: [data.seller?.name].filter(Boolean),
+      sellerName: data.seller?.name,
+    };
+
     fetchChatData(data.actions.chat)
       .then(chat => {
-        panel.innerHTML = renderChatContent(chat);
+        panel.innerHTML = renderChatContent(chat, context);
       })
       .catch(() => {
         panel.innerHTML = renderChatContent({ error: true });
@@ -782,6 +815,7 @@ body{color-scheme:dark;}
                 ${safe(data.seller.email) ? `<div class="vui-metaRow"><span>${data.seller.email}</span></div>` : ''}
               </div>
               <div class="vui-mini__actions">
+                ${data.seller.profile ? `<a class="vui-btn vui-btn--ghost" data-chat-role="seller" style="display:none;">Чат</a>` : ''}
                 ${data.seller.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="seller">Профиль</button>` : ''}
               </div>
             </header>
@@ -796,7 +830,6 @@ body{color-scheme:dark;}
               <div class="vui-metaBox">
                 <div class="vui-metaRow">
                   <a class="vui-name" href="${data.buyer.profile || '#'}">${safe(data.buyer.name)}</a>
-                  ${rate(data.buyer.rating) ? `<span class="vui-badge">${rate(data.buyer.rating)}</span>` : ''}
                 </div>
                 <div class="vui-metaRow">
                   ${safe(data.buyer.email) ? `<span>${data.buyer.email}</span>` : ''}
@@ -804,6 +837,7 @@ body{color-scheme:dark;}
                 </div>
               </div>
               <div class="vui-mini__actions">
+                ${data.buyer.profile ? `<a class="vui-btn vui-btn--ghost" data-chat-role="buyer" style="display:none;">Чат</a>` : ''}
                 ${data.buyer.profile ? `<button class="vui-btn vui-btn--ghost vui-profileToggle" type="button" data-role="buyer">Профиль</button>` : ''}
               </div>
             </header>
