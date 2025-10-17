@@ -395,7 +395,7 @@
   --vui-line:#1e1f22;
   --vui-text:#eaeaea;
   --vui-muted:#9aa1a7;
-  --vui-accent:#ffd369;
+  --vui-accent:#4c9bff;
   --vui-ok:#2ea043;
   --vui-info:#2f81f7;
   --vui-danger:#f85149;
@@ -425,8 +425,13 @@ body{color-scheme:dark;}
 .vui-headStats{display:flex;gap:16px;flex-wrap:wrap;}
 .vui-headStat{display:flex;flex-direction:column;gap:2px;color:var(--vui-text);font-size:13px;}
 .vui-headStat b{font-size:15px;}
-.vui-uuidBadge{padding:4px 8px;border-radius:8px;border:1px dashed #333;color:var(--vui-muted);cursor:pointer;font-size:12px;}
-.vui-uuidBadge:hover{color:var(--vui-text);border-color:var(--vui-accent);}
+.vui-headFooter{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;}
+.vui-headActions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;}
+.vui-orderNumber{border:none;background:transparent;color:var(--vui-text);font:inherit;padding:0 6px;cursor:pointer;border-radius:6px;transition:background .2s ease,color .2s ease;position:relative;}
+.vui-orderNumber::after{content:'копировать';position:absolute;left:50%;bottom:-18px;transform:translateX(-50%);font-size:11px;color:var(--vui-muted);opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.vui-orderNumber:hover{color:var(--vui-accent);background:rgba(76,155,255,.08);}
+.vui-orderNumber:hover::after{opacity:1;}
+.vui-orderNumber:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text);}
 .vui-chip--success{background:rgba(46,160,67,.15);border-color:#295f36;color:#43d17a;}
 .vui-chip--info{background:rgba(47,129,247,.15);border-color:#2f81f7;color:#9ec3ff;}
@@ -437,9 +442,8 @@ body{color-scheme:dark;}
 .vui-chronoMoment{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:600;color:var(--vui-text);}
 .vui-chronoTime{font-size:13px;}
 .vui-chronoDate{font-size:12px;color:var(--vui-muted);}
-.vui-actionsBar{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2;}
-.vui-btn--primary{background:var(--vui-accent);color:#111;}
+.vui-btn--primary{background:var(--vui-accent);color:#0b1526;}
 .vui-btn--danger{border-color:#4a2222;background:#2a1212;}
 .vui-btn--ghost{background:transparent;}
 .vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
@@ -452,11 +456,18 @@ body{color-scheme:dark;}
 .vui-line:last-child{border-bottom:0;}
 .vui-card--note{background:#1c170a;border-color:#3b2f16;}
 .vui-mini__head{gap:12px;align-items:flex-start;}
-.vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text);}
+.vui-mini--seller{border-color:rgba(76,155,255,.6);box-shadow:0 0 0 1px rgba(76,155,255,.35);
+}
+.vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text);letter-spacing:.04em;}
+.vui-avatar--seller{background:rgba(76,155,255,.18);color:var(--vui-accent);}
+.vui-avatar--client{background:rgba(255,255,255,.05);}
 .vui-metaBox{flex:1;}
 .vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .vui-name{font-weight:700;color:var(--vui-text);text-decoration:none;}
+.vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px dashed transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
+.vui-productTitle:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
+.vui-productTitle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-linkAction{cursor:pointer;color:inherit;text-decoration:none;position:relative;display:inline-flex;align-items:center;gap:4px;padding-bottom:2px;}
 .vui-linkAction::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;background:transparent;transition:background .2s ease;}
 .vui-linkAction:hover{color:var(--vui-accent);}
@@ -488,18 +499,27 @@ body{color-scheme:dark;}
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
 .vui-productDescription{margin-top:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;color:var(--vui-text);}
 .vui-desc{margin:0;}
-.vui-desc>summary{cursor:pointer;display:flex;align-items:center;gap:12px;justify-content:space-between;list-style:none;font-weight:600;padding:12px 14px;}
+.vui-desc>summary{cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:8px;list-style:none;font-weight:600;padding:12px 14px;transition:color .2s ease;}
 .vui-desc>summary::-webkit-details-marker{display:none;}
-.vui-desc[open]>summary{border-bottom:1px dashed #1f2023;}
-.vui-descPreview{font-size:12px;color:var(--vui-muted);margin-left:auto;text-align:right;}
-.vui-descBody{padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto;}
+.vui-desc>summary::after{content:'Развернуть';font-size:12px;color:var(--vui-accent);letter-spacing:.04em;align-self:flex-end;}
+.vui-desc[open]>summary{border-bottom:1px dashed #1f2023;color:var(--vui-accent);}
+.vui-desc[open]>summary::after{content:'Свернуть';}
+.vui-desc[data-empty="true"]>summary::after{content:'';}
+.vui-desc[data-collapsible="false"]>summary{cursor:default;}
+.vui-desc[data-collapsible="false"]>summary:hover{color:var(--vui-text);}
+.vui-desc[data-collapsible="false"]>summary::after{content:'';}
+.vui-desc>summary:hover{color:var(--vui-accent);}
+.vui-descSnippet{font-size:13px;color:var(--vui-muted);line-height:1.5;width:100%;}
+.vui-descSnippet p{margin:0;}
+.vui-descBody{padding:12px 14px;border-top:1px dashed #1f2023;}
+.vui-descRest{display:none;flex-direction:column;gap:8px;line-height:1.5;}
+.vui-desc[open] .vui-descRest{display:flex;}
 .vui-descBody p{margin:0;line-height:1.5;}
 .vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
   .vui-layout{grid-template-columns:1fr;}
 }
 @media(max-width:1024px){
-  .vui-actionsBar{justify-content:flex-start;}
   .vui-chrono{padding-top:8px;}
   .vui-chronoItem{min-width:140px;}
 }
@@ -662,8 +682,10 @@ body{color-scheme:dark;}
 
   function renderProductDescription(productData) {
     const errorState = {
-      preview: 'Не удалось загрузить описание',
-      body: '<div class="vui-empty">Не удалось загрузить описание товара.</div>',
+      previewHtml: '<div class="vui-empty">Не удалось загрузить описание товара.</div>',
+      restHtml: '',
+      hasRest: false,
+      isEmpty: true,
     };
 
     if (!productData || productData.error) {
@@ -673,26 +695,81 @@ body{color-scheme:dark;}
     const plain = cleanMultiline(productData.description || '');
     if (!plain) {
       return {
-        preview: 'Описание отсутствует',
-        body: '<div class="vui-empty">Описание товара отсутствует.</div>',
+        previewHtml: '<div class="vui-empty">Описание товара отсутствует.</div>',
+        restHtml: '',
+        hasRest: false,
+        isEmpty: true,
       };
     }
 
-    const paragraphs = plain
+    const rawParagraphs = plain
       .split(/\n+/)
       .map(line => line.trim())
-      .filter(Boolean)
-      .map(line => `<p>${esc(line)}</p>`)
-      .join('');
+      .filter(Boolean);
 
-    const normalizedPreview = plain.replace(/\s+/g, ' ').trim();
-    const preview = normalizedPreview.length > 120
-      ? `${normalizedPreview.slice(0, 120).trim()}…`
-      : normalizedPreview;
+    const previewLimit = 240;
+    const previewParts = [];
+    const restParts = [];
+    let remaining = previewLimit;
+
+    const splitForPreview = (text, limit) => {
+      if (text.length <= limit) {
+        return { preview: text, rest: '' };
+      }
+      const slice = text.slice(0, limit);
+      const lastSpace = slice.lastIndexOf(' ');
+      const cutIndex = lastSpace > limit * 0.6 ? lastSpace : limit;
+      return {
+        preview: text.slice(0, cutIndex).trimEnd(),
+        rest: text.slice(cutIndex).trimStart(),
+      };
+    };
+
+    for (let i = 0; i < rawParagraphs.length; i += 1) {
+      const text = rawParagraphs[i];
+      if (remaining <= 0) {
+        restParts.push(text);
+        continue;
+      }
+
+      if (text.length <= remaining) {
+        previewParts.push(text);
+        remaining -= text.length;
+        continue;
+      }
+
+      const split = splitForPreview(text, remaining);
+      if (split.preview) {
+        previewParts.push(split.preview);
+      }
+      if (split.rest) {
+        restParts.push(split.rest);
+      }
+      for (let j = i + 1; j < rawParagraphs.length; j += 1) {
+        restParts.push(rawParagraphs[j]);
+      }
+      remaining = 0;
+      break;
+    }
+
+    const hasRest = restParts.length > 0;
+    const previewHtml = previewParts.length
+      ? previewParts.map((text, index) => {
+        const isLast = index === previewParts.length - 1;
+        const suffix = hasRest && isLast ? '…' : '';
+        return `<p>${esc(text)}${suffix}</p>`;
+      }).join('')
+      : '<div class="vui-empty">Описание товара отсутствует.</div>';
+
+    const restHtml = hasRest
+      ? restParts.map(text => `<p>${esc(text)}</p>`).join('')
+      : '';
 
     return {
-      preview,
-      body: paragraphs || '<div class="vui-empty">Описание товара отсутствует.</div>',
+      previewHtml,
+      restHtml,
+      hasRest,
+      isEmpty: false,
     };
   }
 
@@ -702,20 +779,45 @@ body{color-scheme:dark;}
     if (!container) return;
 
     const previewEl = container.querySelector('[data-desc-preview]');
-    const bodyEl = container.querySelector('[data-desc-body]');
-    if (previewEl) previewEl.textContent = 'Загрузка описания…';
-    if (bodyEl) bodyEl.innerHTML = '<div class="vui-empty">Загрузка описания…</div>';
+    const restEl = container.querySelector('[data-desc-rest]');
+    const detailsEl = container.querySelector('.vui-desc');
+    if (previewEl) previewEl.innerHTML = '<p class="vui-muted">Загрузка описания…</p>';
+    if (restEl) restEl.innerHTML = '';
+    if (detailsEl) {
+      detailsEl.setAttribute('data-collapsible', 'false');
+      detailsEl.removeAttribute('open');
+      detailsEl.removeAttribute('data-empty');
+    }
 
     fetchProductData(data.product.link_admin)
       .then(productData => {
         const rendered = renderProductDescription(productData);
-        if (previewEl) previewEl.textContent = rendered.preview;
-        if (bodyEl) bodyEl.innerHTML = rendered.body;
+        if (previewEl) previewEl.innerHTML = rendered.previewHtml;
+        if (restEl) restEl.innerHTML = rendered.restHtml;
+        if (detailsEl) {
+          if (rendered.isEmpty) {
+            detailsEl.setAttribute('data-empty', 'true');
+          } else {
+            detailsEl.removeAttribute('data-empty');
+          }
+          if (rendered.hasRest) {
+            detailsEl.setAttribute('data-collapsible', 'true');
+            detailsEl.removeAttribute('open');
+          } else {
+            detailsEl.setAttribute('data-collapsible', 'false');
+            detailsEl.removeAttribute('open');
+          }
+        }
       })
       .catch(() => {
         const rendered = renderProductDescription({ error: true });
-        if (previewEl) previewEl.textContent = rendered.preview;
-        if (bodyEl) bodyEl.innerHTML = rendered.body;
+        if (previewEl) previewEl.innerHTML = rendered.previewHtml;
+        if (restEl) restEl.innerHTML = rendered.restHtml;
+        if (detailsEl) {
+          detailsEl.setAttribute('data-empty', 'true');
+          detailsEl.setAttribute('data-collapsible', 'false');
+          detailsEl.removeAttribute('open');
+        }
       });
   }
 
@@ -784,62 +886,75 @@ body{color-scheme:dark;}
         `).join('')}</div>`
       : '';
 
+    const orderNumberValue = safe(data.order.number);
+    const orderUuidValue = safe(data.order.uuid);
+
     const statusChip = safe(data.order.status)
       ? `<span class="${chip(data.order.status)}">${esc(data.order.status)}</span>`
       : '';
     const statusBlock = statusChip ? `<div class="vui-headStatus">${statusChip}</div>` : '';
-    const uuidBadge = safe(data.order.uuid)
-      ? `<span class="vui-uuidBadge" data-uuid title="Клик — скопировать UUID">${esc(data.order.uuid)}</span>`
-      : '';
     const totalBlock = safe(data.cost.total)
       ? `<div class="vui-headStat"><span class="vui-muted">Итого</span><b>${esc(data.cost.total)}</b></div>`
       : '';
     const rewardLabelTop = data.actions.reward
-      ? `<a class="vui-muted vui-linkAction" href="${data.actions.reward}">Награда продавцу</a>`
+      ? `<a class="vui-muted vui-linkAction" href="${esc(data.actions.reward)}">Награда продавцу</a>`
       : '<span class="vui-muted">Награда продавцу</span>';
     const paymentLabel = data.actions.ps
-      ? `<a class="vui-linkAction" href="${data.actions.ps}">Платёжная система</a>`
+      ? `<a class="vui-linkAction" href="${esc(data.actions.ps)}">Платёжная система</a>`
       : 'Платёжная система';
     const rewardLabelPayment = data.actions.reward
-      ? `<a class="vui-linkAction" href="${data.actions.reward}">Награда продавцу</a>`
+      ? `<a class="vui-linkAction" href="${esc(data.actions.reward)}">Награда продавцу</a>`
       : 'Награда продавцу';
     const rewardBlock = safe(data.cost.seller_reward)
       ? `<div class="vui-headStat">${rewardLabelTop}<b>${esc(data.cost.seller_reward)}</b></div>`
       : '';
-    const statsMarkup = totalBlock || rewardBlock
+    const statsSection = (totalBlock || rewardBlock)
       ? `<div class="vui-headStats">${totalBlock}${rewardBlock}</div>`
+      : '';
+    const headActions = bottomButtons
+      ? `<div class="vui-headActions">${bottomButtons}</div>`
+      : '';
+    const headFooter = (statsSection || headActions)
+      ? `<div class="vui-headFooter">${statsSection}${headActions}</div>`
       : '';
 
     const bottomButtons = [
-      data.actions.close ? `<a class="vui-btn" href="${data.actions.close}">Закрыть сделку</a>` : '',
-      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${data.actions.refund}">Возврат</a>` : '',
-      data.actions.edit ? `<a class="vui-btn" href="${data.actions.edit}">Редактировать</a>` : '',
+      data.actions.close ? `<a class="vui-btn" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
+      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${esc(data.actions.refund)}">Возврат</a>` : '',
+      data.actions.edit ? `<a class="vui-btn" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
     ].filter(Boolean).join('');
 
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
     const categoryLine = safe(data.product.category)
-      ? `<div class="vui-line"><span>${data.product.link_category ? `<a class="vui-linkAction" href="${data.product.link_category}">Категория</a>` : 'Категория'}</span><b>${data.product.category}</b></div>`
+      ? `<div class="vui-line"><span>${data.product.link_category ? `<a class="vui-linkAction" href="${esc(data.product.link_category)}">Категория</a>` : 'Категория'}</span><b>${esc(data.product.category)}</b></div>`
       : '';
-
-    const productButtons = [
-      data.product.link_admin ? `<a class="vui-btn" href="${data.product.link_admin}">Открыть товар</a>` : '',
-      data.product.link_public ? `<a class="vui-btn" href="${data.product.link_public}" target="_blank">На GGSel</a>` : '',
-    ].filter(Boolean);
 
     const productDescriptionBlock = data.product.link_admin
       ? `<div class="vui-productDescription" data-product-description>
-          <details class="vui-desc">
+          <details class="vui-desc" data-collapsible="false">
             <summary>
               <span>Описание товара</span>
-              <span class="vui-descPreview" data-desc-preview>Загрузка описания…</span>
+              <div class="vui-descSnippet" data-desc-preview><p class="vui-muted">Загрузка описания…</p></div>
             </summary>
             <div class="vui-descBody" data-desc-body>
-              <div class="vui-empty">Загрузка описания…</div>
+              <div class="vui-descRest" data-desc-rest></div>
             </div>
           </details>
         </div>`
       : '';
+
+    const productTitleValue = safe(data.product.title);
+    const productTitleMarkup = productTitleValue
+      ? (data.product.link_admin
+        ? `<a class="vui-productTitle" data-product-title data-public-link="${esc(data.product.link_public || '')}" href="${esc(data.product.link_admin)}" title="Клик — открыть товар, Alt+клик — на GGSel">${esc(productTitleValue)}</a>`
+        : esc(productTitleValue))
+      : 'Товар';
+
+    const orderUuidAttr = orderUuidValue ? ` data-uuid="${esc(orderUuidValue)}"` : '';
+    const orderTitleMarkup = orderNumberValue
+      ? `Заказ №<button class="vui-orderNumber" type="button" data-order-number${orderUuidAttr} title="Клик — скопировать номер, Alt+клик — UUID">${esc(orderNumberValue)}</button>`
+      : 'Заказ';
 
     wrap.innerHTML = `
       <section class="vui-layout">
@@ -847,18 +962,17 @@ body{color-scheme:dark;}
           <article class="vui-head">
             <div class="vui-headLine">
               <div class="vui-headTitle">
-                <h1>${data.order.number ? `Заказ №${esc(data.order.number)}` : 'Заказ'}</h1>
-                ${uuidBadge}
+                <h1>${orderTitleMarkup}</h1>
               </div>
               ${statusBlock}
             </div>
-            ${statsMarkup}
+            ${headFooter}
             ${chronologyMarkup}
           </article>
 
           <article class="vui-card">
             <header class="vui-card__head">
-              <div class="vui-title">${safe(data.product.title)}</div>
+              <div class="vui-title">${productTitleMarkup}</div>
               ${safe(data.product.status) ? `<span class="vui-chip vui-chip--info">${data.product.status}</span>` : ''}
             </header>
             <div class="vui-card__body">
@@ -871,9 +985,6 @@ body{color-scheme:dark;}
                   </ul>
                 </details>` : ''}
               ${productDescriptionBlock}
-              ${productButtons.length ? `<div class="vui-line" style="border-bottom:0;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:6px;">
-                ${productButtons.join('')}
-              </div>` : ''}
             </div>
           </article>
 
@@ -897,9 +1008,9 @@ body{color-scheme:dark;}
         </div>
 
         <div class="vui-layoutSide">
-          <article class="vui-mini">
+          <article class="vui-mini vui-mini--seller">
             <header class="vui-mini__head">
-              <div class="vui-avatar">${esc((data.seller.name || 'U').slice(0,2).toUpperCase())}</div>
+              <div class="vui-avatar vui-avatar--seller">SEL</div>
               <div class="vui-metaBox">
                 <div class="vui-metaRow">
                   <a class="vui-name" href="${data.seller.profile || '#'}">${safe(data.seller.name)}</a>
@@ -919,7 +1030,7 @@ body{color-scheme:dark;}
 
           <article class="vui-mini">
             <header class="vui-mini__head">
-              <div class="vui-avatar">${esc((data.buyer.name || 'U').slice(0,2).toUpperCase())}</div>
+              <div class="vui-avatar vui-avatar--client">CLI</div>
               <div class="vui-metaBox">
                 <div class="vui-metaRow">
                   <a class="vui-name" href="${data.buyer.profile || '#'}">${safe(data.buyer.name)}</a>
@@ -971,7 +1082,34 @@ body{color-scheme:dark;}
     setupProfileToggles(wrap);
     // copy handlers
     wrap.querySelector('.vui-badge.ip')?.addEventListener('click', () => copy(data.buyer.ip));
-    wrap.querySelector('.vui-uuidBadge[data-uuid]')?.addEventListener('click', () => copy(data.order.uuid));
+    const orderNumberEl = wrap.querySelector('[data-order-number]');
+    if (orderNumberEl) {
+      orderNumberEl.addEventListener('click', (event) => {
+        const useUuid = event.altKey && orderUuidValue;
+        const targetValue = useUuid ? orderUuidValue : orderNumberValue;
+        if (!targetValue) return;
+        event.preventDefault();
+        copy(targetValue);
+      });
+      orderNumberEl.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        const useUuid = event.altKey && orderUuidValue;
+        const targetValue = useUuid ? orderUuidValue : orderNumberValue;
+        if (targetValue) copy(targetValue);
+      });
+    }
+
+    const productTitleEl = wrap.querySelector('[data-product-title]');
+    if (productTitleEl) {
+      productTitleEl.addEventListener('click', (event) => {
+        const publicLink = productTitleEl.getAttribute('data-public-link');
+        if (event.altKey && publicLink) {
+          event.preventDefault();
+          window.open(publicLink, '_blank', 'noopener,noreferrer');
+        }
+      });
+    }
     return wrap;
   }
 
