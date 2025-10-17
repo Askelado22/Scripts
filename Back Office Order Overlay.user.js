@@ -908,6 +908,12 @@ body{color-scheme:dark;}
     const rewardBlock = safe(data.cost.seller_reward)
       ? `<div class="vui-headStat">${rewardLabelTop}<b>${esc(data.cost.seller_reward)}</b></div>`
       : '';
+    const bottomButtons = [
+      data.actions.close ? `<a class="vui-btn" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
+      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${esc(data.actions.refund)}">Возврат</a>` : '',
+      data.actions.edit ? `<a class="vui-btn" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
+    ].filter(Boolean).join('');
+
     const statsSection = (totalBlock || rewardBlock)
       ? `<div class="vui-headStats">${totalBlock}${rewardBlock}</div>`
       : '';
@@ -917,12 +923,6 @@ body{color-scheme:dark;}
     const headFooter = (statsSection || headActions)
       ? `<div class="vui-headFooter">${statsSection}${headActions}</div>`
       : '';
-
-    const bottomButtons = [
-      data.actions.close ? `<a class="vui-btn" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
-      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${esc(data.actions.refund)}">Возврат</a>` : '',
-      data.actions.edit ? `<a class="vui-btn" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
-    ].filter(Boolean).join('');
 
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
