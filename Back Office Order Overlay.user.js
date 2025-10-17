@@ -61,6 +61,36 @@
     return a ? a.href : '';
   }
 
+  function toDateObj(raw) {
+    if (!raw) return null;
+    const value = raw.trim();
+    if (!value) return null;
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)(?:\s+([+-]\d{4}))?/);
+    if (m) {
+      const time = m[2].length === 5 ? `${m[2]}:00` : m[2];
+      const tz = m[3] ? m[3].replace(/([+-]\d{2})(\d{2})/, '$1:$2') : '';
+      const iso = `${m[1]}T${time}${tz}`;
+      const d = new Date(iso);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    const fallback = new Date(value.replace(' ', 'T'));
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
+  }
+
+  function splitDateParts(raw) {
+    const original = (raw || '').trim();
+    if (!original) return { time: '', date: '' };
+    const match = original.match(/(\d{2}:\d{2}(?::\d{2})?)/);
+    if (!match) {
+      return { time: '', date: original };
+    }
+    const time = match[1];
+    const before = original.slice(0, match.index).trim();
+    const after = original.slice(match.index + time.length).trim();
+    const date = [before, after].filter(Boolean).join(' ').trim();
+    return { time, date };
+  }
+
   async function fetchProfileData(url) {
     if (!url) return null;
     try {
@@ -300,16 +330,28 @@
 .vui-wrap{ --vui-bg:#0b0b0c; --vui-card:#111214; --vui-line:#1e1f22; --vui-text:#eaeaea; --vui-muted:#9aa1a7;
           --vui-accent:#ffd369; --vui-ok:#2ea043; --vui-info:#2f81f7; --vui-danger:#f85149; margin-top:12px; }
 .vui-wrap *{ box-sizing:border-box; }
-.vui-head{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:16px;border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card)}
+.vui-head{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:16px;align-items:stretch;padding:16px;border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card)}
+.vui-headMain{display:flex;flex-direction:column;gap:12px}
+.vui-headLine{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .vui-head h1{margin:0;font-size:18px;color:var(--vui-text)}
 .vui-chip{display:inline-block;padding:.2rem .5rem;border-radius:999px;background:#222;border:1px solid #333;font-weight:600;color:var(--vui-text)}
 .vui-chip--success{background:rgba(46,160,67,.15);border-color:#295f36;color:#43d17a}
 .vui-chip--info{background:rgba(47,129,247,.15);border-color:#2f81f7;color:#9ec3ff}
 .vui-chip--warn{background:rgba(255,211,105,.15);border-color:#977f2d;color:#ffd369}
 .vui-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--vui-muted)}
+.vui-uuidBadge{padding:4px 8px;border-radius:8px;border:1px dashed #333;color:var(--vui-muted);cursor:pointer;font-size:12px}
+.vui-uuidBadge:hover{color:var(--vui-text);border-color:var(--vui-accent)}
+.vui-chrono{position:relative;display:flex;gap:16px;align-items:flex-start;padding-top:18px;margin-top:4px}
+.vui-chrono::before{content:"";position:absolute;top:24px;left:0;right:0;height:2px;background:#1f2023}
+.vui-chronoItem{position:relative;flex:1;min-width:110px;text-align:center;padding-top:6px}
+.vui-chronoItem::before{content:"";position:absolute;top:17px;left:50%;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;background:var(--vui-card);border:2px solid var(--vui-accent)}
+.vui-chronoTime{font-weight:600;color:var(--vui-text)}
+.vui-chronoDate{margin-top:4px;color:var(--vui-muted);font-size:12px}
+.vui-chronoLabel{margin-top:6px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
+.vui-chrono--single::before{display:none}
 .vui-total{display:flex;gap:24px;color:var(--vui-text)}
 .vui-total b{font-size:16px}
-.vui-actions .vui-btn{margin-left:8px}
+.vui-actionsBar{margin-top:20px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 
 .vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2}
 .vui-btn--primary{background:var(--vui-accent);color:#111}
@@ -328,9 +370,6 @@
 .vui-title{font-weight:700}
 .vui-line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #1a1a1a}
 .vui-line:last-child{border-bottom:0}
-.vui-timeline{list-style:none;margin:0;padding:12px 14px}
-.vui-timeline li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #1a1a1a}
-.vui-timeline li:last-child{border-bottom:0}
 .vui-card--note{background:#1c170a;border-color:#3b2f16}
 
 .vui-mini__head{gap:12px}
@@ -353,7 +392,7 @@
 .vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word}
 .vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
 
-.vui-card--chat{display:flex;flex-direction:column;max-height:70vh}
+.vui-card--chat{display:flex;flex-direction:column;max-height:60vh}
 .vui-card--chat .vui-card__body{flex:1;display:flex;padding:0}
 .vui-chatBox{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px}
 .vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center}
@@ -367,6 +406,14 @@
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word}
 
 .vui-old-hidden{display:none!important}
+@media(max-width:1024px){
+  .vui-head{grid-template-columns:1fr}
+  .vui-actionsBar{justify-content:flex-start}
+  .vui-chrono{flex-direction:column;align-items:flex-start;padding-top:0}
+  .vui-chrono::before{display:none}
+  .vui-chronoItem{min-width:auto;text-align:left;padding-left:16px;margin-top:12px}
+  .vui-chronoItem::before{left:0;transform:none;top:0}
+}
 `;
     const s = document.createElement('style');
     s.textContent = css;
@@ -522,27 +569,85 @@
     const rate = (r) => isEmptyVal(r) ? '' : `${r}★`;
     const safe = (v) => isEmptyVal(v) ? '' : v;
 
+    const chronologyOrder = [
+      { key: 'created_at', label: 'Создан' },
+      { key: 'paid_at', label: 'Оплата' },
+      { key: 'confirmed_at', label: 'Подтверждение' },
+      { key: 'refunded_at', label: 'Возврат' },
+      { key: 'archived_at', label: 'Архивирование' },
+      { key: 'updated_at', label: 'Обновление' },
+      { key: 'canceled_at', label: 'Отмена' },
+    ];
+    const chronology = chronologyOrder
+      .map(item => {
+        const raw = data.order[item.key];
+        if (isEmptyVal(raw)) return null;
+        const parts = splitDateParts(raw);
+        const hasTime = Boolean(parts.time);
+        let rest = raw;
+        if (hasTime) {
+          const idx = raw.indexOf(parts.time);
+          if (idx >= 0) {
+            const before = raw.slice(0, idx).trimEnd();
+            const after = raw.slice(idx + parts.time.length).trimStart();
+            rest = [before, after].filter(Boolean).join(' ').trim();
+          } else {
+            rest = raw.replace(parts.time, '').trim();
+          }
+        }
+        const dateValue = parts.date || rest || (hasTime ? '' : raw);
+        return {
+          ...item,
+          raw,
+          time: hasTime ? parts.time : '—',
+          date: dateValue || '—',
+          dateObj: toDateObj(raw),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.dateObj && b.dateObj) return a.dateObj - b.dateObj;
+        if (a.dateObj) return -1;
+        if (b.dateObj) return 1;
+        return String(a.raw).localeCompare(String(b.raw));
+      });
+    const chronologyMarkup = chronology.length
+      ? `<div class="${chronology.length > 1 ? 'vui-chrono' : 'vui-chrono vui-chrono--single'}">${chronology.map(item => `
+            <div class="vui-chronoItem">
+              <div class="vui-chronoTime">${esc(item.time)}</div>
+              <div class="vui-chronoDate">${esc(item.date)}</div>
+              <div class="vui-chronoLabel">${esc(item.label)}</div>
+            </div>
+          `).join('')}</div>`
+      : '';
+
+    const bottomButtons = [
+      data.actions.close ? `<a class="vui-btn" href="${data.actions.close}">Закрыть сделку</a>` : '',
+      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${data.actions.refund}">Возврат</a>` : '',
+      data.actions.edit ? `<a class="vui-btn" href="${data.actions.edit}">Редактировать</a>` : '',
+      data.actions.ps ? `<a class="vui-btn" href="${data.actions.ps}">Платёжная система</a>` : '',
+      data.actions.reward ? `<a class="vui-btn" href="${data.actions.reward}">Награда продавцу</a>` : '',
+    ].filter(Boolean).join('');
+
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
 
     wrap.innerHTML = `
       <section class="vui-head">
-        <div>
-          <h1>${data.order.number ? `Заказ №${data.order.number}` : 'Заказ'}</h1>
+        <div class="vui-headMain">
+          <div class="vui-headLine">
+            <h1>${data.order.number ? `Заказ №${data.order.number}` : 'Заказ'}</h1>
+            ${safe(data.order.uuid) ? `<span class="vui-uuidBadge" data-uuid title="Клик — скопировать UUID">${data.order.uuid}</span>` : ''}
+          </div>
           <div class="vui-meta">
             ${safe(data.order.status) ? `<span class="${chip(data.order.status)}">${data.order.status}</span>` : ''}
-            ${safe(data.order.paid_at) ? `<span>Оплата: <b>${data.order.paid_at}</b></span>` : ''}
-            ${safe(data.order.created_at) ? `<span>Создан: <b>${data.order.created_at}</b></span>` : ''}
           </div>
+          ${chronologyMarkup}
         </div>
         <div>
           <div class="vui-total">
             ${safe(data.cost.total) ? `<div><span class="vui-muted">Итого</span><br><b>${data.cost.total}</b></div>` : ''}
             ${safe(data.cost.seller_reward) ? `<div><span class="vui-muted">Награда продавцу</span><br><b>${data.cost.seller_reward}</b></div>` : ''}
-          </div>
-          <div class="vui-actions" style="margin-top:8px;">
-            ${data.actions.close ? `<a class="vui-btn" href="${data.actions.close}">Закрыть</a>` : ''}
-            ${data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${data.actions.refund}">Возврат</a>` : ''}
           </div>
         </div>
       </section>
@@ -583,18 +688,14 @@
             </div>
           </article>
 
-          <article class="vui-card">
-            <header class="vui-card__head"><div class="vui-title">Хронология</div></header>
-            <ul class="vui-timeline">
-              ${safe(data.order.paid_at) ? `<li><span>Оплата</span><b>${data.order.paid_at}</b></li>` : ''}
-              ${safe(data.order.confirmed_at) ? `<li><span>Подтверждение</span><b>${data.order.confirmed_at}</b></li>` : ''}
-              ${safe(data.order.refunded_at) ? `<li><span>Возврат</span><b>${data.order.refunded_at}</b></li>` : ''}
-              ${safe(data.order.archived_at) ? `<li><span>Архивирование</span><b>${data.order.archived_at}</b></li>` : ''}
-              ${safe(data.order.updated_at) ? `<li><span>Обновление</span><b>${data.order.updated_at}</b></li>` : ''}
-              ${safe(data.order.created_at) ? `<li><span>Создан</span><b>${data.order.created_at}</b></li>` : ''}
-            </ul>
-          </article>
+          ${safe(data.order.admin_comment) ? `
+          <article class="vui-card vui-card--note">
+            <header class="vui-card__head"><div class="vui-title">Комментарий админа</div></header>
+            <div class="vui-card__body"><p>${data.order.admin_comment}</p></div>
+          </article>` : ''}
+        </div>
 
+        <div class="vui-col-5">
           ${data.actions.chat ? `
           <article class="vui-card vui-card--chat">
             <header class="vui-card__head">
@@ -608,14 +709,6 @@
             </div>
           </article>` : ''}
 
-          ${safe(data.order.admin_comment) ? `
-          <article class="vui-card vui-card--note">
-            <header class="vui-card__head"><div class="vui-title">Комментарий админа</div></header>
-            <div class="vui-card__body"><p>${data.order.admin_comment}</p></div>
-          </article>` : ''}
-        </div>
-
-        <div class="vui-col-5">
           <article class="vui-mini">
             <header class="vui-mini__head">
               <div class="vui-avatar">${(data.seller.name || 'U').slice(0,2).toUpperCase()}</div>
@@ -668,23 +761,9 @@
               ${safe(data.review.date) ? `<div class="vui-muted" style="margin-top:6px">${data.review.date}</div>` : ''}
             </div>
           </article>` : ''}
-
-          <article class="vui-card">
-            <header class="vui-card__head"><div class="vui-title">Техническое</div></header>
-            <div class="vui-card__body">
-              ${safe(data.order.uuid) ? `<div class="vui-line"><span>UUID</span><b class="vui-uuid" title="Клик — скопировать UUID">${data.order.uuid}</b></div>` : ''}
-              ${safe(data.order.payment_system) ? `<div class="vui-line"><span>Платёжка</span><b>${data.order.payment_system}</b></div>` : ''}
-
-              <div class="vui-line" style="border-bottom:0;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:6px;">
-                ${data.actions.edit ? `<a class="vui-btn" href="${data.actions.edit}">Редактировать</a>` : ''}
-                ${data.actions.refund ? `<a class="vui-btn" href="${data.actions.refund}">Посмотреть возвраты</a>` : ''}
-                ${data.actions.ps ? `<a class="vui-btn" href="${data.actions.ps}">Открыть платёжную систему</a>` : ''}
-                ${data.actions.reward ? `<a class="vui-btn" href="${data.actions.reward}">Открыть награду продавцу</a>` : ''}
-              </div>
-            </div>
-          </article>
         </div>
       </section>
+      ${bottomButtons ? `<section class="vui-actionsBar">${bottomButtons}</section>` : ''}
     `;
 
     const content = document.querySelector('section.content');
@@ -693,7 +772,7 @@
     setupProfileToggles(wrap);
     // copy handlers
     wrap.querySelector('.vui-badge.ip')?.addEventListener('click', () => copy(data.buyer.ip));
-    wrap.querySelector('.vui-uuid')?.addEventListener('click', () => copy(data.order.uuid));
+    wrap.querySelector('.vui-uuidBadge[data-uuid]')?.addEventListener('click', () => copy(data.order.uuid));
     return wrap;
   }
 
