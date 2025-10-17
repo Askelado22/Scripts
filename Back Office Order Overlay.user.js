@@ -416,6 +416,7 @@ body, .skin-blue .wrapper, .content-wrapper{
 }
 body{color-scheme:dark;}
 .content{background:transparent;}
+.main-footer{display:none!important;}
 .content-header{display:none!important;}
 .vui-wrap{
   margin-top:0;
@@ -476,7 +477,7 @@ body{color-scheme:dark;}
 .vui-mini__actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-metaRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .vui-name{font-weight:700;color:var(--vui-text);text-decoration:none;}
-.vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px dashed transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
+.vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
 .vui-productTitle:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
 .vui-productTitle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-linkAction{cursor:pointer;color:inherit;text-decoration:none;position:relative;display:inline-flex;align-items:center;gap:4px;padding-bottom:2px;}
@@ -497,7 +498,7 @@ body{color-scheme:dark;}
 .vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;}
 .vui-card--chat{display:flex;flex-direction:column;}
 .vui-card--chat .vui-card__body{padding:0;}
-.vui-chatBox{max-height:70vh;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px;}
+.vui-chatBox{max-height:70vh;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px;overscroll-behavior:contain;}
 .vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center;}
 .vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02);}
 .vui-chatMsg--seller{background:rgba(76,123,255,.16);border-color:rgba(76,123,255,.4);}
@@ -524,6 +525,7 @@ body{color-scheme:dark;}
 .vui-descBody{padding:12px 14px;border-top:1px dashed #1f2023;line-height:1.5;display:flex;flex-direction:column;gap:8px;}
 .vui-descBody p{margin:0;line-height:1.5;}
 .vui-descBody p+p{margin-top:4px;}
+.vui-footerNote{margin-top:24px;padding:12px 0 24px;color:var(--vui-muted);font-size:12px;text-align:center;border-top:1px solid var(--vui-line);}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody{max-height:7.2em;overflow:hidden;position:relative;}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody::after{content:'';position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(0deg,var(--vui-card) 0%,rgba(17,18,20,0) 70%);pointer-events:none;}
 .vui-badge.ip.vui-isCopied,.vui-orderNumber.vui-isCopied{box-shadow:0 0 0 0 rgba(76,155,255,.4);}
@@ -613,6 +615,27 @@ body{color-scheme:dark;}
         btn.classList.toggle('is-open', open);
       });
     });
+  }
+
+  function setupChatScrollLock(wrap) {
+    const box = wrap?.querySelector('.vui-chatBox');
+    if (!box) return;
+    const wheelHandler = (event) => {
+      const el = box;
+      const deltaY = event.deltaY;
+      const atTop = el.scrollTop <= 0;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
+        event.preventDefault();
+      }
+      event.stopPropagation();
+    };
+    box.addEventListener('wheel', wheelHandler, { passive: false });
+
+    const touchHandler = (event) => {
+      event.stopPropagation();
+    };
+    box.addEventListener('touchmove', touchHandler, { passive: false });
   }
 
   function loadProfileSections(data, wrap) {
@@ -1057,12 +1080,14 @@ body{color-scheme:dark;}
           </article>` : ''}
         </div>
       </section>
+      <div class="vui-footerNote">GsellersBackOffice © 2025 | SERVER TIMEZONE: Moscow</div>
     `;
 
     const content = document.querySelector('section.content');
     content?.insertBefore(wrap, content.firstElementChild?.nextElementSibling || content.firstChild);
 
     setupProfileToggles(wrap);
+    setupChatScrollLock(wrap);
     // copy handlers
     const ipBadge = wrap.querySelector('.vui-badge.ip');
     if (ipBadge) {
