@@ -30,6 +30,7 @@
   };
   const copy = (s) => { try { navigator.clipboard?.writeText(s); } catch {} };
   const profileCache = new Map();
+  const chatCache = new Map();
 
   function findH(selector, text) {
     return Array.from(document.querySelectorAll(selector))
@@ -77,6 +78,23 @@
     }
   }
 
+  async function fetchChatData(url) {
+    if (!url) return null;
+    try {
+      const absolute = new URL(url, location.origin).href;
+      if (chatCache.has(absolute)) return chatCache.get(absolute);
+      const res = await fetch(absolute, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const data = parseChatHtml(html, absolute);
+      chatCache.set(absolute, data);
+      return data;
+    } catch (e) {
+      log('Failed to load chat', url, e);
+      return { error: true, url };
+    }
+  }
+
   function parseProfileHtml(html, url) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
@@ -113,6 +131,44 @@
     const chatLink = chatLinkEl ? new URL(chatLinkEl.getAttribute('href') || chatLinkEl.href, url).href : '';
 
     return { title, fields, chatLink, relatedLinks, url };
+  }
+
+  function parseChatHtml(html, url) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const chatBox = doc.querySelector('#chat-box');
+    if (!chatBox) return { messages: [], url };
+
+    const messages = Array.from(chatBox.querySelectorAll('.item')).map(item => {
+      const avatar = item.querySelector('img')?.getAttribute('src') || '';
+      const messageEl = item.querySelector('.message');
+      const nameAnchor = messageEl?.querySelector('.name') || null;
+      const timeEl = nameAnchor?.querySelector('.text-muted');
+      const statusEl = timeEl?.querySelector('.bold');
+      const author = norm(Array.from((nameAnchor?.childNodes || [])).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(' '));
+      const timeParts = [];
+      if (timeEl) {
+        Array.from(timeEl.childNodes).forEach(node => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const t = norm(node.textContent);
+            if (t) timeParts.push(t);
+          }
+        });
+      }
+      const timestamp = timeParts.join(' ');
+      const status = norm(statusEl?.textContent || '');
+      const text = norm(messageEl?.querySelector('p')?.textContent || '');
+
+      return {
+        author,
+        avatar: avatar ? new URL(avatar, url).href : '',
+        timestamp,
+        status,
+        text,
+      };
+    });
+
+    return { messages, url };
   }
 
   // ---------- collect ----------
@@ -297,6 +353,19 @@
 .vui-detailValue{font-weight:600;color:var(--vui-text);word-break:break-word}
 .vui-relatedActions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
 
+.vui-card--chat{display:flex;flex-direction:column;max-height:70vh}
+.vui-card--chat .vui-card__body{flex:1;display:flex;padding:0}
+.vui-chatBox{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+.vui-chatBox .vui-empty{margin:auto;color:var(--vui-muted);text-align:center}
+.vui-chatMsg{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:12px;border:1px solid #1f2023;border-radius:12px;background:rgba(255,255,255,.02)}
+.vui-chatAvatar{width:40px;height:40px;border-radius:10px;background:#1f2023;display:grid;place-items:center;font-weight:700;color:var(--vui-text);overflow:hidden}
+.vui-chatAvatar img{width:100%;height:100%;object-fit:cover;border-radius:10px}
+.vui-chatHead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.vui-chatAuthor{font-weight:600;color:var(--vui-text)}
+.vui-chatMeta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--vui-muted);gap:2px}
+.vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted)}
+.vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word}
+
 .vui-old-hidden{display:none!important}
 `;
     const s = document.createElement('style');
@@ -385,6 +454,63 @@
     }
   }
 
+  function renderChatContent(chat, fallbackUrl) {
+    if (!chat || chat.error) {
+      const openBtn = fallbackUrl
+        ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
+        : '';
+      return `<div class="vui-empty">Не удалось загрузить диалог.</div>${openBtn}`;
+    }
+
+    if (!chat.messages || !chat.messages.length) {
+      const openBtn = fallbackUrl
+        ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
+        : '';
+      return `<div class="vui-empty">Диалог пуст.</div>${openBtn}`;
+    }
+
+    const items = chat.messages.map(msg => {
+      const avatar = msg.avatar
+        ? `<div class="vui-chatAvatar"><img src="${esc(msg.avatar)}" alt="" /></div>`
+        : `<div class="vui-chatAvatar">${esc((msg.author || 'U').slice(0, 2).toUpperCase())}</div>`;
+      const status = msg.status ? `<div class="vui-chatStatus">${esc(msg.status)}</div>` : '';
+      const timestamp = msg.timestamp ? `<div>${esc(msg.timestamp)}</div>` : '';
+      return `
+        <div class="vui-chatMsg">
+          ${avatar}
+          <div>
+            <div class="vui-chatHead">
+              <div class="vui-chatAuthor">${esc(msg.author)}</div>
+              <div class="vui-chatMeta">${timestamp}${status}</div>
+            </div>
+            <div class="vui-chatText">${esc(msg.text)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const openBtn = fallbackUrl
+      ? `<div class="vui-relatedActions"><a class="vui-btn vui-btn--ghost" href="${esc(fallbackUrl)}" target="_blank" rel="noopener noreferrer">Открыть диалог</a></div>`
+      : '';
+
+    return `${items}${openBtn}`;
+  }
+
+  function loadChatSection(data, wrap) {
+    const panel = wrap?.querySelector('[data-chat-panel]');
+    if (!panel || !data.actions.chat) return;
+
+    panel.innerHTML = '<div class="vui-empty">Загрузка диалога…</div>';
+
+    fetchChatData(data.actions.chat)
+      .then(chat => {
+        panel.innerHTML = renderChatContent(chat, data.actions.chat);
+      })
+      .catch(() => {
+        panel.innerHTML = renderChatContent({ error: true }, data.actions.chat);
+      });
+  }
+
   // ---------- build ----------
   function buildUI(data) {
     const chip = (s) => {
@@ -415,7 +541,6 @@
             ${safe(data.cost.seller_reward) ? `<div><span class="vui-muted">Награда продавцу</span><br><b>${data.cost.seller_reward}</b></div>` : ''}
           </div>
           <div class="vui-actions" style="margin-top:8px;">
-            ${data.actions.chat ? `<a class="vui-btn vui-btn--primary" href="${data.actions.chat}">Открыть диалог</a>` : ''}
             ${data.actions.close ? `<a class="vui-btn" href="${data.actions.close}">Закрыть</a>` : ''}
             ${data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${data.actions.refund}">Возврат</a>` : ''}
           </div>
@@ -469,6 +594,19 @@
               ${safe(data.order.created_at) ? `<li><span>Создан</span><b>${data.order.created_at}</b></li>` : ''}
             </ul>
           </article>
+
+          ${data.actions.chat ? `
+          <article class="vui-card vui-card--chat">
+            <header class="vui-card__head">
+              <div class="vui-title">Диалог</div>
+              <a class="vui-btn vui-btn--ghost" href="${data.actions.chat}" target="_blank" rel="noopener noreferrer">Открыть оригинал</a>
+            </header>
+            <div class="vui-card__body">
+              <div class="vui-chatBox" data-chat-panel>
+                <div class="vui-empty">Загрузка диалога…</div>
+              </div>
+            </div>
+          </article>` : ''}
 
           ${safe(data.order.admin_comment) ? `
           <article class="vui-card vui-card--note">
@@ -571,6 +709,7 @@
     hideOld(data.domRefs);
     const wrap = buildUI(data);
     loadProfileSections(data, wrap);
+    loadChatSection(data, wrap);
     log('Overlay ready (namespaced styles).');
   }
 
