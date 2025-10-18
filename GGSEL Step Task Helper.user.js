@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.7
+// @version      0.4.8
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -199,6 +199,7 @@
       gap: 4px;
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -207,6 +208,9 @@
       color: rgba(255, 255, 255, 0.85);
       cursor: pointer;
       user-select: none;
+      padding: 4px 6px;
+      margin: -4px -6px;
+      border-radius: 8px;
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle_disabled {
       opacity: 0.45;
@@ -215,8 +219,13 @@
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle input {
       position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       opacity: 0;
-      pointer-events: none;
+      cursor: pointer;
+      pointer-events: auto;
+      z-index: 2;
     }
     #ggsel-step-helper-panel .ggsel-helper-switch {
       position: relative;
