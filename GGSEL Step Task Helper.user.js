@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.5
+// @version      0.4.6
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -23,10 +23,12 @@
     lastIndex: 0,
     currentId: null,
     autoAdvance: false,
+    autoWithdrawEnabled: false,
     autoMode: false,
     autoFollowup: false,
     autoAdvancePending: false,
     autoModePending: false,
+    autoModeResumeDelay: 400,
     collapsed: false
   };
 
@@ -83,6 +85,7 @@
   let returnButton;
   let progressFill;
   let progressValue;
+  let autoWithdrawCheckbox;
   let autoAdvanceCheckbox;
   let autoModeRadio;
   let collapseButton;
@@ -92,6 +95,8 @@
   const PUBLISH_BUTTON_LABELS = ['Сохранить и опубликовать', 'Опубликовать'];
   const SAVE_BUTTON_LABELS = ['Далее', 'Сохранить и далее', ...PUBLISH_BUTTON_LABELS];
   const TARGET_PRICE_VALUE = '99999';
+  const AUTO_MODE_DEFAULT_DELAY = 400;
+  const AUTO_MODE_NAV_DELAY = 5000;
 
   let autoWithdrawTimer = null;
   let autoWithdrawRunning = false;
@@ -135,6 +140,7 @@
     } else {
       state.autoModePending = false;
     }
+    state.autoModeResumeDelay = AUTO_MODE_NAV_DELAY;
     saveState();
     location.href = buildEditUrl(id);
   }
@@ -588,6 +594,11 @@
             <input type="radio" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
             <span>Авто</span>
           </label>
+          <span class="ggsel-helper-auto-toggle" title="После публикации снять товар и перейти к следующему ID">
+            <input type="checkbox" id="ggsel-helper-auto-withdraw" ${state.autoWithdrawEnabled ? 'checked' : ''}>
+            <span class="ggsel-helper-switch"></span>
+            <span>Само</span>
+          </span>
           <span class="ggsel-helper-auto-toggle" title="Автоматически перейти к следующему ID после этапа 3">
             <input type="checkbox" id="ggsel-helper-auto-next" ${state.autoAdvance ? 'checked' : ''}>
             <span class="ggsel-helper-switch"></span>
@@ -649,9 +660,22 @@
     returnButton = panel.querySelector('button[data-action="return"]');
     progressFill = panel.querySelector('.ggsel-helper-progress-fill');
     progressValue = panel.querySelector('#ggsel-helper-progress-value');
+    autoWithdrawCheckbox = panel.querySelector('#ggsel-helper-auto-withdraw');
     autoAdvanceCheckbox = panel.querySelector('#ggsel-helper-auto-next');
     autoModeRadio = panel.querySelector('#ggsel-helper-auto');
     collapseButton = panel.querySelector('.ggsel-helper-collapse-btn');
+
+    if (autoWithdrawCheckbox) {
+      autoWithdrawCheckbox.addEventListener('change', () => {
+        state.autoWithdrawEnabled = autoWithdrawCheckbox.checked;
+        if (!state.autoWithdrawEnabled && !state.autoMode) {
+          state.autoFollowup = false;
+          cancelAutoWithdraw();
+        }
+        saveState();
+        updateContextUi();
+      });
+    }
 
     if (autoAdvanceCheckbox) {
       autoAdvanceCheckbox.addEventListener('change', () => {
@@ -791,6 +815,7 @@
       cancelAutoAdvanceNavigation();
       cancelAutoModeRun();
     }
+    state.autoModeResumeDelay = AUTO_MODE_DEFAULT_DELAY;
     saveState();
     updateContextUi();
     if (desired) {
@@ -933,10 +958,8 @@
       realisticClick(publishBtn);
       return true;
     } else {
-      state.autoFollowup = false;
-      saveState();
       const advanced = await maybeAutoAdvanceAfterStage3();
-      if (!advanced && !state.autoAdvance) {
+      if (!advanced && !state.autoAdvance && !state.autoWithdrawEnabled) {
         setStatus('Готово!');
       }
       return true;
@@ -1127,9 +1150,12 @@
       }
       return false;
     }
-    if (!state.autoAdvance) {
-      if (state.autoAdvancePending) {
+    const wantsAutoAdvance = !!state.autoAdvance;
+    const wantsAutoWithdraw = !!state.autoWithdrawEnabled;
+    if (!wantsAutoAdvance && !wantsAutoWithdraw) {
+      if (state.autoAdvancePending || state.autoFollowup) {
         state.autoAdvancePending = false;
+        state.autoFollowup = false;
         saveState();
       }
       return false;
@@ -1138,18 +1164,27 @@
     if (!publishBtn) {
       setStatus(`Не найдена кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)}`);
       state.autoAdvancePending = false;
+      state.autoFollowup = false;
       saveState();
       return false;
     }
     if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
       setStatus(`Кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)} недоступна`);
       state.autoAdvancePending = false;
+      state.autoFollowup = false;
       saveState();
       return false;
     }
-    state.autoAdvancePending = true;
+    state.autoAdvancePending = wantsAutoAdvance;
+    state.autoFollowup = wantsAutoWithdraw;
     saveState();
-    setStatus('Публикуем товар...');
+    if (wantsAutoAdvance && wantsAutoWithdraw) {
+      setStatus('Публикуем товар и готовимся снять с продажи...');
+    } else if (wantsAutoWithdraw) {
+      setStatus('Публикуем товар для снятия с продажи...');
+    } else {
+      setStatus('Публикуем товар...');
+    }
     realisticClick(publishBtn);
     return true;
   }
@@ -1391,6 +1426,14 @@
     returnButton.style.display = onList ? '' : 'none';
     withdrawButton.disabled = !hasId;
     returnButton.disabled = !hasId;
+    if (autoWithdrawCheckbox) {
+      autoWithdrawCheckbox.checked = !!state.autoWithdrawEnabled;
+      autoWithdrawCheckbox.disabled = !!state.autoMode;
+      const wrapper = autoWithdrawCheckbox.closest('.ggsel-helper-auto-toggle');
+      if (wrapper) {
+        wrapper.classList.toggle('ggsel-helper-auto-toggle_disabled', !!state.autoMode);
+      }
+    }
     if (autoAdvanceCheckbox) {
       autoAdvanceCheckbox.checked = !!state.autoAdvance;
       autoAdvanceCheckbox.disabled = !!state.autoMode;
@@ -1402,7 +1445,8 @@
     if (autoModeRadio) {
       autoModeRadio.checked = !!state.autoMode;
     }
-    if (onList && state.autoMode && state.autoFollowup) {
+    const shouldAutoWithdraw = (state.autoMode || state.autoWithdrawEnabled) && state.autoFollowup;
+    if (onList && shouldAutoWithdraw) {
       scheduleAutoWithdraw();
     } else {
       cancelAutoWithdraw();
@@ -1439,7 +1483,8 @@
 
   function scheduleAutoWithdraw() {
     if (autoWithdrawRunning || autoWithdrawTimer) return;
-    if (!state.autoMode || !state.autoFollowup) return;
+    if (!state.autoFollowup) return;
+    if (!(state.autoMode || state.autoWithdrawEnabled)) return;
     if (!isOnOffersList()) return;
     const targetId = getCurrentTargetId();
     if (!targetId) return;
@@ -1474,10 +1519,16 @@
     }
   }
 
-  function scheduleAutoModeRun(delay = 400) {
+  function scheduleAutoModeRun(delay) {
     cancelAutoModeRun();
     if (!state.autoMode || !state.autoModePending) return;
     if (isOnOffersList()) return;
+    let effectiveDelay = typeof delay === 'number' && !Number.isNaN(delay) ? delay : state.autoModeResumeDelay ?? AUTO_MODE_DEFAULT_DELAY;
+    if (effectiveDelay < 0) {
+      effectiveDelay = AUTO_MODE_DEFAULT_DELAY;
+    }
+    state.autoModeResumeDelay = AUTO_MODE_DEFAULT_DELAY;
+    saveState();
     autoModeRunTimer = setTimeout(async () => {
       autoModeRunTimer = null;
       if (!state.autoMode || isOnOffersList()) {
@@ -1508,7 +1559,12 @@
 
   async function autoProcessOnOffersList() {
     if (autoWithdrawRunning) return;
-    if (!state.autoMode || !state.autoFollowup) return;
+    if (!state.autoFollowup) return;
+    if (!(state.autoMode || state.autoWithdrawEnabled)) {
+      state.autoFollowup = false;
+      saveState();
+      return;
+    }
     if (!isOnOffersList()) return;
     const targetId = getCurrentTargetId();
     if (!targetId) return;
@@ -1519,14 +1575,14 @@
       state.autoFollowup = false;
       saveState();
       cancelAutoWithdraw();
-      if (success) {
+      if (success && (state.autoMode || state.autoWithdrawEnabled)) {
         await sleep(400);
         navigate(1);
       }
     } finally {
       disableControls(false);
       autoWithdrawRunning = false;
-      if (state.autoMode && state.autoFollowup && isOnOffersList()) {
+      if ((state.autoMode || state.autoWithdrawEnabled) && state.autoFollowup && isOnOffersList()) {
         scheduleAutoWithdraw();
       }
     }
