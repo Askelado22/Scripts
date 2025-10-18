@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.1
+// @version      0.4.2
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -22,6 +22,7 @@
     idsRaw: '5140692\n5083916\n4919694\n5023639\n5107756\n5090632\n5137840\n5150184\n4924480\n5156903\n5449866\n5148216',
     lastIndex: 0,
     currentId: null,
+    autoAdvance: false,
     autoMode: false,
     autoFollowup: false,
     collapsed: false
@@ -80,12 +81,14 @@
   let returnButton;
   let progressFill;
   let progressValue;
+  let autoAdvanceCheckbox;
   let autoModeCheckbox;
   let collapseButton;
   let fabButton;
 
   const NEXT_BUTTON_LABELS = ['Далее', 'Сохранить и далее'];
   const SAVE_BUTTON_LABELS = ['Далее', 'Сохранить и далее', 'Сохранить и опубликовать'];
+  const TARGET_PRICE_VALUE = '99999';
 
   let autoWithdrawTimer = null;
   let autoWithdrawRunning = false;
@@ -166,6 +169,15 @@
       font-weight: 500;
       margin-bottom: 6px;
       gap: 12px;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-ids-label > span:first-child {
+      flex: 1;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-group {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle {
       display: inline-flex;
@@ -514,11 +526,19 @@
           <button type="button" class="ggsel-helper-collapse-btn" data-action="collapse" aria-label="Свернуть панель" title="Свернуть панель">−</button>
         </div>
       </div>
-      <label class="ggsel-helper-ids-label">ID товаров (по одному в строке)
-        <span class="ggsel-helper-auto-toggle" title="Автоматически публиковать и снимать товары">
-          <input type="checkbox" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
-          <span class="ggsel-helper-switch"></span>
-          <span>Само</span>
+      <label class="ggsel-helper-ids-label">
+        <span>ID товаров (по одному в строке)</span>
+        <span class="ggsel-helper-auto-group">
+          <span class="ggsel-helper-auto-toggle" title="Автоматически перейти к следующему ID после этапа 3">
+            <input type="checkbox" id="ggsel-helper-auto-next" ${state.autoAdvance ? 'checked' : ''}>
+            <span class="ggsel-helper-switch"></span>
+            <span>Следующий</span>
+          </span>
+          <span class="ggsel-helper-auto-toggle" title="Автоматически публиковать и снимать товары">
+            <input type="checkbox" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
+            <span class="ggsel-helper-switch"></span>
+            <span>Само</span>
+          </span>
         </span>
       </label>
       <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
@@ -575,8 +595,16 @@
     returnButton = panel.querySelector('button[data-action="return"]');
     progressFill = panel.querySelector('.ggsel-helper-progress-fill');
     progressValue = panel.querySelector('#ggsel-helper-progress-value');
+    autoAdvanceCheckbox = panel.querySelector('#ggsel-helper-auto-next');
     autoModeCheckbox = panel.querySelector('#ggsel-helper-auto');
     collapseButton = panel.querySelector('.ggsel-helper-collapse-btn');
+
+    if (autoAdvanceCheckbox) {
+      autoAdvanceCheckbox.addEventListener('change', () => {
+        state.autoAdvance = autoAdvanceCheckbox.checked;
+        saveState();
+      });
+    }
 
     if (autoModeCheckbox) {
       autoModeCheckbox.addEventListener('change', () => {
@@ -758,39 +786,44 @@
     saveState();
     setStatus('Этап 1/3 — URL перенаправления...');
     const ok1 = await runStage1({ autoNext: true });
-    if (!ok1) return;
+    if (!ok1) return false;
     await waitFor(() => document.querySelector('#offerCost'), 20000);
 
     setStatus('Этап 2/3 — Цена и безлимит...');
     const ok2 = await runStage2({ autoNext: true });
-    if (!ok2) return;
+    if (!ok2) return false;
     await waitFor(() => document.querySelector('#instructions_ru'), 20000);
 
     setStatus('Этап 3/3 — Инструкции...');
     const ok3 = await runStage3();
-    if (!ok3) return;
+    if (!ok3) return false;
     if (state.autoMode) {
       const publishBtn = findButtonByText('Сохранить и опубликовать');
       if (!publishBtn) {
         setStatus('Не найдена кнопка "Сохранить и опубликовать"');
         state.autoFollowup = false;
         saveState();
-        return;
+        return false;
       }
       if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
         setStatus('Кнопка "Сохранить и опубликовать" недоступна');
         state.autoFollowup = false;
         saveState();
-        return;
+        return false;
       }
       state.autoFollowup = true;
       saveState();
       setStatus('Публикуем товар...');
       realisticClick(publishBtn);
+      return true;
     } else {
       state.autoFollowup = false;
       saveState();
-      setStatus('Готово!');
+      const advanced = await maybeAutoAdvanceAfterStage3();
+      if (!advanced && !state.autoAdvance) {
+        setStatus('Готово!');
+      }
+      return true;
     }
   }
 
@@ -887,6 +920,14 @@
   }
 
   async function runStage2({ autoNext = false } = {}) {
+    const priceInput = await waitFor(() => document.querySelector('#offerCost'), 15000);
+    if (!priceInput) {
+      setStatus('Поле "Цена товара" не найдено');
+      return false;
+    }
+    setReactValue(priceInput, TARGET_PRICE_VALUE);
+    setStatus(`Цена установлена на ${TARGET_PRICE_VALUE}`);
+
     const label = await waitFor(() => findSegmentLabel('Безлимитный'), 15000);
     if (!label) {
       setStatus('Не найден переключатель "Безлимитный"');
@@ -959,6 +1000,33 @@
     }
     setReactValue(enField, `Thank you for your purchase! We will be glad to receive a positive review :)`);
     setStatus('Инструкции обновлены');
+    return true;
+  }
+
+  async function maybeAutoAdvanceAfterStage3() {
+    if (!state.autoAdvance || state.autoMode) {
+      return false;
+    }
+    const ids = parseIds(state.idsRaw);
+    if (!ids.length) {
+      setStatus('Список ID пуст — переход невозможен');
+      return false;
+    }
+    const activeId = state.currentId ?? currentId ?? null;
+    let currentIndex = activeId ? ids.indexOf(activeId) : -1;
+    if (currentIndex === -1) {
+      currentIndex = state.lastIndex;
+    }
+    if (currentIndex < 0) currentIndex = 0;
+    if (currentIndex >= ids.length) currentIndex = ids.length - 1;
+    if (currentIndex >= ids.length - 1) {
+      setStatus('Дальше товаров нет');
+      return false;
+    }
+    state.lastIndex = currentIndex;
+    setStatus('Переходим к следующему товару...');
+    await sleep(200);
+    navigate(1);
     return true;
   }
 
@@ -1158,6 +1226,9 @@
     returnButton.style.display = onList ? '' : 'none';
     withdrawButton.disabled = !hasId;
     returnButton.disabled = !hasId;
+    if (autoAdvanceCheckbox) {
+      autoAdvanceCheckbox.checked = !!state.autoAdvance;
+    }
     if (autoModeCheckbox) {
       autoModeCheckbox.checked = !!state.autoMode;
     }
@@ -1335,7 +1406,10 @@
       } else if (action === 'stage2') {
         await runStage2();
       } else if (action === 'stage3') {
-        await runStage3();
+        const success = await runStage3();
+        if (success) {
+          await maybeAutoAdvanceAfterStage3();
+        }
       } else if (action === 'runAll') {
         await runAll();
       } else if (action === 'withdraw') {
