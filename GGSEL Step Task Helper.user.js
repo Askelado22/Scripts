@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.4
+// @version      0.4.5
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -26,6 +26,7 @@
     autoMode: false,
     autoFollowup: false,
     autoAdvancePending: false,
+    autoModePending: false,
     collapsed: false
   };
 
@@ -83,7 +84,7 @@
   let progressFill;
   let progressValue;
   let autoAdvanceCheckbox;
-  let autoModeCheckbox;
+  let autoModeRadio;
   let collapseButton;
   let fabButton;
 
@@ -96,6 +97,8 @@
   let autoWithdrawRunning = false;
   let autoAdvanceTimer = null;
   let autoAdvanceRunning = false;
+  let autoModeRunTimer = null;
+  let actionRunning = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -127,6 +130,11 @@
       state.lastIndex = idx;
     }
     state.currentId = id;
+    if (state.autoMode) {
+      state.autoModePending = true;
+    } else {
+      state.autoModePending = false;
+    }
     saveState();
     location.href = buildEditUrl(id);
   }
@@ -183,6 +191,44 @@
       align-items: flex-end;
       gap: 4px;
     }
+    #ggsel-step-helper-panel .ggsel-helper-auto-radio {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      cursor: pointer;
+      user-select: none;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-radio input {
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.6);
+      background: transparent;
+      position: relative;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(63, 169, 245, 0.35);
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:checked {
+      border-color: #3fa9f5;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:checked::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3fa9f5;
+      transform: translate(-50%, -50%);
+    }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle {
       display: inline-flex;
       align-items: center;
@@ -192,6 +238,11 @@
       color: rgba(255, 255, 255, 0.85);
       cursor: pointer;
       user-select: none;
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle_disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle input {
       position: absolute;
@@ -533,15 +584,14 @@
       <label class="ggsel-helper-ids-label">
         <span>ID товаров (по одному в строке)</span>
         <span class="ggsel-helper-auto-group">
+          <label class="ggsel-helper-auto-radio" title="Автоматически пройти все этапы и снять товар">
+            <input type="radio" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
+            <span>Само</span>
+          </label>
           <span class="ggsel-helper-auto-toggle" title="Автоматически перейти к следующему ID после этапа 3">
             <input type="checkbox" id="ggsel-helper-auto-next" ${state.autoAdvance ? 'checked' : ''}>
             <span class="ggsel-helper-switch"></span>
             <span>Следующий</span>
-          </span>
-          <span class="ggsel-helper-auto-toggle" title="Автоматически публиковать и снимать товары">
-            <input type="checkbox" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
-            <span class="ggsel-helper-switch"></span>
-            <span>Само</span>
           </span>
         </span>
       </label>
@@ -600,7 +650,7 @@
     progressFill = panel.querySelector('.ggsel-helper-progress-fill');
     progressValue = panel.querySelector('#ggsel-helper-progress-value');
     autoAdvanceCheckbox = panel.querySelector('#ggsel-helper-auto-next');
-    autoModeCheckbox = panel.querySelector('#ggsel-helper-auto');
+    autoModeRadio = panel.querySelector('#ggsel-helper-auto');
     collapseButton = panel.querySelector('.ggsel-helper-collapse-btn');
 
     if (autoAdvanceCheckbox) {
@@ -614,17 +664,20 @@
       });
     }
 
-    if (autoModeCheckbox) {
-      autoModeCheckbox.addEventListener('change', () => {
-        state.autoMode = autoModeCheckbox.checked;
-        if (!state.autoMode) {
-          state.autoFollowup = false;
-        } else {
-          state.autoAdvancePending = false;
-          cancelAutoAdvanceNavigation();
+    if (autoModeRadio) {
+      autoModeRadio.addEventListener('click', (event) => {
+        if (state.autoMode) {
+          event.preventDefault();
+          autoModeRadio.checked = false;
+          setAutoMode(false);
         }
-        saveState();
-        updateContextUi();
+      });
+      autoModeRadio.addEventListener('change', () => {
+        if (autoModeRadio.checked) {
+          setAutoMode(true);
+        } else if (state.autoMode) {
+          setAutoMode(false);
+        }
       });
     }
 
@@ -705,6 +758,46 @@
     }
   }
 
+  async function withActionLock(task) {
+    if (actionRunning) {
+      return false;
+    }
+    actionRunning = true;
+    disableControls(true);
+    try {
+      return await task();
+    } finally {
+      disableControls(false);
+      actionRunning = false;
+    }
+  }
+
+  function setAutoMode(enabled) {
+    const desired = !!enabled;
+    if (state.autoMode === desired) {
+      return;
+    }
+    state.autoMode = desired;
+    if (desired) {
+      state.autoAdvance = false;
+      state.autoAdvancePending = false;
+      state.autoModePending = true;
+      state.autoFollowup = false;
+      cancelAutoAdvanceNavigation();
+    } else {
+      state.autoFollowup = false;
+      state.autoModePending = false;
+      cancelAutoWithdraw();
+      cancelAutoAdvanceNavigation();
+      cancelAutoModeRun();
+    }
+    saveState();
+    updateContextUi();
+    if (desired) {
+      scheduleAutoModeRun();
+    }
+  }
+
   function syncIndexById(id) {
     const ids = parseIds(state.idsRaw);
     const idx = ids.indexOf(id);
@@ -753,16 +846,27 @@
     const ids = parseIds(state.idsRaw);
     if (!ids.length) {
       setStatus('Список ID пуст');
+      state.autoModePending = false;
+      state.autoFollowup = false;
+      saveState();
       return;
     }
     let nextIndex = state.lastIndex + step;
     if (nextIndex < 0 || nextIndex >= ids.length) {
       setStatus('Дальше товаров нет');
+      state.autoModePending = false;
+      state.autoFollowup = false;
+      saveState();
       return;
     }
     state.lastIndex = nextIndex;
     const targetId = ids[nextIndex];
     state.currentId = targetId;
+    if (state.autoMode) {
+      state.autoModePending = true;
+    } else {
+      state.autoModePending = false;
+    }
     saveState();
     updateNavButtons();
     setStatus(`Переход к ${targetId}...`);
@@ -793,6 +897,7 @@
   }
 
   async function runAll() {
+    state.autoModePending = false;
     state.autoFollowup = false;
     saveState();
     setStatus('Этап 1/3 — URL перенаправления...');
@@ -1288,9 +1393,14 @@
     returnButton.disabled = !hasId;
     if (autoAdvanceCheckbox) {
       autoAdvanceCheckbox.checked = !!state.autoAdvance;
+      autoAdvanceCheckbox.disabled = !!state.autoMode;
+      const wrapper = autoAdvanceCheckbox.closest('.ggsel-helper-auto-toggle');
+      if (wrapper) {
+        wrapper.classList.toggle('ggsel-helper-auto-toggle_disabled', !!state.autoMode);
+      }
     }
-    if (autoModeCheckbox) {
-      autoModeCheckbox.checked = !!state.autoMode;
+    if (autoModeRadio) {
+      autoModeRadio.checked = !!state.autoMode;
     }
     if (onList && state.autoMode && state.autoFollowup) {
       scheduleAutoWithdraw();
@@ -1307,6 +1417,16 @@
     if (!onList && document.querySelector('#redirectUrl')) {
       validateCategoryPath();
       validateCoverImage();
+    }
+
+    if (!onList) {
+      if (state.autoMode && state.autoModePending) {
+        scheduleAutoModeRun();
+      } else {
+        cancelAutoModeRun();
+      }
+    } else {
+      cancelAutoModeRun();
     }
   }
 
@@ -1345,6 +1465,45 @@
       autoAdvanceTimer = null;
       continueAutoAdvanceFromList();
     }, 600);
+  }
+
+  function cancelAutoModeRun() {
+    if (autoModeRunTimer) {
+      clearTimeout(autoModeRunTimer);
+      autoModeRunTimer = null;
+    }
+  }
+
+  function scheduleAutoModeRun(delay = 400) {
+    cancelAutoModeRun();
+    if (!state.autoMode || !state.autoModePending) return;
+    if (isOnOffersList()) return;
+    autoModeRunTimer = setTimeout(async () => {
+      autoModeRunTimer = null;
+      if (!state.autoMode || isOnOffersList()) {
+        return;
+      }
+      if (!state.autoModePending) {
+        return;
+      }
+      const ready = document.querySelector('#redirectUrl');
+      if (!ready) {
+        scheduleAutoModeRun(300);
+        return;
+      }
+      if (actionRunning) {
+        scheduleAutoModeRun(300);
+        return;
+      }
+      state.autoModePending = false;
+      saveState();
+      try {
+        await withActionLock(() => runAll());
+      } catch (err) {
+        console.error('[GGSEL Step Helper] Ошибка автоцикла', err);
+        setStatus(`Ошибка: ${err.message || err}`);
+      }
+    }, delay);
   }
 
   async function autoProcessOnOffersList() {
@@ -1483,31 +1642,34 @@
       setCollapsed(true);
       return;
     }
-    disableControls(true);
+    if (actionRunning) {
+      setStatus('Подождите завершения текущего действия');
+      return;
+    }
     try {
-      if (action === 'stage1') {
-        await runStage1();
-      } else if (action === 'stage2') {
-        await runStage2();
-      } else if (action === 'stage3') {
-        const success = await runStage3();
-        if (success) {
-          await maybeAutoAdvanceAfterStage3();
+      await withActionLock(async () => {
+        if (action === 'stage1') {
+          await runStage1();
+        } else if (action === 'stage2') {
+          await runStage2();
+        } else if (action === 'stage3') {
+          const success = await runStage3();
+          if (success) {
+            await maybeAutoAdvanceAfterStage3();
+          }
+        } else if (action === 'runAll') {
+          await runAll();
+        } else if (action === 'withdraw') {
+          await runWithdrawAction();
+        } else if (action === 'return') {
+          await runReturnAction();
+        } else if (action === 'save') {
+          await runSaveAction();
         }
-      } else if (action === 'runAll') {
-        await runAll();
-      } else if (action === 'withdraw') {
-        await runWithdrawAction();
-      } else if (action === 'return') {
-        await runReturnAction();
-      } else if (action === 'save') {
-        await runSaveAction();
-      }
+      });
     } catch (err) {
       setStatus(`Ошибка: ${err.message || err}`);
       console.error('[GGSEL Step Helper] Ошибка действия', err);
-    } finally {
-      disableControls(false);
     }
   }
 
