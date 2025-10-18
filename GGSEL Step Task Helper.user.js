@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.3
+// @version      0.4.4
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -88,7 +88,8 @@
   let fabButton;
 
   const NEXT_BUTTON_LABELS = ['Далее', 'Сохранить и далее'];
-  const SAVE_BUTTON_LABELS = ['Далее', 'Сохранить и далее', 'Сохранить и опубликовать'];
+  const PUBLISH_BUTTON_LABELS = ['Сохранить и опубликовать', 'Опубликовать'];
+  const SAVE_BUTTON_LABELS = ['Далее', 'Сохранить и далее', ...PUBLISH_BUTTON_LABELS];
   const TARGET_PRICE_VALUE = '99999';
 
   let autoWithdrawTimer = null;
@@ -808,15 +809,15 @@
     const ok3 = await runStage3();
     if (!ok3) return false;
     if (state.autoMode) {
-      const publishBtn = findButtonByText('Сохранить и опубликовать');
+      const publishBtn = findButtonByAnyText(PUBLISH_BUTTON_LABELS);
       if (!publishBtn) {
-        setStatus('Не найдена кнопка "Сохранить и опубликовать"');
+        setStatus(`Не найдена кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)}`);
         state.autoFollowup = false;
         saveState();
         return false;
       }
       if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
-        setStatus('Кнопка "Сохранить и опубликовать" недоступна');
+        setStatus(`Кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)} недоступна`);
         state.autoFollowup = false;
         saveState();
         return false;
@@ -1028,15 +1029,15 @@
       }
       return false;
     }
-    const publishBtn = findButtonByText('Сохранить и опубликовать');
+    const publishBtn = findButtonByAnyText(PUBLISH_BUTTON_LABELS);
     if (!publishBtn) {
-      setStatus('Не найдена кнопка "Сохранить и опубликовать"');
+      setStatus(`Не найдена кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)}`);
       state.autoAdvancePending = false;
       saveState();
       return false;
     }
     if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
-      setStatus('Кнопка "Сохранить и опубликовать" недоступна');
+      setStatus(`Кнопка ${formatButtonNames(PUBLISH_BUTTON_LABELS)} недоступна`);
       state.autoAdvancePending = false;
       saveState();
       return false;
