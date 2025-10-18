@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.2
+// @version      0.4.3
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -25,6 +25,7 @@
     autoAdvance: false,
     autoMode: false,
     autoFollowup: false,
+    autoAdvancePending: false,
     collapsed: false
   };
 
@@ -92,6 +93,8 @@
 
   let autoWithdrawTimer = null;
   let autoWithdrawRunning = false;
+  let autoAdvanceTimer = null;
+  let autoAdvanceRunning = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -602,6 +605,10 @@
     if (autoAdvanceCheckbox) {
       autoAdvanceCheckbox.addEventListener('change', () => {
         state.autoAdvance = autoAdvanceCheckbox.checked;
+        if (!state.autoAdvance) {
+          state.autoAdvancePending = false;
+          cancelAutoAdvanceNavigation();
+        }
         saveState();
       });
     }
@@ -611,6 +618,9 @@
         state.autoMode = autoModeCheckbox.checked;
         if (!state.autoMode) {
           state.autoFollowup = false;
+        } else {
+          state.autoAdvancePending = false;
+          cancelAutoAdvanceNavigation();
         }
         saveState();
         updateContextUi();
@@ -1004,30 +1014,79 @@
   }
 
   async function maybeAutoAdvanceAfterStage3() {
-    if (!state.autoAdvance || state.autoMode) {
+    if (state.autoMode) {
+      if (state.autoAdvancePending) {
+        state.autoAdvancePending = false;
+        saveState();
+      }
       return false;
     }
-    const ids = parseIds(state.idsRaw);
-    if (!ids.length) {
-      setStatus('Список ID пуст — переход невозможен');
+    if (!state.autoAdvance) {
+      if (state.autoAdvancePending) {
+        state.autoAdvancePending = false;
+        saveState();
+      }
       return false;
     }
-    const activeId = state.currentId ?? currentId ?? null;
-    let currentIndex = activeId ? ids.indexOf(activeId) : -1;
-    if (currentIndex === -1) {
-      currentIndex = state.lastIndex;
-    }
-    if (currentIndex < 0) currentIndex = 0;
-    if (currentIndex >= ids.length) currentIndex = ids.length - 1;
-    if (currentIndex >= ids.length - 1) {
-      setStatus('Дальше товаров нет');
+    const publishBtn = findButtonByText('Сохранить и опубликовать');
+    if (!publishBtn) {
+      setStatus('Не найдена кнопка "Сохранить и опубликовать"');
+      state.autoAdvancePending = false;
+      saveState();
       return false;
     }
-    state.lastIndex = currentIndex;
-    setStatus('Переходим к следующему товару...');
-    await sleep(200);
-    navigate(1);
+    if (publishBtn.disabled || publishBtn.getAttribute('aria-disabled') === 'true') {
+      setStatus('Кнопка "Сохранить и опубликовать" недоступна');
+      state.autoAdvancePending = false;
+      saveState();
+      return false;
+    }
+    state.autoAdvancePending = true;
+    saveState();
+    setStatus('Публикуем товар...');
+    realisticClick(publishBtn);
     return true;
+  }
+
+  async function continueAutoAdvanceFromList() {
+    if (autoAdvanceRunning) return;
+    if (!state.autoAdvance || !state.autoAdvancePending) return;
+    if (state.autoMode) return;
+    if (!isOnOffersList()) return;
+    autoAdvanceRunning = true;
+    disableControls(true);
+    try {
+      const ids = parseIds(state.idsRaw);
+      if (!ids.length) {
+        setStatus('Список ID пуст — переход невозможен');
+        state.autoAdvancePending = false;
+        saveState();
+        return;
+      }
+      const activeId = state.currentId ?? currentId ?? null;
+      let currentIndex = activeId ? ids.indexOf(activeId) : -1;
+      if (currentIndex === -1) {
+        currentIndex = state.lastIndex;
+      }
+      if (currentIndex < 0) currentIndex = 0;
+      if (currentIndex >= ids.length) currentIndex = ids.length - 1;
+      if (currentIndex >= ids.length - 1) {
+        setStatus('Дальше товаров нет');
+        state.autoAdvancePending = false;
+        saveState();
+        return;
+      }
+      state.lastIndex = currentIndex;
+      saveState();
+      setStatus('Открываем следующий товар...');
+      await sleep(400);
+      navigate(1);
+    } finally {
+      state.autoAdvancePending = false;
+      saveState();
+      disableControls(false);
+      autoAdvanceRunning = false;
+    }
   }
 
   function waitFor(predicate, timeout = 10000, interval = 100) {
@@ -1238,6 +1297,12 @@
       cancelAutoWithdraw();
     }
 
+    if (onList && state.autoAdvance && state.autoAdvancePending && !state.autoMode) {
+      scheduleAutoAdvanceNavigation();
+    } else {
+      cancelAutoAdvanceNavigation();
+    }
+
     if (!onList && document.querySelector('#redirectUrl')) {
       validateCategoryPath();
       validateCoverImage();
@@ -1261,6 +1326,24 @@
       autoWithdrawTimer = null;
       autoProcessOnOffersList();
     }, 1500);
+  }
+
+  function cancelAutoAdvanceNavigation() {
+    if (autoAdvanceTimer) {
+      clearTimeout(autoAdvanceTimer);
+      autoAdvanceTimer = null;
+    }
+  }
+
+  function scheduleAutoAdvanceNavigation() {
+    if (autoAdvanceRunning || autoAdvanceTimer) return;
+    if (!state.autoAdvance || !state.autoAdvancePending) return;
+    if (state.autoMode) return;
+    if (!isOnOffersList()) return;
+    autoAdvanceTimer = setTimeout(() => {
+      autoAdvanceTimer = null;
+      continueAutoAdvanceFromList();
+    }, 600);
   }
 
   async function autoProcessOnOffersList() {
