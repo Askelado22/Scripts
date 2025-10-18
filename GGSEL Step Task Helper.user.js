@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.6
+// @version      0.4.7
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -87,7 +87,7 @@
   let progressValue;
   let autoWithdrawCheckbox;
   let autoAdvanceCheckbox;
-  let autoModeRadio;
+  let autoModeCheckbox;
   let collapseButton;
   let fabButton;
 
@@ -181,59 +181,22 @@
     }
     #ggsel-step-helper-panel .ggsel-helper-ids-label {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
       font-size: 13px;
       font-weight: 500;
       margin-bottom: 6px;
       gap: 12px;
     }
-    #ggsel-step-helper-panel .ggsel-helper-ids-label > span:first-child {
+    #ggsel-step-helper-panel .ggsel-helper-ids-label > label {
       flex: 1;
+      cursor: pointer;
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-group {
       display: flex;
       flex-direction: column;
       align-items: flex-end;
       gap: 4px;
-    }
-    #ggsel-step-helper-panel .ggsel-helper-auto-radio {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      color: rgba(255, 255, 255, 0.85);
-      cursor: pointer;
-      user-select: none;
-    }
-    #ggsel-step-helper-panel .ggsel-helper-auto-radio input {
-      appearance: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.6);
-      background: transparent;
-      position: relative;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:focus {
-      outline: none;
-      box-shadow: 0 0 0 3px rgba(63, 169, 245, 0.35);
-    }
-    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:checked {
-      border-color: #3fa9f5;
-    }
-    #ggsel-step-helper-panel .ggsel-helper-auto-radio input:checked::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #3fa9f5;
-      transform: translate(-50%, -50%);
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle {
       display: inline-flex;
@@ -279,6 +242,9 @@
     }
     #ggsel-step-helper-panel .ggsel-helper-auto-toggle input:checked + .ggsel-helper-switch::after {
       transform: translateX(18px);
+    }
+    #ggsel-step-helper-panel .ggsel-helper-auto-toggle_main .ggsel-helper-switch {
+      background: rgba(63, 169, 245, 0.3);
     }
     #ggsel-step-helper-panel textarea {
       width: 100%;
@@ -587,13 +553,14 @@
           <button type="button" class="ggsel-helper-collapse-btn" data-action="collapse" aria-label="Свернуть панель" title="Свернуть панель">−</button>
         </div>
       </div>
-      <label class="ggsel-helper-ids-label">
-        <span>ID товаров (по одному в строке)</span>
+      <div class="ggsel-helper-ids-label">
+        <label for="ggsel-helper-ids">ID товаров (по одному в строке)</label>
         <span class="ggsel-helper-auto-group">
-          <label class="ggsel-helper-auto-radio" title="Автоматически пройти все этапы и снять товар">
-            <input type="radio" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
+          <span class="ggsel-helper-auto-toggle ggsel-helper-auto-toggle_main" title="Автоматически пройти все этапы и снять товар">
+            <input type="checkbox" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
+            <span class="ggsel-helper-switch"></span>
             <span>Авто</span>
-          </label>
+          </span>
           <span class="ggsel-helper-auto-toggle" title="После публикации снять товар и перейти к следующему ID">
             <input type="checkbox" id="ggsel-helper-auto-withdraw" ${state.autoWithdrawEnabled ? 'checked' : ''}>
             <span class="ggsel-helper-switch"></span>
@@ -605,7 +572,7 @@
             <span>Следующий</span>
           </span>
         </span>
-      </label>
+      </div>
       <textarea id="ggsel-helper-ids" placeholder="Вставьте ID товаров">${state.idsRaw}</textarea>
       <div class="ggsel-helper-progress">
         <div class="ggsel-helper-progress-track" aria-hidden="true">
@@ -662,7 +629,7 @@
     progressValue = panel.querySelector('#ggsel-helper-progress-value');
     autoWithdrawCheckbox = panel.querySelector('#ggsel-helper-auto-withdraw');
     autoAdvanceCheckbox = panel.querySelector('#ggsel-helper-auto-next');
-    autoModeRadio = panel.querySelector('#ggsel-helper-auto');
+    autoModeCheckbox = panel.querySelector('#ggsel-helper-auto');
     collapseButton = panel.querySelector('.ggsel-helper-collapse-btn');
 
     if (autoWithdrawCheckbox) {
@@ -688,20 +655,9 @@
       });
     }
 
-    if (autoModeRadio) {
-      autoModeRadio.addEventListener('click', (event) => {
-        if (state.autoMode) {
-          event.preventDefault();
-          autoModeRadio.checked = false;
-          setAutoMode(false);
-        }
-      });
-      autoModeRadio.addEventListener('change', () => {
-        if (autoModeRadio.checked) {
-          setAutoMode(true);
-        } else if (state.autoMode) {
-          setAutoMode(false);
-        }
+    if (autoModeCheckbox) {
+      autoModeCheckbox.addEventListener('change', () => {
+        setAutoMode(autoModeCheckbox.checked);
       });
     }
 
@@ -1442,8 +1398,8 @@
         wrapper.classList.toggle('ggsel-helper-auto-toggle_disabled', !!state.autoMode);
       }
     }
-    if (autoModeRadio) {
-      autoModeRadio.checked = !!state.autoMode;
+    if (autoModeCheckbox) {
+      autoModeCheckbox.checked = !!state.autoMode;
     }
     const shouldAutoWithdraw = (state.autoMode || state.autoWithdrawEnabled) && state.autoFollowup;
     if (onList && shouldAutoWithdraw) {
