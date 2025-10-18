@@ -586,7 +586,7 @@
         <span class="ggsel-helper-auto-group">
           <label class="ggsel-helper-auto-radio" title="Автоматически пройти все этапы и снять товар">
             <input type="radio" id="ggsel-helper-auto" ${state.autoMode ? 'checked' : ''}>
-            <span>Само</span>
+            <span>Авто</span>
           </label>
           <span class="ggsel-helper-auto-toggle" title="Автоматически перейти к следующему ID после этапа 3">
             <input type="checkbox" id="ggsel-helper-auto-next" ${state.autoAdvance ? 'checked' : ''}>
