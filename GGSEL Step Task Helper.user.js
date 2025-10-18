@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Step Task Helper — vibe.coding
 // @namespace    https://vibe.coding/ggsel
-// @version      0.4.9
+// @version      0.4.10
 // @description  Пошаговый помощник для массового обновления офферов GGSEL: список ID, навигация «Предыдущий/Следующий», отдельные этапы и режим «Сделать всё».
 // @author       vibe.coding
 // @match        https://seller.ggsel.net/offers
@@ -973,8 +973,30 @@
     }
     setReactValue(input, 'https://key-steam.store/gift');
     setStatus('URL перенаправления заполнен');
-    const categoryOk = validateCategoryPath();
-    const coverOk = validateCoverImage();
+    let categoryOk = false;
+    let coverOk = false;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      categoryOk = validateCategoryPath();
+      coverOk = validateCoverImage();
+      if (categoryOk && coverOk) {
+        if (attempt > 1) {
+          setStatus('Категория и обложка подтверждены');
+        }
+        break;
+      }
+      if (attempt < maxAttempts) {
+        const issues = [];
+        if (!categoryOk) {
+          issues.push('категорию (Ключи и гифты → Steam)');
+        }
+        if (!coverOk) {
+          issues.push('обложку товара RU');
+        }
+        setStatus(`Ждём ${issues.join(' и ')} (попытка ${attempt + 1}/${maxAttempts})...`);
+        await sleep(2000);
+      }
+    }
     if (!categoryOk || !coverOk) {
       const issues = [];
       if (!categoryOk) {
