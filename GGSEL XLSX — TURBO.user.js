@@ -367,6 +367,7 @@ https://ggsel.net/catalog/product/7654321
           <div class="csv-param-buttons">
             <button class="csv-btn ghost" id="csv-copy-mod-plus" disabled>Копировать модификаторы (+1%)</button>
             <button class="csv-btn ghost" id="csv-copy-mod-base" disabled>Копировать модификаторы (стандарт)</button>
+            <button class="csv-btn ghost" id="csv-copy-mod-base-names" disabled>Названия и станд. моды</button>
           </div>
           <div class="csv-param-status" id="csv-params-status">Сначала соберите данные.</div>
         </div>
@@ -418,6 +419,7 @@ https://ggsel.net/catalog/product/7654321
     const btnCopyTSV   = document.getElementById('csv-copy-tsv');
     const btnCopyModPlus = document.getElementById('csv-copy-mod-plus');
     const btnCopyModBase = document.getElementById('csv-copy-mod-base');
+    const btnCopyModBaseNames = document.getElementById('csv-copy-mod-base-names');
     const btnSave      = document.getElementById('csv-save');
     const btnSaveX     = document.getElementById('csv-save-xlsx');
     const btnSaveErr   = document.getElementById('csv-save-errors');
@@ -518,6 +520,7 @@ https://ggsel.net/catalog/product/7654321
       btnCopy.disabled = btnCopyTSV.disabled = btnSave.disabled = btnSaveX.disabled = btnSaveErr.disabled = btnSaveErrD.disabled = true;
       if (btnCopyModPlus) btnCopyModPlus.disabled = true;
       if (btnCopyModBase) btnCopyModBase.disabled = true;
+      if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = true;
       lastParamModifiers = [];
       if (paramsStatus) setStatus(paramsStatus, 'Модификаторы появятся после завершения сбора.');
       setProgress(0); setMetrics(0, 0, 0);
@@ -698,6 +701,16 @@ https://ggsel.net/catalog/product/7654321
       });
     }
 
+    if (btnCopyModBaseNames) {
+      btnCopyModBaseNames.addEventListener('click', () => {
+        if (!lastParamModifiers.length) { setStatus(paramsStatus, 'Модификаторы не найдены.'); return; }
+        const text = formatParameterModsForClipboard(lastParamModifiers, { mode: 'base', includeNames: true });
+        GM_setClipboard(text);
+        setStatus(paramsStatus, `Названия и стандартные модификаторы скопированы: ${lastParamModifiers.length}.`);
+        setStatus(status, 'Названия и стандартные модификаторы скопированы в буфер.');
+      });
+    }
+
     btnSave.addEventListener('click', () => {
       const text = taOut.value.trim();
       if (!text) return;
@@ -791,6 +804,7 @@ https://ggsel.net/catalog/product/7654321
         lastParamModifiers = [];
         if (btnCopyModPlus) btnCopyModPlus.disabled = true;
         if (btnCopyModBase) btnCopyModBase.disabled = true;
+        if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = true;
         setStatus(paramsStatus, 'Сначала соберите данные.');
         return;
       }
@@ -799,6 +813,7 @@ https://ggsel.net/catalog/product/7654321
       const hasMods = lastParamModifiers.length > 0;
       if (btnCopyModPlus) btnCopyModPlus.disabled = !hasMods;
       if (btnCopyModBase) btnCopyModBase.disabled = !hasMods;
+      if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = !hasMods;
       setStatus(paramsStatus, hasMods
         ? `Найдено модификаторов: ${lastParamModifiers.length}.`
         : 'Модификаторы не найдены в текущем наборе описаний.');
@@ -876,7 +891,13 @@ https://ggsel.net/catalog/product/7654321
 
   function formatParameterModsForClipboard(mods, opts) {
     const mode = (opts && opts.mode) === 'base' ? 'base' : 'plus';
-    return mods.map(mod => formatModifierValue(mode === 'base' ? mod.base : mod.plus)).join('\n');
+    const includeNames = !!(opts && opts.includeNames);
+    return mods.map(mod => {
+      const value = formatModifierValue(mode === 'base' ? mod.base : mod.plus);
+      if (!includeNames) return value;
+      const label = (mod.label || mod.source || '').trim() || 'Модификатор';
+      return `${label}\t${value}`;
+    }).join('\n');
   }
 
   /** =======================
