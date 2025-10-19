@@ -361,6 +361,16 @@ https://ggsel.net/catalog/product/7654321
           <button class="csv-btn ghost" id="csv-save-errors" disabled>Скачать ошибки (кратко)</button>
           <button class="csv-btn ghost" id="csv-save-errors-detail" disabled>Скачать ошибки (детально)</button>
         </div>
+
+        <div class="csv-field csv-params">
+          <label>Параметры (модификаторы):</label>
+          <div class="csv-param-buttons">
+            <button class="csv-btn ghost" id="csv-copy-mod-plus" disabled>Копировать модификаторы (+1%)</button>
+            <button class="csv-btn ghost" id="csv-copy-mod-base" disabled>Копировать модификаторы (стандарт)</button>
+            <button class="csv-btn ghost" id="csv-copy-mod-base-names" disabled>Названия и станд. моды</button>
+          </div>
+          <div class="csv-param-status" id="csv-params-status">Сначала соберите данные.</div>
+        </div>
       </div>
 
       <div class="csv-metrics" id="csv-metrics">⏱ 0:00 • ETA — • 0.0/с</div>
@@ -407,6 +417,9 @@ https://ggsel.net/catalog/product/7654321
     const btnRetry     = document.getElementById('csv-retry');
     const btnCopy      = document.getElementById('csv-copy');
     const btnCopyTSV   = document.getElementById('csv-copy-tsv');
+    const btnCopyModPlus = document.getElementById('csv-copy-mod-plus');
+    const btnCopyModBase = document.getElementById('csv-copy-mod-base');
+    const btnCopyModBaseNames = document.getElementById('csv-copy-mod-base-names');
     const btnSave      = document.getElementById('csv-save');
     const btnSaveX     = document.getElementById('csv-save-xlsx');
     const btnSaveErr   = document.getElementById('csv-save-errors');
@@ -415,6 +428,8 @@ https://ggsel.net/catalog/product/7654321
     const bar          = document.getElementById('csv-bar');
     const status       = document.getElementById('csv-status');
     const metrics      = document.getElementById('csv-metrics');
+
+    const paramsStatus = document.getElementById('csv-params-status');
 
     const errorsBox    = document.getElementById('csv-errors-box');
     const errorsCount  = document.getElementById('csv-errors-count');
@@ -439,6 +454,7 @@ https://ggsel.net/catalog/product/7654321
     let lastErrorsDetail = [];       // детальные ошибки текущего запуска (или повтора)
     let renderedErrLens = {};        // сколько ошибок уже показали по шартам
     let crumbsParsed = null;
+    let lastParamModifiers = [];     // модификаторы из описаний
 
     if (btnGrab) {
       btnGrab.addEventListener('click', () => {
@@ -502,6 +518,11 @@ https://ggsel.net/catalog/product/7654321
       btnStop.disabled = true;
       btnRetry.disabled = true;
       btnCopy.disabled = btnCopyTSV.disabled = btnSave.disabled = btnSaveX.disabled = btnSaveErr.disabled = btnSaveErrD.disabled = true;
+      if (btnCopyModPlus) btnCopyModPlus.disabled = true;
+      if (btnCopyModBase) btnCopyModBase.disabled = true;
+      if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = true;
+      lastParamModifiers = [];
+      if (paramsStatus) setStatus(paramsStatus, 'Модификаторы появятся после завершения сбора.');
       setProgress(0); setMetrics(0, 0, 0);
 
       if (!resumeIntoExistingArray) {
@@ -590,6 +611,7 @@ https://ggsel.net/catalog/product/7654321
           btnCopy.disabled = btnCopyTSV.disabled = btnSave.disabled = btnSaveX.disabled = false;
           btnSaveErr.disabled = (lastErrorsDetail.length === 0);
           btnSaveErrD.disabled = (lastErrorsDetail.length === 0);
+          updateParameterModifiers();
           btnRun.disabled = false;
           btnStop.disabled = true;
           btnRetry.disabled = (getCurrentBadCount() === 0);
@@ -659,6 +681,36 @@ https://ggsel.net/catalog/product/7654321
       setStatus(status, 'TSV скопирован — вставляйте в Google Sheets.');
     });
 
+    if (btnCopyModPlus) {
+      btnCopyModPlus.addEventListener('click', () => {
+        if (!lastParamModifiers.length) { setStatus(paramsStatus, 'Модификаторы не найдены.'); return; }
+        const text = formatParameterModsForClipboard(lastParamModifiers, { mode: 'plus' });
+        GM_setClipboard(text);
+        setStatus(paramsStatus, `Модификаторы (+1%) скопированы: ${lastParamModifiers.length}.`);
+        setStatus(status, 'Модификаторы (+1%) скопированы в буфер.');
+      });
+    }
+
+    if (btnCopyModBase) {
+      btnCopyModBase.addEventListener('click', () => {
+        if (!lastParamModifiers.length) { setStatus(paramsStatus, 'Модификаторы не найдены.'); return; }
+        const text = formatParameterModsForClipboard(lastParamModifiers, { mode: 'base' });
+        GM_setClipboard(text);
+        setStatus(paramsStatus, `Стандартные модификаторы скопированы: ${lastParamModifiers.length}.`);
+        setStatus(status, 'Стандартные модификаторы скопированы в буфер.');
+      });
+    }
+
+    if (btnCopyModBaseNames) {
+      btnCopyModBaseNames.addEventListener('click', () => {
+        if (!lastParamModifiers.length) { setStatus(paramsStatus, 'Модификаторы не найдены.'); return; }
+        const text = formatParameterModsForClipboard(lastParamModifiers, { mode: 'base', includeNames: true });
+        GM_setClipboard(text);
+        setStatus(paramsStatus, `Названия и стандартные модификаторы скопированы: ${lastParamModifiers.length}.`);
+        setStatus(status, 'Названия и стандартные модификаторы скопированы в буфер.');
+      });
+    }
+
     btnSave.addEventListener('click', () => {
       const text = taOut.value.trim();
       if (!text) return;
@@ -692,6 +744,12 @@ https://ggsel.net/catalog/product/7654321
       downloadTextAsCSV(csv, FILENAME_ERRDET());
       setStatus(status, 'Файл детального лога ошибок скачан.');
     });
+
+    if (cbFilterBad) {
+      cbFilterBad.addEventListener('change', () => {
+        updateParameterModifiers();
+      });
+    }
 
     // ===== Крошки (очистка) =====
     crumbsFile.addEventListener('change', async () => {
@@ -739,6 +797,28 @@ https://ggsel.net/catalog/product/7654321
     }
 
     // ===== Вспомогалки UI =====
+    function updateParameterModifiers() {
+      if (!paramsStatus) return;
+      const rows = cbFilterBad.checked ? filterGood(rowsByIndex).filter(Boolean) : rowsByIndex.filter(Boolean);
+      if (!rows.length) {
+        lastParamModifiers = [];
+        if (btnCopyModPlus) btnCopyModPlus.disabled = true;
+        if (btnCopyModBase) btnCopyModBase.disabled = true;
+        if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = true;
+        setStatus(paramsStatus, 'Сначала соберите данные.');
+        return;
+      }
+
+      lastParamModifiers = extractParameterModifiers(rows);
+      const hasMods = lastParamModifiers.length > 0;
+      if (btnCopyModPlus) btnCopyModPlus.disabled = !hasMods;
+      if (btnCopyModBase) btnCopyModBase.disabled = !hasMods;
+      if (btnCopyModBaseNames) btnCopyModBaseNames.disabled = !hasMods;
+      setStatus(paramsStatus, hasMods
+        ? `Найдено модификаторов: ${lastParamModifiers.length}.`
+        : 'Модификаторы не найдены в текущем наборе описаний.');
+    }
+
     function setProgress(pct) { bar.style.width = `${Math.max(0, Math.min(100, pct))}%`; }
     function setMetrics(elapsedSec, etaSec, speedPerSec) {
       const fmt = (s)=> {
@@ -757,6 +837,67 @@ https://ggsel.net/catalog/product/7654321
    *  ======================= */
   function filterGood(rowsByIndex) {
     return rowsByIndex.filter(r => r && !r.error && r.name && r.description);
+  }
+
+  /** =======================
+   *  Парсинг модификаторов из описаний
+   *  ======================= */
+  function extractParameterModifiers(rows) {
+    const mods = [];
+    for (const row of rows) {
+      if (!row || !row.description) continue;
+      const name = row.name || '';
+      const lines = String(row.description).split(/\n+/);
+      for (const raw of lines) {
+        const line = raw.replace(/\u2212/g, '-').trim();
+        if (!line || !/\bmod\b/i.test(line)) continue;
+        const match = line.match(/\bmod\b[^\d+-]*([+-]?\d[\d\s.,]*)/i);
+        if (!match) continue;
+        const modPlus = parseModifierNumber(match[1]);
+        if (!Number.isFinite(modPlus)) continue;
+        const base = computeBaseModifier(modPlus);
+        const plus = Math.round(base * 1.01);
+        const label = line.replace(/\bmod\b[\s\S]*$/i, '').trim() || name || 'Модификатор';
+        mods.push({ label, base, plus, source: name });
+      }
+    }
+    return mods;
+  }
+
+  function parseModifierNumber(raw) {
+    if (!raw) return NaN;
+    const cleaned = raw
+      .replace(/[\u2212−]/g, '-')
+      .replace(/[\s\u00A0₽рР$]/g, '')
+      .replace(',', '.')
+      .trim();
+    if (!cleaned || /^[+-]?$/.test(cleaned)) return NaN;
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : NaN;
+  }
+
+  function computeBaseModifier(modPlus) {
+    if (!Number.isFinite(modPlus)) return modPlus;
+    return Math.round(modPlus / 1.01);
+  }
+
+  function formatModifierValue(value) {
+    if (!Number.isFinite(value)) return '';
+    const rounded = Math.round(value);
+    if (rounded > 0) return '+' + String(rounded);
+    if (rounded < 0) return '-' + String(Math.abs(rounded));
+    return '0';
+  }
+
+  function formatParameterModsForClipboard(mods, opts) {
+    const mode = (opts && opts.mode) === 'base' ? 'base' : 'plus';
+    const includeNames = !!(opts && opts.includeNames);
+    return mods.map(mod => {
+      const value = formatModifierValue(mode === 'base' ? mod.base : mod.plus);
+      if (!includeNames) return value;
+      const label = (mod.label || mod.source || '').trim() || 'Модификатор';
+      return `${label}\t${value}`;
+    }).join('\n');
   }
 
   /** =======================
@@ -917,6 +1058,9 @@ https://ggsel.net/catalog/product/7654321
 
       #ggselturbo-modal .csv-row{display:flex;gap:10px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
       #ggselturbo-modal .csv-buttons{display:flex;gap:8px;flex-wrap:wrap}
+      #ggselturbo-modal .csv-field.csv-params{margin-top:6px}
+      #ggselturbo-modal .csv-param-buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+      #ggselturbo-modal .csv-param-status{font-size:12px;color:#fffbe3;opacity:.85;margin-top:4px}
       #ggselturbo-modal .csv-btn{
         background:linear-gradient(90deg,#ffe37a,#181920 150%);color:#181920;font-weight:900;border:none;border-radius:10px;
         padding:10px 12px;cursor:pointer;letter-spacing:.02em;box-shadow:0 3px 0 #ffe37a33; font-size:14px;
