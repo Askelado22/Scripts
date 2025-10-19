@@ -457,6 +457,7 @@
         Параметры и модификаторы цены
         <span>
           <button class="vibe-copy" id="vibe-copy-names-mod">Скопировать названия и mod</button>
+          <button class="vibe-copy" id="vibe-copy-names-mod-base">Скопировать названия и mod без +1%</button>
           <button class="vibe-copy" id="vibe-csv-names-mod">Скачать названия+mod (CSV)</button>
           <button class="vibe-copy" id="vibe-csv-params">Скачать параметры+модификаторы (CSV)</button>
         </span>
@@ -543,6 +544,23 @@
           gD.options.forEach(opt => {
             lines.push(opt.name);
             lines.push(String(isFinite(opt.deltaNum_mod) ? Math.round(opt.deltaNum_mod) : 0));
+          });
+        }
+      });
+      copyToClipboard(lines.join('\n'));
+    });
+
+    $('#vibe-copy-names-mod-base', card)?.addEventListener('click', () => {
+      const lines = [];
+      groups.forEach((g, idx) => {
+        const gD = deltas[idx];
+        const gLabel = (g.label || 'Параметры').trim();
+        lines.push(gLabel);
+        if (gD && gD.base) { lines.push(gD.base.name); lines.push('0'); }
+        if (gD && gD.options) {
+          gD.options.forEach(opt => {
+            lines.push(opt.name);
+            lines.push(String(isFinite(opt.deltaNum) ? Math.round(opt.deltaNum) : 0));
           });
         }
       });
