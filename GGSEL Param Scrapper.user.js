@@ -164,21 +164,237 @@
     return Array.from(modal.querySelectorAll('.style_variants__LzQLe .style_variant__eTXyL, .style_variant__eTXyL'));
   }
 
-  /** Сбор значений модификаторов из модалки */
-  function collectModifiers(modal) {
-    if (!modal) return [];
-    const variants = getVariantBlocks(modal);
-    const values = [];
-    for (const block of variants) {
-      const input = findVariantModifierInput(block);
-      if (!input) continue;
-      const raw = input.value != null ? String(input.value).trim() : '';
-      if (!raw) continue;
-      const normalized = (raw.match(/-?\d+(?:[.,]\d+)?/) || [''])[0].replace(',', '.');
-      if (!normalized) continue;
-      values.push(normalized);
+  const PARAM_SECTION_KEYWORDS = ['Параметры и модификаторы цены', 'Parameters and price modifiers'];
+  let cachedParametersSection = null;
+
+  function findParametersSectionRoot() {
+    const headingSelectors = 'h1, h2, h3, h4, h5, h6, [class*="title" i], [class*="header" i]';
+    const headings = Array.from(document.querySelectorAll(headingSelectors));
+    for (const node of headings) {
+      const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (PARAM_SECTION_KEYWORDS.some((key) => text.toLowerCase().includes(key.toLowerCase()))) {
+        const container = node.closest('section, article, div') || node.parentElement;
+        if (container) return container;
+      }
     }
-    return values;
+
+    const allBlocks = Array.from(document.querySelectorAll('section, article, div'));
+    for (const block of allBlocks) {
+      const text = (block.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (PARAM_SECTION_KEYWORDS.some((key) => text.toLowerCase().includes(key.toLowerCase()))) {
+        return block;
+      }
+    }
+    return null;
+  }
+
+  function getParametersSection() {
+    if (cachedParametersSection && cachedParametersSection.isConnected) return cachedParametersSection;
+    const section = findParametersSectionRoot();
+    cachedParametersSection = section || null;
+    return section;
+  }
+
+  function isParameterContainer(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    const classMatch = Array.from(el.classList || []).some((cls) => /param|variant|option|price|item|row/i.test(cls));
+    if (classMatch) return true;
+    const dataValues = Object.values(el.dataset || {});
+    if (dataValues.some((value) => /param|variant|option|price/i.test(String(value)))) return true;
+    const dataKeys = Object.keys(el.dataset || {});
+    if (dataKeys.some((key) => /param|variant|option|price/i.test(key))) return true;
+    const role = el.getAttribute && el.getAttribute('role');
+    if (role && /row/i.test(role)) return true;
+    return false;
+  }
+
+  function findParameterCard(node, boundary) {
+    if (!(node instanceof HTMLElement)) return null;
+    let current = node;
+    let fallback = null;
+    let depth = 0;
+    const limit = 10;
+    while (current && current !== document.body && current !== boundary && depth < limit) {
+      if (!fallback && current.children && current.children.length > 1) fallback = current;
+      if (isParameterContainer(current)) return current;
+      current = current.parentElement;
+      depth += 1;
+    }
+    if (current && (current === boundary || current === document.body)) return fallback;
+    return fallback;
+  }
+
+  function findStandardNode(card) {
+    if (!(card instanceof HTMLElement)) return null;
+    const selectors = ['[data-qa*="standard" i]', '[class*="standard" i]'];
+    for (const selector of selectors) {
+      const node = card.querySelector(selector);
+      if (node && /Стандарт|Standard/i.test(node.textContent || '')) return node;
+    }
+    const nodes = Array.from(card.querySelectorAll('*'));
+    for (const node of nodes) {
+      if (/Стандарт\s*:|Standard\s*:/i.test((node.textContent || '').replace(/\s+/g, ' '))) return node;
+    }
+    return null;
+  }
+
+  function findGreenishNode(root) {
+    if (!(root instanceof HTMLElement)) return null;
+    const nodes = [root, ...root.querySelectorAll('*')];
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement)) continue;
+      const styles = getComputedStyle(node);
+      if (isGreenColor(styles.color) || isGreenColor(styles.backgroundColor)) return node;
+    }
+    return null;
+  }
+
+  function extractStandardValue(card) {
+    const standardNode = findStandardNode(card);
+    if (!standardNode) return '';
+    const valueNode = findGreenishNode(standardNode) || standardNode;
+    let text = (valueNode.textContent || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    const match = text.match(/-?\d[\d\s]*(?:[.,]\d+)?/);
+    if (!match) return '';
+    const value = match[0].replace(/\s+/g, '').replace(',', '.');
+    return value;
+  }
+
+  function extractParameterName(card) {
+    if (!(card instanceof HTMLElement)) return '';
+    const selectors = [
+      '[data-qa*="name" i]',
+      '[class*="name" i]',
+      '[class*="title" i]',
+      'h3, h4, h5, h6',
+      'strong',
+    ];
+    for (const selector of selectors) {
+      const node = card.querySelector(selector);
+      if (!node) continue;
+      const text = (node.textContent || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (/Стандарт|Standard/i.test(text)) continue;
+      return text;
+    }
+
+    const lines = (card.textContent || '')
+      .split(/\n+/)
+      .map((s) => s.replace(/\u00A0/g, ' ').trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (/^(Стандарт|Standard)\b/i.test(line)) continue;
+      if (/mod\b/i.test(line) || /мод\b/i.test(line)) continue;
+      if (/^(\+|-)?\d[\d\s]*(?:[.,]\d+)?\s*(₽|руб|rub|coins|coin|usd|eur|грн|uah|тг|kzt|сом|byn|₴|₸|₽|р\.?)/i.test(line)) continue;
+      if (/^(\+|-)?\d[\d\s]*(?:[.,]\d+)?$/i.test(line)) continue;
+      return line;
+    }
+    return '';
+  }
+
+  function collectStandardParameters() {
+    const section = getParametersSection();
+    if (!section) return { items: [], reason: 'section' };
+
+    const standardNodes = Array.from(section.querySelectorAll('[data-qa*="standard" i], [class*="standard" i]'));
+    if (!standardNodes.length) {
+      standardNodes.push(
+        ...Array.from(section.querySelectorAll('*')).filter((node) =>
+          /Стандарт\s*:|Standard\s*:/i.test((node.textContent || '').replace(/\s+/g, ' '))
+        )
+      );
+    }
+
+    const cards = new Set();
+    for (const node of standardNodes) {
+      const card = findParameterCard(node, section);
+      if (card) cards.add(card);
+    }
+
+    const items = [];
+    for (const card of cards) {
+      const name = extractParameterName(card);
+      const value = extractStandardValue(card);
+      if (!name || !value) continue;
+      items.push({ name, value });
+    }
+    return { items, reason: items.length ? '' : 'data' };
+  }
+
+  function getStandardNotFoundMessage(reason) {
+    return reason === 'section'
+      ? 'Блок «Параметры и модификаторы цены» не найден'
+      : 'Не удалось найти стандартные значения';
+  }
+
+  async function copyStandardParametersToClipboard(btn) {
+    if (!btn || btn.disabled) return;
+    const { items, reason } = collectStandardParameters();
+    if (!items.length) {
+      alert(getStandardNotFoundMessage(reason));
+      return;
+    }
+    const payload = items.map((item) => `${item.name}\n${item.value}`).join('\n');
+    const ok = await copyText(payload);
+    if (!ok) {
+      alert('Не удалось скопировать данные');
+      return;
+    }
+    const original = btn.textContent;
+    btn.textContent = 'Скопировано!';
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.disabled = false;
+    }, 1600);
+  }
+
+  function findParametersButtonsContainer(section) {
+    if (!(section instanceof HTMLElement)) return null;
+    const candidates = Array.from(section.querySelectorAll('button, a'));
+    for (const candidate of candidates) {
+      const text = (candidate.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!text) continue;
+      if (
+        /скопировать названия/i.test(text) ||
+        /скачать параметры/i.test(text) ||
+        /parameters/i.test(text) ||
+        /csv/i.test(text)
+      ) {
+        return candidate.parentElement || section;
+      }
+    }
+    return section;
+  }
+
+  function createStandardButtonElement(template) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    if (template instanceof HTMLElement) {
+      button.className = template.className;
+      const style = template.getAttribute('style');
+      if (style) button.setAttribute('style', style);
+    } else {
+      button.className = 'ant-btn ant-btn-default';
+    }
+    button.dataset.vcStandardCopyBtn = '1';
+    button.textContent = 'Скопировать названия и Standard';
+    button.addEventListener('click', () => copyStandardParametersToClipboard(button));
+    return button;
+  }
+
+  function ensureStandardCopyButton() {
+    const section = getParametersSection();
+    if (!section) return;
+    if (section.querySelector('[data-vc-standard-copy-btn]')) return;
+    const container = findParametersButtonsContainer(section);
+    if (!container) return;
+    const template = container.querySelector('button, a');
+    const button = createStandardButtonElement(template);
+    container.appendChild(button);
   }
 
   /** Кнопка «Добавить вариант» */
@@ -273,7 +489,7 @@
         </div>
         ${text === 'RU' ? `<div class="vc-popover-row"><input class="vc-file" type="file" accept=".txt,.csv"/><span class="vc-hint">или выберите файл .txt/.csv</span></div>` : ``}
         <div class="vc-popover-actions">
-          ${text === 'RU' ? `<button type="button" class="vc-action vc-copy-raw">Скопировать модификаторы</button>` : ``}
+          ${text === 'RU' ? `<button type="button" class="vc-action vc-copy-standard">Скопировать названия и Standard</button>` : ``}
           <button type="button" class="vc-action vc-fill">Заполнить</button>
           <button type="button" class="vc-action vc-clear">Очистить</button>
           <button type="button" class="vc-action vc-close">Закрыть</button>
@@ -286,7 +502,7 @@
     const clearBtn = panel.querySelector('.vc-clear');
     const closeBtn = panel.querySelector('.vc-close');
     const fileInput = panel.querySelector('.vc-file');
-    const copyRawBtn = panel.querySelector('.vc-copy-raw');
+    const copyStandardBtn = panel.querySelector('.vc-copy-standard');
 
     clearBtn.addEventListener('click', () => (textarea.value = ''));
     closeBtn.addEventListener('click', () => panel.classList.remove('is-open'));
@@ -324,7 +540,7 @@
       });
     }
 
-    return { button: btn, panel, textarea, fillBtn, copyRawBtn };
+    return { button: btn, panel, textarea, fillBtn, copyStandardBtn };
   }
 
   // ------------------------------
@@ -450,32 +666,8 @@
       RU.panel.classList.remove('is-open');
     });
 
-    if (RU.copyRawBtn) {
-      RU.copyRawBtn.addEventListener('click', async () => {
-        if (RU.copyRawBtn.disabled) return;
-        const modalRef = findParamModal();
-        if (!modalRef) {
-          alert('Модалка «Добавление параметра» не найдена');
-          return;
-        }
-        const mods = collectModifiers(modalRef);
-        if (!mods.length) {
-          alert('Не найдено значений модификаторов');
-          return;
-        }
-        const ok = await copyText(mods.join('\n'));
-        if (!ok) {
-          alert('Не удалось скопировать модификаторы');
-          return;
-        }
-        const original = RU.copyRawBtn.textContent;
-        RU.copyRawBtn.textContent = 'Скопировано!';
-        RU.copyRawBtn.disabled = true;
-        setTimeout(() => {
-          RU.copyRawBtn.textContent = original;
-          RU.copyRawBtn.disabled = false;
-        }, 1600);
-      });
+    if (RU.copyStandardBtn) {
+      RU.copyStandardBtn.addEventListener('click', () => copyStandardParametersToClipboard(RU.copyStandardBtn));
     }
 
     EN.fillBtn.addEventListener('click', async () => {
@@ -496,13 +688,17 @@
   const obs = new MutationObserver(() => {
     const modal = findParamModal();
     if (modal) mountToolbar(modal);
+    ensureStandardCopyButton();
   });
   obs.observe(document.documentElement, { childList: true, subtree: true });
 
   setTimeout(() => {
     const modal = findParamModal();
     if (modal) mountToolbar(modal);
+    ensureStandardCopyButton();
   }, 500);
+
+  ensureStandardCopyButton();
 
   function isGreenColor(color) {
     if (!color) return false;
@@ -511,7 +707,10 @@
       normalized.includes('82,196,26') ||
       normalized.includes('46,204,113') ||
       normalized.includes('43,158,0') ||
-      normalized.includes('2ea043')
+      normalized.includes('2ea043') ||
+      normalized.includes('#52c41a') ||
+      normalized.includes('#2ea043') ||
+      normalized.includes('50,205,50')
     );
   }
 
@@ -522,13 +721,14 @@
       if (!(target instanceof Element)) return;
       const el = target.closest('span, div, p, button');
       if (!el || el.closest('.vc-popover')) return;
-      const text = (el.textContent || '').trim();
-      if (!text || !/^\+\s*\d/.test(text)) return;
-      const color = getComputedStyle(el).color;
-      if (!isGreenColor(color)) return;
-      const match = text.replace(/\s+/g, ' ').match(/[+-]?\d+(?:[.,]\d+)?/);
+      const text = (el.textContent || '').replace(/\u00A0/g, ' ').trim();
+      if (!text || !/\d/.test(text)) return;
+      const styles = getComputedStyle(el);
+      if (!isGreenColor(styles.color) && !isGreenColor(styles.backgroundColor)) return;
+      const match = text.replace(/\s+/g, ' ').match(/[+-]?\d[\d\s]*(?:[.,]\d+)?/);
       if (!match) return;
-      const value = match[0].replace('+', '').replace(',', '.');
+      let value = match[0].replace(/\s+/g, '').replace(',', '.');
+      if (value.startsWith('+')) value = value.slice(1);
       if (!value) return;
       copyText(value);
       el.classList.add('vc-modifier-copied');
