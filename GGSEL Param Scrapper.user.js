@@ -16,6 +16,35 @@
   // БАЗОВЫЕ УТИЛИТЫ
   // ------------------------------
 
+  async function copyText(text) {
+    if (!text && text !== 0) return false;
+    const value = String(text);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (err) {
+      console.warn('[GGSEL Param Scrapper] Clipboard API недоступен', err);
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let success = false;
+    try {
+      success = document.execCommand('copy');
+    } catch (err) {
+      console.warn('[GGSEL Param Scrapper] Не удалось скопировать текст', err);
+    }
+    document.body.removeChild(textarea);
+    return success;
+  }
+
   /** Безопасная установка значения в input (корректно для React/AntD) */
   function setReactInputValue(input, value) {
     if (!input) return;
@@ -135,6 +164,23 @@
     return Array.from(modal.querySelectorAll('.style_variants__LzQLe .style_variant__eTXyL, .style_variant__eTXyL'));
   }
 
+  /** Сбор значений модификаторов из модалки */
+  function collectModifiers(modal) {
+    if (!modal) return [];
+    const variants = getVariantBlocks(modal);
+    const values = [];
+    for (const block of variants) {
+      const input = findVariantModifierInput(block);
+      if (!input) continue;
+      const raw = input.value != null ? String(input.value).trim() : '';
+      if (!raw) continue;
+      const normalized = (raw.match(/-?\d+(?:[.,]\d+)?/) || [''])[0].replace(',', '.');
+      if (!normalized) continue;
+      values.push(normalized);
+    }
+    return values;
+  }
+
   /** Кнопка «Добавить вариант» */
   function findAddVariantButton(modal) {
     const btns = Array.from(modal.querySelectorAll('button'));
@@ -200,6 +246,8 @@
       .vc-popover-actions{display:flex;gap:8px;justify-content:flex-end}
       .vc-action{all:unset;font:inherit;cursor:pointer;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(0,0,0,0.25)}
       .vc-action:hover{background:rgba(255,255,255,0.06)}
+      .vc-action[disabled]{opacity:0.55;cursor:default}
+      .vc-modifier-copied{outline:1px dashed rgba(82,196,26,0.45);outline-offset:2px}
     `;
     const style = document.createElement('style');
     style.textContent = css;
@@ -225,6 +273,7 @@
         </div>
         ${text === 'RU' ? `<div class="vc-popover-row"><input class="vc-file" type="file" accept=".txt,.csv"/><span class="vc-hint">или выберите файл .txt/.csv</span></div>` : ``}
         <div class="vc-popover-actions">
+          ${text === 'RU' ? `<button type="button" class="vc-action vc-copy-raw">Скопировать модификаторы</button>` : ``}
           <button type="button" class="vc-action vc-fill">Заполнить</button>
           <button type="button" class="vc-action vc-clear">Очистить</button>
           <button type="button" class="vc-action vc-close">Закрыть</button>
@@ -237,6 +286,7 @@
     const clearBtn = panel.querySelector('.vc-clear');
     const closeBtn = panel.querySelector('.vc-close');
     const fileInput = panel.querySelector('.vc-file');
+    const copyRawBtn = panel.querySelector('.vc-copy-raw');
 
     clearBtn.addEventListener('click', () => (textarea.value = ''));
     closeBtn.addEventListener('click', () => panel.classList.remove('is-open'));
@@ -274,7 +324,7 @@
       });
     }
 
-    return { button: btn, panel, textarea, fillBtn };
+    return { button: btn, panel, textarea, fillBtn, copyRawBtn };
   }
 
   // ------------------------------
@@ -400,6 +450,34 @@
       RU.panel.classList.remove('is-open');
     });
 
+    if (RU.copyRawBtn) {
+      RU.copyRawBtn.addEventListener('click', async () => {
+        if (RU.copyRawBtn.disabled) return;
+        const modalRef = findParamModal();
+        if (!modalRef) {
+          alert('Модалка «Добавление параметра» не найдена');
+          return;
+        }
+        const mods = collectModifiers(modalRef);
+        if (!mods.length) {
+          alert('Не найдено значений модификаторов');
+          return;
+        }
+        const ok = await copyText(mods.join('\n'));
+        if (!ok) {
+          alert('Не удалось скопировать модификаторы');
+          return;
+        }
+        const original = RU.copyRawBtn.textContent;
+        RU.copyRawBtn.textContent = 'Скопировано!';
+        RU.copyRawBtn.disabled = true;
+        setTimeout(() => {
+          RU.copyRawBtn.textContent = original;
+          RU.copyRawBtn.disabled = false;
+        }, 1600);
+      });
+    }
+
     EN.fillBtn.addEventListener('click', async () => {
       const txt = EN.textarea.value.trim();
       if (!txt) return alert('Вставьте данные для EN');
@@ -425,5 +503,38 @@
     const modal = findParamModal();
     if (modal) mountToolbar(modal);
   }, 500);
+
+  function isGreenColor(color) {
+    if (!color) return false;
+    const normalized = color.replace(/\s+/g, '').toLowerCase();
+    return (
+      normalized.includes('82,196,26') ||
+      normalized.includes('46,204,113') ||
+      normalized.includes('43,158,0') ||
+      normalized.includes('2ea043')
+    );
+  }
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const el = target.closest('span, div, p, button');
+      if (!el || el.closest('.vc-popover')) return;
+      const text = (el.textContent || '').trim();
+      if (!text || !/^\+\s*\d/.test(text)) return;
+      const color = getComputedStyle(el).color;
+      if (!isGreenColor(color)) return;
+      const match = text.replace(/\s+/g, ' ').match(/[+-]?\d+(?:[.,]\d+)?/);
+      if (!match) return;
+      const value = match[0].replace('+', '').replace(',', '.');
+      if (!value) return;
+      copyText(value);
+      el.classList.add('vc-modifier-copied');
+      setTimeout(() => el.classList.remove('vc-modifier-copied'), 1200);
+    },
+    true
+  );
 
 })();
