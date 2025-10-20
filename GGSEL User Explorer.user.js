@@ -91,6 +91,38 @@
         commit: 'Фильтровать'
     };
 
+    const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+    const cloneShortcut = (shortcut = DEFAULT_SHORTCUT) => ({
+        ctrl: Boolean(shortcut?.ctrl),
+        alt: Boolean(shortcut?.alt),
+        shift: Boolean(shortcut?.shift),
+        meta: Boolean(shortcut?.meta),
+        code: typeof shortcut?.code === 'string' && shortcut.code ? shortcut.code : DEFAULT_SHORTCUT.code
+    });
+
+    const isModifierCode = (code = '') => /^(?:Control|Shift|Alt|Meta)/i.test(code);
+
+    const normalizeShortcut = (value) => {
+        const base = cloneShortcut(DEFAULT_SHORTCUT);
+        if (!value || typeof value !== 'object') {
+            return base;
+        }
+        const normalized = cloneShortcut(value);
+        if (!normalized.code || isModifierCode(normalized.code)) {
+            normalized.code = DEFAULT_SHORTCUT.code;
+        }
+        if (!normalized.ctrl && !normalized.alt && !normalized.shift && !normalized.meta) {
+            normalized.ctrl = DEFAULT_SHORTCUT.ctrl;
+        }
+        return normalized;
+    };
+
+    const getDefaultSettings = () => ({
+        extraActions: false,
+        shortcut: cloneShortcut(DEFAULT_SHORTCUT)
+    });
+
     const state = {
         open: false,
         loading: false,
@@ -133,33 +165,6 @@
         searchRow: null,
         resultsWrapper: null,
         lastPanelHeight: FAB_SIZE
-    };
-
-    const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
-
-    const cloneShortcut = (shortcut = DEFAULT_SHORTCUT) => ({
-        ctrl: Boolean(shortcut?.ctrl),
-        alt: Boolean(shortcut?.alt),
-        shift: Boolean(shortcut?.shift),
-        meta: Boolean(shortcut?.meta),
-        code: typeof shortcut?.code === 'string' && shortcut.code ? shortcut.code : DEFAULT_SHORTCUT.code
-    });
-
-    const isModifierCode = (code = '') => /^(?:Control|Shift|Alt|Meta)/i.test(code);
-
-    const normalizeShortcut = (value) => {
-        const base = cloneShortcut(DEFAULT_SHORTCUT);
-        if (!value || typeof value !== 'object') {
-            return base;
-        }
-        const normalized = cloneShortcut(value);
-        if (!normalized.code || isModifierCode(normalized.code)) {
-            normalized.code = DEFAULT_SHORTCUT.code;
-        }
-        if (!normalized.ctrl && !normalized.alt && !normalized.shift && !normalized.meta) {
-            normalized.ctrl = DEFAULT_SHORTCUT.ctrl;
-        }
-        return normalized;
     };
 
     const formatShortcut = (shortcut) => {
@@ -210,11 +215,6 @@
             && event.code === normalized.code
         );
     };
-
-    const getDefaultSettings = () => ({
-        extraActions: false,
-        shortcut: cloneShortcut(DEFAULT_SHORTCUT)
-    });
 
     const formatBalanceValue = (rawValue) => {
         if (rawValue == null) return '';
@@ -2013,25 +2013,28 @@
             return;
         }
         let index = 0;
-        const workers = [];
         const workerCount = Math.min(DETAIL_PREFETCH_CONCURRENCY, queue.length);
-        for (let i = 0; i < workerCount; i += 1) {
-            workers.push((async () => {
-                while (index < queue.length) {
-                    const currentIndex = index;
-                    index += 1;
-                    const current = queue[currentIndex];
-                    if (!current) {
-                        continue;
-                    }
-                    try {
-                        await ensureUserDetails(current);
-                    } catch (error) {
-                        console.warn('Не удалось предварительно загрузить пользователя', current?.id, error);
-                    }
+
+        const runWorker = async () => {
+            while (true) {
+                const currentIndex = index;
+                index += 1;
+                if (currentIndex >= queue.length) {
+                    break;
                 }
-            })());
-        }
+                const current = queue[currentIndex];
+                if (!current) {
+                    continue;
+                }
+                try {
+                    await ensureUserDetails(current);
+                } catch (error) {
+                    console.warn('Не удалось предварительно загрузить пользователя', current?.id, error);
+                }
+            }
+        };
+
+        const workers = Array.from({ length: workerCount }, () => runWorker());
         await Promise.all(workers);
     };
 
