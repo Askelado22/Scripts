@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL User Explorer
 // @description  Быстрый поиск и просмотр данных пользователей в админке GGSEL
-// @version      1.0.0
+// @version      1.1.0
 // @match        https://back-office.ggsel.net/admin/users*
 // @grant        GM_addStyle
 // ==/UserScript==
@@ -120,24 +120,25 @@
                 width: 56px;
                 height: 56px;
                 border-radius: 50%;
-                background: linear-gradient(135deg, #2563eb, #7c3aed);
-                color: #fff;
-                box-shadow: 0 10px 25px rgba(37, 99, 235, 0.35);
-                border: none;
+                background: radial-gradient(circle at 30% 30%, #2a2a2a 0%, #161616 70%);
+                border: 1px solid #343434;
+                color: #ffd166;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
                 cursor: pointer;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 font-size: 24px;
                 z-index: 9999;
-                transition: transform 0.2s ease, box-shadow 0.2s ease;
+                transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
             }
             .ggsel-user-explorer-button:hover {
-                transform: scale(1.05);
-                box-shadow: 0 12px 30px rgba(124, 58, 237, 0.35);
+                transform: translateY(-2px);
+                border-color: #ffd166;
+                box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
             }
             .ggsel-user-explorer-button:active {
-                transform: scale(0.96);
+                transform: scale(0.95);
             }
             .ggsel-user-explorer-panel {
                 position: fixed;
@@ -145,88 +146,116 @@
                 right: 24px;
                 width: min(640px, calc(100vw - 48px));
                 max-height: min(80vh, 720px);
-                background: #0f172a;
-                color: #e2e8f0;
-                border-radius: 16px;
-                box-shadow: 0 20px 60px rgba(15, 23, 42, 0.45);
+                background: rgba(16, 16, 16, 0.92);
+                border: 1px solid #2f2f2f;
+                border-radius: 14px;
+                color: #eaeaea;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
                 display: flex;
                 flex-direction: column;
                 overflow: hidden;
                 z-index: 9999;
-                position: fixed;
+                backdrop-filter: blur(6px);
             }
             .ggsel-user-explorer-panel[hidden] {
                 display: none !important;
             }
             .ggsel-user-explorer-close {
-                border: none;
-                background: rgba(15,23,42,0.6);
-                color: #fff;
-                width: 32px;
-                height: 32px;
+                border: 1px solid #333;
+                background: #1b1b1b;
+                color: #ffd166;
+                width: 34px;
+                height: 34px;
                 border-radius: 12px;
-                font-size: 18px;
+                font-size: 20px;
                 cursor: pointer;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 position: absolute;
-                top: 14px;
-                right: 14px;
-                z-index: 1;
+                top: 12px;
+                right: 12px;
+                transition: border-color 0.2s ease;
+            }
+            .ggsel-user-explorer-close:hover {
+                border-color: #ffd166;
             }
             .ggsel-user-explorer-body {
-                padding: 24px 20px 20px 20px;
+                padding: 20px 18px 18px 18px;
                 display: flex;
                 flex-direction: column;
-                gap: 14px;
+                gap: 12px;
                 overflow-y: auto;
             }
             .ggsel-user-explorer-input {
                 width: 100%;
-                padding: 12px 16px;
+                padding: 10px 14px;
                 border-radius: 12px;
-                border: 1px solid rgba(148,163,184,0.35);
-                background: rgba(15,23,42,0.65);
-                color: #f8fafc;
-                font-size: 14px;
+                border: 1px solid #333;
+                background: #0f0f0f;
+                color: #eaeaea;
+                font-size: 13px;
+                outline: none;
+                transition: border-color 0.2s ease;
             }
             .ggsel-user-explorer-input:focus {
-                outline: 2px solid rgba(59,130,246,0.6);
-                border-color: transparent;
+                border-color: #ffd166;
             }
             .ggsel-user-explorer-hints {
-                font-size: 12px;
-                color: rgba(148,163,184,0.85);
+                font-size: 11px;
+                color: #bbbbbb;
                 line-height: 1.4;
+            }
+            .ggsel-user-explorer-summary {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 10px;
+                border-radius: 999px;
+                border: 1px solid #333;
+                background: #1b1b1b;
+                color: #bbbbbb;
+                font-size: 11px;
+                align-self: flex-start;
+                letter-spacing: 0.15px;
             }
             .ggsel-user-explorer-results {
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 10px;
+                max-height: 46vh;
+                overflow-y: auto;
+                padding-right: 4px;
+            }
+            .ggsel-user-explorer-results::-webkit-scrollbar {
+                width: 6px;
+            }
+            .ggsel-user-explorer-results::-webkit-scrollbar-thumb {
+                background: #333;
+                border-radius: 999px;
             }
             .ggsel-user-explorer-placeholder {
-                padding: 48px 0;
+                padding: 32px 0;
                 text-align: center;
-                font-size: 14px;
-                color: rgba(148,163,184,0.8);
+                font-size: 13px;
+                color: #a5a5a5;
             }
             .ggsel-user-card {
-                background: rgba(15,23,42,0.75);
-                border-radius: 14px;
-                border: 1px solid rgba(59,130,246,0.25);
+                background: #121212;
+                border-radius: 12px;
+                border: 1px solid #2f2f2f;
                 overflow: hidden;
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
             .ggsel-user-card:hover {
-                border-color: rgba(59,130,246,0.6);
-                box-shadow: 0 12px 30px rgba(37,99,235,0.15);
+                border-color: #ffd166;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
             }
             .ggsel-user-card-header {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                padding: 14px 16px;
+                padding: 12px 14px;
                 cursor: pointer;
                 gap: 12px;
             }
@@ -236,16 +265,16 @@
                 gap: 4px;
             }
             .ggsel-user-card-name {
-                font-size: 15px;
+                font-size: 13px;
                 font-weight: 600;
-                color: #f8fafc;
+                color: #ffd166;
             }
             .ggsel-user-card-line {
-                font-size: 12px;
-                color: rgba(148,163,184,0.9);
+                font-size: 11px;
+                color: #a8a8a8;
                 display: flex;
                 flex-wrap: wrap;
-                gap: 10px;
+                gap: 8px;
             }
             .ggsel-user-card-line span {
                 display: inline-flex;
@@ -253,10 +282,10 @@
                 gap: 4px;
             }
             .ggsel-user-card-toggle {
-                border: none;
-                background: rgba(59,130,246,0.18);
-                color: #60a5fa;
-                border-radius: 10px;
+                border: 1px solid #444;
+                background: #1e1e1e;
+                color: #ffd166;
+                border-radius: 999px;
                 width: 32px;
                 height: 32px;
                 display: flex;
@@ -265,11 +294,15 @@
                 font-size: 16px;
                 cursor: pointer;
                 flex-shrink: 0;
+                transition: border-color 0.2s ease;
+            }
+            .ggsel-user-card-toggle:hover {
+                border-color: #ffd166;
             }
             .ggsel-user-card-body {
                 display: none;
-                padding: 0 16px 16px 16px;
-                border-top: 1px solid rgba(59,130,246,0.2);
+                padding: 0 14px 14px 14px;
+                border-top: 1px solid #2f2f2f;
             }
             .ggsel-user-card.open .ggsel-user-card-body {
                 display: flex;
@@ -285,37 +318,37 @@
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                padding: 8px 12px;
-                border-radius: 10px;
-                border: 1px solid rgba(94,234,212,0.4);
-                background: rgba(15,118,110,0.25);
-                color: #5eead4;
+                padding: 7px 12px;
+                border-radius: 12px;
+                border: 1px solid #444;
+                background: #1e1e1e;
+                color: #eaeaea;
                 text-decoration: none;
-                font-size: 12px;
-                transition: background 0.2s ease, transform 0.2s ease;
+                font-size: 11px;
+                transition: border-color 0.2s ease, color 0.2s ease;
             }
             .ggsel-user-action:hover {
-                background: rgba(13,148,136,0.45);
-                transform: translateY(-1px);
+                border-color: #ffd166;
+                color: #ffd166;
             }
             .ggsel-user-detail-list {
                 display: grid;
-                grid-template-columns: minmax(200px, 240px) 1fr;
+                grid-template-columns: minmax(180px, 220px) 1fr;
                 gap: 4px 12px;
-                font-size: 12px;
-                color: rgba(226,232,240,0.95);
+                font-size: 11.5px;
+                color: #d9d9d9;
             }
             .ggsel-user-detail-list dt {
                 font-weight: 600;
-                color: rgba(148,163,184,0.9);
+                color: #a8a8a8;
             }
             .ggsel-user-detail-list dd {
                 margin: 0;
-                color: rgba(226,232,240,0.95);
+                color: #eaeaea;
                 word-break: break-word;
             }
             .ggsel-user-detail-empty {
-                color: rgba(148,163,184,0.7);
+                color: #7f7f7f;
                 font-style: italic;
             }
             .ggsel-user-card-loader,
@@ -324,15 +357,16 @@
                 align-items: center;
                 justify-content: center;
                 gap: 10px;
-                color: rgba(148,163,184,0.85);
-                font-size: 13px;
-                padding: 24px 0;
+                color: #bcbcbc;
+                font-size: 12px;
+                padding: 20px 0;
             }
             .ggsel-user-loader-dot {
                 width: 8px;
                 height: 8px;
                 border-radius: 50%;
-                background: rgba(148,163,184,0.7);
+                background: #ffd166;
+                opacity: 0.7;
                 animation: ggsel-bounce 1.2s infinite ease-in-out;
             }
             .ggsel-user-loader-dot:nth-child(2) {
@@ -348,13 +382,18 @@
             .ggsel-user-load-more {
                 align-self: center;
                 margin-top: 4px;
-                padding: 10px 18px;
+                padding: 9px 18px;
                 border-radius: 12px;
-                border: 1px solid rgba(96,165,250,0.45);
-                background: rgba(37,99,235,0.18);
-                color: #bfdbfe;
+                border: 1px solid #444;
+                background: #1e1e1e;
+                color: #eaeaea;
                 cursor: pointer;
-                font-size: 13px;
+                font-size: 12px;
+                transition: border-color 0.2s ease, color 0.2s ease;
+            }
+            .ggsel-user-load-more:hover {
+                border-color: #ffd166;
+                color: #ffd166;
             }
             .ggsel-user-load-more[disabled] {
                 opacity: 0.6;
@@ -362,26 +401,26 @@
             }
             .ggsel-user-error {
                 border-radius: 12px;
-                border: 1px solid rgba(248,113,113,0.45);
-                background: rgba(220,38,38,0.18);
+                border: 1px solid rgba(220, 53, 69, 0.6);
+                background: rgba(220, 53, 69, 0.15);
                 padding: 12px;
-                font-size: 13px;
-                color: #fecaca;
+                font-size: 12px;
+                color: #ffb3b8;
             }
             .ggsel-user-context-menu {
                 position: fixed;
                 z-index: 10000;
-                background: linear-gradient(160deg, rgba(15,23,42,0.96), rgba(30,41,59,0.94));
-                color: rgba(226,232,240,0.95);
+                background: rgba(16, 16, 16, 0.95);
+                color: #eaeaea;
                 border-radius: 12px;
-                border: 1px solid rgba(59,130,246,0.32);
-                min-width: 180px;
+                border: 1px solid #2f2f2f;
+                min-width: 190px;
                 max-width: calc(100vw - 32px);
-                box-shadow: 0 18px 40px rgba(15,23,42,0.45);
+                box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
                 padding: 6px 0;
                 display: none;
-                font-size: 13px;
-                backdrop-filter: blur(12px) saturate(140%);
+                font-size: 12.5px;
+                backdrop-filter: blur(12px);
             }
             .ggsel-user-context-menu.open {
                 display: block;
@@ -400,21 +439,22 @@
                 display: flex;
                 align-items: center;
                 gap: 8px;
+                transition: background 0.2s ease, color 0.2s ease;
             }
             .ggsel-user-context-menu__item:hover,
             .ggsel-user-context-menu__item:focus-visible {
-                background: rgba(59,130,246,0.22);
-                color: #f8fafc;
+                background: rgba(255, 209, 102, 0.15);
+                color: #ffd166;
                 outline: none;
             }
             .ggsel-user-context-menu__item[disabled] {
-                opacity: 0.6;
+                opacity: 0.5;
                 cursor: default;
             }
             .ggsel-user-context-menu__separator {
                 height: 1px;
                 margin: 4px 0;
-                background: rgba(148,163,184,0.18);
+                background: #2f2f2f;
             }
         `;
         if (typeof GM_addStyle === 'function') {
@@ -457,7 +497,7 @@
         const summary = [];
         const input = (rawInput || '').trim();
         if (!input) {
-            return { params, summary: 'Введите запрос или используйте фильтры' };
+            return { params, summary: 'Фильтры не применены' };
         }
 
         const tokens = [];
@@ -483,26 +523,46 @@
         });
 
         // free text (parts not covered by explicit tokens)
+        const looksLikeEmail = (value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/i.test(value);
+
         const freeParts = remainder
             .split(/\s+/)
             .map(part => part.replace(/^['"]|['"]$/g, ''))
             .filter(part => part.length);
 
-        if (freeParts.length) {
-            const freeText = freeParts.join(' ');
+        let emailCandidate = '';
+        const residualParts = [];
+        for (const part of freeParts) {
+            const cleaned = part.replace(/[.,;]+$/g, '');
+            if (!params['search[email_like]'] && looksLikeEmail(cleaned)) {
+                if (!emailCandidate) {
+                    emailCandidate = cleaned;
+                }
+            } else {
+                residualParts.push(part);
+            }
+        }
+
+        if (emailCandidate) {
+            params['search[email_like]'] = emailCandidate;
+            summary.push(`email: ${emailCandidate}`);
+        }
+
+        if (!emailCandidate && residualParts.length && !params['search[username_like]']) {
+            const freeText = residualParts.join(' ');
             params['search[username_like]'] = freeText;
             summary.push(`username: ${freeText}`);
         }
 
         // fallbacks if only number provided (no tokens)
-        if (!tokens.length && /^\d+$/.test(input)) {
+        if (!tokens.length && !emailCandidate && /^\d+$/.test(input)) {
             params['search[id]'] = input;
             summary.push(`id: ${input}`);
         }
 
         return {
             params,
-            summary: summary.length ? summary.join(' · ') : 'username: ' + input
+            summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`
         };
     };
 
@@ -1350,8 +1410,8 @@
         hints.innerHTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
 
         const summary = document.createElement('div');
-        summary.className = 'ggsel-user-explorer-hints';
-        summary.textContent = 'Введите запрос или используйте фильтры';
+        summary.className = 'ggsel-user-explorer-summary';
+        summary.textContent = 'Фильтры не применены';
 
         const resultsContainer = document.createElement('div');
         resultsContainer.className = 'ggsel-user-explorer-results';
