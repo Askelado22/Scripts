@@ -181,8 +181,25 @@
         const rect = state.anchor.getBoundingClientRect();
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const margin = 24;
+        const panelHeight = state.panel && !state.panel.hidden ? state.panel.offsetHeight : (state.panel ? state.panel.scrollHeight : 0);
+        const buttonHeight = state.button ? state.button.offsetHeight : 0;
         const expandLeft = rect.left + rect.width / 2 > viewportWidth / 2;
-        const expandUp = rect.top + rect.height / 2 > viewportHeight / 2;
+        const availableBelow = viewportHeight - rect.top - margin;
+        const availableAbove = rect.top - margin;
+        const estimatedHeightClosed = panelHeight || 360;
+        let expandUp = false;
+        if (state.open) {
+            const estimatedHeight = panelHeight || rect.height || estimatedHeightClosed;
+            if (availableBelow < Math.min(estimatedHeight, viewportHeight * 0.7) && availableAbove > availableBelow) {
+                expandUp = true;
+            }
+        } else {
+            const availableBelowClosed = viewportHeight - (rect.top + buttonHeight) - margin;
+            if (estimatedHeightClosed > availableBelowClosed && availableAbove > availableBelowClosed) {
+                expandUp = true;
+            }
+        }
         state.anchor.classList.toggle('expand-left', expandLeft);
         state.anchor.classList.toggle('expand-right', !expandLeft);
         state.anchor.classList.toggle('expand-up', expandUp);
@@ -208,8 +225,8 @@
         updateAnchorOrientation();
     };
 
-    const startAnchorDrag = (event) => {
-        if (!state.anchor || event.button !== 0 || !(event.ctrlKey && event.altKey)) return;
+    const beginAnchorDrag = (event) => {
+        if (!state.anchor) return false;
         const rect = state.anchor.getBoundingClientRect();
         const offsetX = event.clientX - rect.left;
         const offsetY = event.clientY - rect.top;
@@ -244,48 +261,30 @@
         document.addEventListener('pointerup', finishDrag);
         document.addEventListener('pointercancel', finishDrag);
         event.preventDefault();
+        return true;
     };
 
-    const enablePanelHandleDragging = (handle) => {
-        if (!handle) return;
-        const onPointerDown = (event) => {
+    const startAnchorDrag = (event) => {
+        if (!state.anchor || event.button !== 0 || !(event.ctrlKey && event.altKey)) return;
+        beginAnchorDrag(event);
+    };
+
+    const enablePanelTopDragging = (panel) => {
+        if (!panel) return;
+        panel.addEventListener('pointerdown', (event) => {
             if (event.button !== 0 || !state.anchor || !state.open) return;
-            const rect = state.anchor.getBoundingClientRect();
-            const offsetX = event.clientX - rect.left;
-            const offsetY = event.clientY - rect.top;
-            const width = rect.width;
-            const height = rect.height;
-            state.anchor.classList.add('dragging');
-            const onPointerMove = (moveEvent) => {
-                if (moveEvent.pointerId !== event.pointerId) return;
-                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-                const maxLeft = Math.max(0, Math.round(viewportWidth - width));
-                const maxTop = Math.max(0, Math.round(viewportHeight - height));
-                let nextLeft = moveEvent.clientX - offsetX;
-                let nextTop = moveEvent.clientY - offsetY;
-                nextLeft = Math.min(Math.max(Math.round(nextLeft), 0), maxLeft);
-                nextTop = Math.min(Math.max(Math.round(nextTop), 0), maxTop);
-                state.anchorPosition = { left: nextLeft, top: nextTop };
-                state.anchorPositionManual = true;
-                applyAnchorPosition();
-            };
-            const finishDrag = (upEvent) => {
-                if (upEvent.pointerId !== event.pointerId) return;
-                state.anchor.classList.remove('dragging');
-                document.removeEventListener('pointermove', onPointerMove);
-                document.removeEventListener('pointerup', finishDrag);
-                document.removeEventListener('pointercancel', finishDrag);
-                if (state.anchorPosition) {
-                    savePosition(ANCHOR_POSITION_KEY, state.anchorPosition);
-                }
-            };
-            document.addEventListener('pointermove', onPointerMove);
-            document.addEventListener('pointerup', finishDrag);
-            document.addEventListener('pointercancel', finishDrag);
-            event.preventDefault();
-        };
-        handle.addEventListener('pointerdown', onPointerDown);
+            const targetEl = event.target && event.target.nodeType === 1 ? event.target : null;
+            if (!targetEl) return;
+            if (targetEl.closest('input, textarea, select, button, a, [contenteditable], .ggsel-user-explorer-results, .ggsel-user-load-more')) {
+                return;
+            }
+            const rect = panel.getBoundingClientRect();
+            const topZoneHeight = 48;
+            if (event.clientY - rect.top > topZoneHeight) {
+                return;
+            }
+            beginAnchorDrag(event);
+        });
     };
 
     const expandSearchControl = () => {
@@ -699,21 +698,6 @@
             }
             .ggsel-user-explorer-panel[hidden] {
                 display: none !important;
-            }
-            .ggsel-user-explorer-panel-handle {
-                flex: 0 0 16px;
-                cursor: grab;
-                border-bottom: 1px solid rgba(47, 47, 47, 0.85);
-                background: linear-gradient(180deg, rgba(18, 18, 18, 0.8), rgba(18, 18, 18, 0));
-            }
-            .ggsel-user-explorer-panel-handle::after {
-                content: '';
-                display: block;
-                width: 54px;
-                height: 4px;
-                margin: 6px auto 0;
-                border-radius: 999px;
-                background: rgba(138, 180, 255, 0.32);
             }
             .ggsel-user-explorer-body {
                 display: flex;
@@ -1486,6 +1470,7 @@
         if (!box) {
             throw new Error('Страница пользователя не содержит ожидаемый блок');
         }
+        const headerTitle = collapseSpaces(box.querySelector('.box-header .box-title')?.textContent || '');
         const dl = box.querySelector('.box-body dl.dl-horizontal');
         const entries = [];
         let userIdFromDetails = '';
@@ -1534,7 +1519,7 @@
                 });
             }
         }
-        return { title, entries, actions, userId: userIdFromDetails };
+        return { title: headerTitle, entries, actions, userId: userIdFromDetails };
     };
 
     function renderUserDetails(container, details) {
@@ -2277,6 +2262,7 @@
         const hasContent = Boolean(state.resultsContainer && state.resultsContainer.childElementCount > 0);
         const hasLoadMore = Boolean(state.loadMoreButton && !state.loadMoreButton.hidden);
         state.resultsWrapper.hidden = !(hasContent || hasLoadMore);
+        requestAnimationFrame(() => updateAnchorOrientation());
     };
 
     const buildUrlWithParams = (params, page) => {
@@ -2549,9 +2535,6 @@
         panel.className = 'ggsel-user-explorer-panel';
         panel.hidden = true;
 
-        const panelHandle = document.createElement('div');
-        panelHandle.className = 'ggsel-user-explorer-panel-handle';
-
         const body = document.createElement('div');
         body.className = 'ggsel-user-explorer-body';
 
@@ -2603,7 +2586,6 @@
         body.appendChild(searchRow);
         body.appendChild(resultsWrapper);
 
-        panel.appendChild(panelHandle);
         panel.appendChild(body);
 
         anchor.appendChild(button);
@@ -2619,7 +2601,7 @@
         state.searchControl = searchControl;
         state.searchRow = searchRow;
         state.resultsWrapper = resultsWrapper;
-        enablePanelHandleDragging(panelHandle);
+        enablePanelTopDragging(panel);
         state.searchPlan = {
             type: 'single',
             queries: [{ key: 'default', params: { ...state.params }, highlight: null }]
