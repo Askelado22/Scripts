@@ -167,7 +167,8 @@
 
     const getDefaultParams = (mode = MODE_USERS) => ({ ...getModeConfig(mode).defaultParams });
 
-    const getQueryStorageKey = (mode = MODE_USERS) => `${STORAGE_KEY}:${mode}`;
+    const getLegacyQueryStorageKey = (mode = MODE_USERS) => `${STORAGE_KEY}:${mode}`;
+    const getQueryStorageKey = () => STORAGE_KEY;
 
     const cloneShortcut = (shortcut = DEFAULT_SHORTCUT) => ({
         ctrl: Boolean(shortcut?.ctrl),
@@ -350,8 +351,9 @@
         if (!position) return position;
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        const width = FAB_SIZE;
-        const height = FAB_SIZE;
+        const anchorRect = state.anchor?.getBoundingClientRect();
+        const width = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.width || FAB_SIZE)) : FAB_SIZE;
+        const height = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.height || FAB_SIZE)) : FAB_SIZE;
         const maxLeft = Math.max(0, Math.round(viewportWidth - width));
         const maxTop = Math.max(0, Math.round(viewportHeight - height));
         const applyMargin = (value, size, viewport) => {
@@ -476,11 +478,13 @@
 
     const beginAnchorDrag = (event) => {
         if (!state.anchor) return false;
-        const basePosition = getAnchorBasePosition();
-        let offsetX = event.clientX - basePosition.left;
-        let offsetY = event.clientY - basePosition.top;
-        const width = FAB_SIZE;
-        const height = FAB_SIZE;
+        const rect = state.anchor.getBoundingClientRect();
+        const baseLeft = Math.round(rect.left || 0);
+        const baseTop = Math.round(rect.top || 0);
+        const width = Math.max(FAB_SIZE, Math.round(rect.width || FAB_SIZE));
+        const height = Math.max(FAB_SIZE, Math.round(rect.height || FAB_SIZE));
+        let offsetX = event.clientX - baseLeft;
+        let offsetY = event.clientY - baseTop;
         if (!Number.isFinite(offsetX)) offsetX = width / 2;
         if (!Number.isFinite(offsetY)) offsetY = height / 2;
         offsetX = Math.min(Math.max(Math.round(offsetX), 0), width);
@@ -498,7 +502,7 @@
             let nextTop = moveEvent.clientY - offsetY;
             nextLeft = Math.min(Math.max(Math.round(nextLeft), 0), maxLeft);
             nextTop = Math.min(Math.max(Math.round(nextTop), 0), maxTop);
-            state.anchorDragMoved = state.anchorDragMoved || (Math.abs(nextLeft - basePosition.left) > 1 || Math.abs(nextTop - basePosition.top) > 1);
+            state.anchorDragMoved = state.anchorDragMoved || (Math.abs(nextLeft - baseLeft) > 1 || Math.abs(nextTop - baseTop) > 1);
             state.anchorPosition = { left: nextLeft, top: nextTop };
             state.anchorPositionManual = true;
             applyAnchorPosition();
@@ -1107,7 +1111,7 @@
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
-                padding: 18px;
+                padding: 16px 0 18px;
                 flex: 1 1 auto;
                 min-height: 0;
             }
@@ -1122,9 +1126,10 @@
                 justify-content: flex-start;
                 order: 1;
                 min-height: var(--ggsel-user-explorer-fab, 56px);
+                padding: 0;
             }
             .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-search-row {
-                padding: 0 18px;
+                padding: 0;
                 width: 100%;
                 min-height: var(--ggsel-user-explorer-fab, 56px);
             }
@@ -1169,37 +1174,60 @@
                 flex: 0 0 auto;
                 display: inline-flex;
                 align-items: center;
-                gap: 6px;
+                justify-content: center;
+                width: 44px;
+                height: 44px;
                 margin-left: 12px;
-                padding: 0 16px;
-                height: calc(var(--ggsel-user-explorer-fab, 56px) - 12px);
-                border-radius: 16px;
-                border: 1px solid #444;
-                background: #1e1e1e;
-                color: #eaeaea;
-                font-size: 12.5px;
-                font-weight: 600;
+                border-radius: 14px;
+                border: 1px solid rgba(111, 137, 255, 0.35);
+                background: rgba(111, 137, 255, 0.15);
+                color: #9fb7ff;
                 cursor: pointer;
-                transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+                transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease, transform 0.25s ease;
+                box-shadow: inset 0 0 0 0 rgba(111, 137, 255, 0.25);
             }
             .ggsel-user-explorer-mode-toggle svg {
                 flex: 0 0 auto;
-            }
-            .ggsel-user-explorer-mode-toggle span {
-                display: inline-flex;
-                align-items: center;
-                text-transform: none;
+                width: 20px;
+                height: 20px;
+                transition: transform 0.25s ease;
             }
             .ggsel-user-explorer-mode-toggle:hover,
             .ggsel-user-explorer-mode-toggle:focus-visible {
-                border-color: #8ab4ff;
-                color: #8ab4ff;
                 outline: none;
+                transform: scale(1.05);
             }
-            .ggsel-user-explorer-mode-toggle[aria-pressed="true"] {
-                border-color: rgba(138, 180, 255, 0.75);
-                background: rgba(138, 180, 255, 0.12);
-                color: #8ab4ff;
+            .ggsel-user-explorer-mode-toggle.mode-users {
+                border-color: rgba(111, 137, 255, 0.45);
+                background: rgba(111, 137, 255, 0.2);
+                color: #9fb7ff;
+            }
+            .ggsel-user-explorer-mode-toggle.mode-users:hover,
+            .ggsel-user-explorer-mode-toggle.mode-users:focus-visible {
+                box-shadow: inset 0 0 0 1px rgba(111, 137, 255, 0.45);
+            }
+            .ggsel-user-explorer-mode-toggle.mode-orders {
+                border-color: rgba(255, 189, 122, 0.55);
+                background: rgba(255, 189, 122, 0.18);
+                color: #ffd49a;
+            }
+            .ggsel-user-explorer-mode-toggle.mode-orders:hover,
+            .ggsel-user-explorer-mode-toggle.mode-orders:focus-visible {
+                box-shadow: inset 0 0 0 1px rgba(255, 189, 122, 0.45);
+            }
+            .ggsel-user-explorer-mode-toggle.toggling svg {
+                animation: ggselModeSwap 0.3s ease;
+            }
+            @keyframes ggselModeSwap {
+                0% {
+                    transform: scale(0.85) rotate(-12deg);
+                }
+                50% {
+                    transform: scale(1.15) rotate(8deg);
+                }
+                100% {
+                    transform: scale(1) rotate(0deg);
+                }
             }
             .ggsel-user-explorer-search-input {
                 flex: 1 1 auto;
@@ -2270,16 +2298,25 @@
         const mode = state.mode || MODE_USERS;
         const label = mode === MODE_ORDERS ? 'Заказы' : 'Пользователи';
         const icon = mode === MODE_ORDERS ? ORDERS_MODE_ICON : USERS_MODE_ICON;
-        state.modeButton.innerHTML = `${icon}<span>${label}</span>`;
+        if (state.modeButton.dataset.mode !== mode) {
+            state.modeButton.classList.add('toggling');
+            setTimeout(() => {
+                state.modeButton?.classList.remove('toggling');
+            }, 260);
+        }
+        state.modeButton.innerHTML = icon;
         state.modeButton.setAttribute('aria-label', `Режим поиска: ${label}`);
         state.modeButton.setAttribute('aria-pressed', mode === MODE_ORDERS ? 'true' : 'false');
         state.modeButton.title = `Переключить режим поиска (${label})`;
         state.modeButton.dataset.mode = mode;
+        state.modeButton.classList.toggle('mode-orders', mode === MODE_ORDERS);
+        state.modeButton.classList.toggle('mode-users', mode !== MODE_ORDERS);
     };
 
     const setMode = (mode, { focusInput = false, force = false } = {}) => {
+        const previousMode = state.mode || MODE_USERS;
         const normalized = mode === MODE_ORDERS ? MODE_ORDERS : MODE_USERS;
-        const previousMode = state.mode;
+        const currentValue = state.input ? state.input.value || '' : (state.query || '');
         if (!force && normalized === previousMode) {
             updateModeButton();
             const config = getModeConfig(normalized);
@@ -2290,14 +2327,6 @@
                 state.input.placeholder = config.placeholder;
             }
             return;
-        }
-
-        if (state.input) {
-            try {
-                localStorage.setItem(getQueryStorageKey(previousMode), state.input.value || '');
-            } catch (error) {
-                console.warn('[GGSEL User Explorer] Не удалось сохранить запрос режима', error);
-            }
         }
 
         state.mode = normalized;
@@ -2317,10 +2346,15 @@
 
         updateModeButton();
 
-        const savedQuery = localStorage.getItem(getQueryStorageKey(normalized)) || '';
+        const savedQuery = typeof currentValue === 'string' ? currentValue : '';
         state.query = savedQuery.trim();
         if (state.input) {
             state.input.value = savedQuery;
+        }
+        try {
+            localStorage.setItem(getQueryStorageKey(), savedQuery || '');
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось сохранить общий запрос', error);
         }
 
         const { params, plan } = parseSearchInput(state.query, normalized);
@@ -3728,7 +3762,7 @@
         const { params, plan } = parseSearchInput(state.query, state.mode);
         state.params = params;
         state.searchPlan = plan;
-        localStorage.setItem(getQueryStorageKey(state.mode), state.query);
+        localStorage.setItem(getQueryStorageKey(), state.query);
         state.page = 1;
         state.hasMore = false;
         state.detailCache.clear();
@@ -3972,11 +4006,40 @@
         if (input) {
             input.placeholder = initialConfig.placeholder;
         }
+        let initialQuery = '';
+        try {
+            initialQuery = localStorage.getItem(getQueryStorageKey()) || '';
+            if (!initialQuery) {
+                const savedMode = localStorage.getItem(STORAGE_MODE_KEY);
+                const primaryLegacy = getLegacyQueryStorageKey(savedMode === MODE_ORDERS ? MODE_ORDERS : MODE_USERS);
+                initialQuery = localStorage.getItem(primaryLegacy) || '';
+                if (!initialQuery) {
+                    initialQuery = localStorage.getItem(getLegacyQueryStorageKey(MODE_ORDERS))
+                        || localStorage.getItem(getLegacyQueryStorageKey(MODE_USERS))
+                        || '';
+                }
+            }
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось загрузить сохранённый запрос', error);
+            initialQuery = '';
+        }
+        if (input) {
+            input.value = initialQuery;
+        }
+        state.query = initialQuery.trim();
+        try {
+            const { params, plan } = parseSearchInput(state.query, state.mode);
+            state.params = params;
+            state.searchPlan = plan;
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось разобрать стартовый запрос', error);
+            state.params = getDefaultParams(state.mode);
+            state.searchPlan = {
+                type: 'single',
+                queries: [{ key: 'default', params: { ...state.params }, highlight: null }]
+            };
+        }
         updateModeButton();
-        state.searchPlan = {
-            type: 'single',
-            queries: [{ key: 'default', params: { ...state.params }, highlight: null }]
-        };
         state.anchorPosition = loadPosition(ANCHOR_POSITION_KEY);
         state.anchorPositionManual = Boolean(state.anchorPosition);
         applyAnchorPosition();
