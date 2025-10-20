@@ -15,15 +15,25 @@
     const SETTINGS_KEY = 'ggsel-user-explorer:settings';
     const ANCHOR_POSITION_KEY = 'ggsel-user-explorer:anchor-position';
     const DEBOUNCE_MS = 600;
-    const FAB_SIZE = 60;
+    const FAB_SIZE = 56;
+    const VIEWPORT_MARGIN = 16;
     const BASE_URL = window.location.origin;
     const USERS_URL = `${BASE_URL}/admin/users`;
     const LOAD_MORE_LABEL = 'Загрузить ещё';
     const DETAIL_PREFETCH_CONCURRENCY = 3;
     const HINTS_HTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
     const HEADSET_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a5 5 0 0 0-5 5v1h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a6 6 0 1 1 12 0v6a2.5 2.5 0 0 1-2.5 2.5H9.366a1 1 0 0 1-.866.5h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 .866.5H11.5A1.5 1.5 0 0 0 13 12h-1a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1V6a5 5 0 0 0-5-5"/></svg>';
+    const DEFAULT_SHORTCUT = Object.freeze({
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+        code: 'KeyF'
+    });
+
     const DEFAULT_SETTINGS = Object.freeze({
-        extraActions: false
+        extraActions: false,
+        shortcut: DEFAULT_SHORTCUT
     });
     const EXCLUDED_ACTION_LABELS = new Set(['Назад к списку']);
     const OPTIONAL_ACTION_LABELS = new Set([
@@ -92,13 +102,18 @@
         lastToken: 0,
         detailCache: new Map(),
         searchPlan: null,
-        settings: { ...DEFAULT_SETTINGS },
+        settings: getDefaultSettings(),
         anchorPosition: null,
         anchorPositionManual: false,
+        anchorDragActive: false,
+        anchorDragMoved: false,
+        anchorDragFromButton: false,
+        suppressNextButtonClick: false,
         windows: {
             help: null,
             settings: null
         },
+        shortcutCapture: null,
         contextMenu: {
             element: null,
             visible: false,
@@ -121,6 +136,85 @@
     };
 
     const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
+
+    const cloneShortcut = (shortcut = DEFAULT_SHORTCUT) => ({
+        ctrl: Boolean(shortcut?.ctrl),
+        alt: Boolean(shortcut?.alt),
+        shift: Boolean(shortcut?.shift),
+        meta: Boolean(shortcut?.meta),
+        code: typeof shortcut?.code === 'string' && shortcut.code ? shortcut.code : DEFAULT_SHORTCUT.code
+    });
+
+    const isModifierCode = (code = '') => /^(?:Control|Shift|Alt|Meta)/i.test(code);
+
+    const normalizeShortcut = (value) => {
+        const base = cloneShortcut(DEFAULT_SHORTCUT);
+        if (!value || typeof value !== 'object') {
+            return base;
+        }
+        const normalized = cloneShortcut(value);
+        if (!normalized.code || isModifierCode(normalized.code)) {
+            normalized.code = DEFAULT_SHORTCUT.code;
+        }
+        if (!normalized.ctrl && !normalized.alt && !normalized.shift && !normalized.meta) {
+            normalized.ctrl = DEFAULT_SHORTCUT.ctrl;
+        }
+        return normalized;
+    };
+
+    const formatShortcut = (shortcut) => {
+        const normalized = normalizeShortcut(shortcut);
+        const parts = [];
+        if (normalized.ctrl) parts.push('Ctrl');
+        if (normalized.alt) parts.push('Alt');
+        if (normalized.shift) parts.push('Shift');
+        if (normalized.meta) parts.push('Meta');
+        let keyLabel = normalized.code || '';
+        if (keyLabel.startsWith('Key')) {
+            keyLabel = keyLabel.slice(3).toUpperCase();
+        } else if (keyLabel.startsWith('Digit')) {
+            keyLabel = keyLabel.slice(5);
+        } else if (keyLabel.startsWith('Numpad')) {
+            keyLabel = `Num ${keyLabel.slice(6)}`;
+        } else if (/^Arrow(Up|Down|Left|Right)$/.test(keyLabel)) {
+            keyLabel = keyLabel.replace('Arrow', '');
+        }
+        if (!keyLabel) {
+            keyLabel = 'KeyF';
+        }
+        parts.push(keyLabel);
+        return parts.join(' + ');
+    };
+
+    const shortcutsEqual = (a, b) => {
+        const first = normalizeShortcut(a);
+        const second = normalizeShortcut(b);
+        return first.ctrl === second.ctrl
+            && first.alt === second.alt
+            && first.shift === second.shift
+            && first.meta === second.meta
+            && first.code === second.code;
+    };
+
+    const isShortcutPressed = (event, shortcut) => {
+        if (!event || typeof event !== 'object') return false;
+        const normalized = normalizeShortcut(shortcut);
+        if (isModifierCode(event.code)) {
+            return false;
+        }
+        return (
+            Boolean(event.ctrlKey) === Boolean(normalized.ctrl)
+            && Boolean(event.altKey) === Boolean(normalized.alt)
+            && Boolean(event.shiftKey) === Boolean(normalized.shift)
+            && Boolean(event.metaKey) === Boolean(normalized.meta)
+            && event.code === normalized.code
+        );
+    };
+
+    const getDefaultSettings = () => ({
+        extraActions: false,
+        shortcut: cloneShortcut(DEFAULT_SHORTCUT)
+    });
 
     const formatBalanceValue = (rawValue) => {
         if (rawValue == null) return '';
@@ -181,8 +275,47 @@
         const height = FAB_SIZE;
         const maxLeft = Math.max(0, Math.round(viewportWidth - width));
         const maxTop = Math.max(0, Math.round(viewportHeight - height));
-        const left = Math.min(Math.max(Math.round(position.left), 0), maxLeft);
-        const top = Math.min(Math.max(Math.round(position.top), 0), maxTop);
+        const applyMargin = (value, size, viewport) => {
+            if (viewport <= size + VIEWPORT_MARGIN * 2) {
+                return Math.min(Math.max(value, 0), Math.max(0, viewport - size));
+            }
+            const min = VIEWPORT_MARGIN;
+            const max = Math.max(min, viewport - size - VIEWPORT_MARGIN);
+            if (max <= min) {
+                return Math.min(Math.max(value, 0), Math.max(0, viewport - size));
+            }
+            return Math.min(Math.max(value, min), max);
+        };
+
+        let left = Math.min(Math.max(Math.round(position.left), 0), maxLeft);
+        let top = Math.min(Math.max(Math.round(position.top), 0), maxTop);
+
+        left = applyMargin(left, width, viewportWidth);
+        top = applyMargin(top, height, viewportHeight);
+
+        if (state.open && state.panel) {
+            const panelHeightRaw = state.panel.scrollHeight || state.panel.offsetHeight || state.lastPanelHeight || height;
+            const panelHeight = Math.min(Math.max(panelHeightRaw, height), Math.round(viewportHeight * 0.9));
+            const orientationUp = state.anchor?.classList.contains('expand-up');
+            const bottomLimit = Math.max(VIEWPORT_MARGIN, viewportHeight - height - VIEWPORT_MARGIN);
+            if (orientationUp) {
+                const minTop = Math.min(
+                    Math.max(VIEWPORT_MARGIN + panelHeight - height, VIEWPORT_MARGIN),
+                    Math.max(0, viewportHeight - height)
+                );
+                top = Math.max(top, minTop);
+            } else {
+                const maxTopForPanel = Math.max(
+                    VIEWPORT_MARGIN,
+                    Math.min(viewportHeight - panelHeight - VIEWPORT_MARGIN, Math.max(0, viewportHeight - height))
+                );
+                top = Math.min(top, maxTopForPanel);
+            }
+            const minTop = Math.min(VIEWPORT_MARGIN, bottomLimit);
+            const maxTopPanel = Math.max(minTop, bottomLimit);
+            top = Math.min(Math.max(top, minTop), maxTopPanel);
+        }
+
         return { left, top };
     };
 
@@ -191,8 +324,8 @@
         if (!position) {
             state.anchor.style.left = 'auto';
             state.anchor.style.top = 'auto';
-            state.anchor.style.right = '24px';
-            state.anchor.style.bottom = '24px';
+            state.anchor.style.right = `${VIEWPORT_MARGIN}px`;
+            state.anchor.style.bottom = `${VIEWPORT_MARGIN}px`;
         } else {
             state.anchor.style.right = 'auto';
             state.anchor.style.bottom = 'auto';
@@ -204,7 +337,7 @@
     const getAnchorBasePosition = () => {
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        const margin = 24;
+        const margin = VIEWPORT_MARGIN;
         if (state.anchorPosition) {
             return { ...state.anchorPosition };
         }
@@ -224,7 +357,7 @@
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!viewportWidth || !viewportHeight) return;
-        const margin = 24;
+        const margin = VIEWPORT_MARGIN;
         const basePosition = getAnchorBasePosition();
         const panelHeight = state.panel ? state.panel.scrollHeight : 0;
         if (panelHeight) {
@@ -273,6 +406,8 @@
         if (!Number.isFinite(offsetY)) offsetY = height / 2;
         offsetX = Math.min(Math.max(Math.round(offsetX), 0), width);
         offsetY = Math.min(Math.max(Math.round(offsetY), 0), height);
+        state.anchorDragActive = true;
+        state.anchorDragMoved = false;
         state.anchor.classList.add('dragging');
         const onPointerMove = (moveEvent) => {
             if (moveEvent.pointerId !== event.pointerId) return;
@@ -284,6 +419,7 @@
             let nextTop = moveEvent.clientY - offsetY;
             nextLeft = Math.min(Math.max(Math.round(nextLeft), 0), maxLeft);
             nextTop = Math.min(Math.max(Math.round(nextTop), 0), maxTop);
+            state.anchorDragMoved = state.anchorDragMoved || (Math.abs(nextLeft - basePosition.left) > 1 || Math.abs(nextTop - basePosition.top) > 1);
             state.anchorPosition = { left: nextLeft, top: nextTop };
             state.anchorPositionManual = true;
             applyAnchorPosition();
@@ -291,12 +427,21 @@
         const finishDrag = (upEvent) => {
             if (upEvent.pointerId !== event.pointerId) return;
             state.anchor.classList.remove('dragging');
+            state.anchorDragActive = false;
             document.removeEventListener('pointermove', onPointerMove);
             document.removeEventListener('pointerup', finishDrag);
             document.removeEventListener('pointercancel', finishDrag);
             if (state.anchorPosition) {
                 savePosition(ANCHOR_POSITION_KEY, state.anchorPosition);
             }
+            if (state.anchorDragFromButton && (state.anchorDragMoved || event.ctrlKey || event.altKey)) {
+                state.suppressNextButtonClick = true;
+                setTimeout(() => {
+                    state.suppressNextButtonClick = false;
+                }, 120);
+            }
+            state.anchorDragFromButton = false;
+            state.anchorDragMoved = false;
         };
         document.addEventListener('pointermove', onPointerMove);
         document.addEventListener('pointerup', finishDrag);
@@ -307,6 +452,7 @@
 
     const startAnchorDrag = (event) => {
         if (!state.anchor || event.button !== 0 || !(event.ctrlKey && event.altKey) || state.open) return;
+        state.anchorDragFromButton = true;
         beginAnchorDrag(event);
     };
 
@@ -321,9 +467,22 @@
             }
             const rect = panel.getBoundingClientRect();
             const topZoneHeight = FAB_SIZE;
-            if (event.clientY - rect.top > topZoneHeight) {
+            const bottomZoneHeight = FAB_SIZE;
+            const pointerFromTop = event.clientY - rect.top;
+            const pointerFromBottom = rect.bottom - event.clientY;
+            const expandUp = state.anchor?.classList.contains('expand-up');
+            const expandDown = state.anchor?.classList.contains('expand-down');
+            let draggable = false;
+            if (expandUp && pointerFromBottom <= bottomZoneHeight) {
+                draggable = true;
+            }
+            if (!draggable && (!expandUp || expandDown) && pointerFromTop <= topZoneHeight) {
+                draggable = true;
+            }
+            if (!draggable) {
                 return;
             }
+            state.anchorDragFromButton = false;
             beginAnchorDrag(event);
         });
     };
@@ -396,27 +555,31 @@
     };
 
     const loadSettings = () => {
+        state.settings = getDefaultSettings();
         try {
             const raw = localStorage.getItem(SETTINGS_KEY);
             if (!raw) {
-                state.settings = { ...DEFAULT_SETTINGS };
                 return;
             }
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
-                state.settings = { ...DEFAULT_SETTINGS, ...parsed };
-            } else {
-                state.settings = { ...DEFAULT_SETTINGS };
+                state.settings = {
+                    extraActions: Boolean(parsed.extraActions),
+                    shortcut: normalizeShortcut(parsed.shortcut)
+                };
             }
         } catch (error) {
             console.warn('Не удалось загрузить настройки GGSEL User Explorer', error);
-            state.settings = { ...DEFAULT_SETTINGS };
+            state.settings = getDefaultSettings();
         }
     };
 
     const saveSettings = () => {
         try {
-            localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+                extraActions: Boolean(state.settings?.extraActions),
+                shortcut: normalizeShortcut(state.settings?.shortcut)
+            }));
         } catch (error) {
             console.warn('Не удалось сохранить настройки GGSEL User Explorer', error);
         }
@@ -481,6 +644,54 @@
             event.preventDefault();
         };
         handle.addEventListener('pointerdown', onPointerDown);
+    };
+
+    const refreshShortcutDisplay = () => {
+        const win = state.windows.settings;
+        if (!win || !win.controls) return;
+        const { shortcutDisplay, shortcutAssign } = win.controls;
+        const capturing = Boolean(state.shortcutCapture?.active);
+        if (shortcutDisplay) {
+            if (capturing && state.shortcutCapture.displayEl === shortcutDisplay) {
+                shortcutDisplay.textContent = 'Нажмите новое сочетание…';
+            } else {
+                shortcutDisplay.textContent = formatShortcut(state.settings.shortcut);
+            }
+            shortcutDisplay.classList.toggle('capturing', capturing);
+        }
+        if (shortcutAssign) {
+            shortcutAssign.disabled = capturing;
+        }
+    };
+
+    const stopShortcutCapture = () => {
+        if (!state.shortcutCapture) return;
+        const { displayEl, assignBtn } = state.shortcutCapture;
+        if (assignBtn) {
+            assignBtn.disabled = false;
+        }
+        if (displayEl) {
+            displayEl.classList.remove('capturing');
+        }
+        state.shortcutCapture = null;
+        refreshShortcutDisplay();
+    };
+
+    const beginShortcutCapture = ({ displayEl, assignBtn }) => {
+        stopShortcutCapture();
+        state.shortcutCapture = {
+            active: true,
+            displayEl: displayEl || null,
+            assignBtn: assignBtn || null,
+            windowKey: 'settings'
+        };
+        if (assignBtn) {
+            assignBtn.disabled = true;
+        }
+        if (displayEl) {
+            displayEl.classList.add('capturing');
+        }
+        refreshShortcutDisplay();
     };
 
     const ensureWindow = (type, title) => {
@@ -553,6 +764,9 @@
         if (!win || !win.element || win.element.hidden) {
             return;
         }
+        if (state.shortcutCapture?.windowKey === type) {
+            stopShortcutCapture();
+        }
         win.element.hidden = true;
     };
 
@@ -614,6 +828,62 @@
             label.appendChild(checkbox);
             label.appendChild(textWrap);
             options.appendChild(label);
+
+            const shortcutWrap = document.createElement('div');
+            shortcutWrap.className = 'ggsel-user-window__shortcut';
+
+            const shortcutInfo = document.createElement('div');
+            shortcutInfo.className = 'ggsel-user-window__shortcut-info';
+
+            const shortcutTitle = document.createElement('span');
+            shortcutTitle.className = 'ggsel-user-window__option-title';
+            shortcutTitle.textContent = 'Горячая клавиша поиска';
+
+            const shortcutDesc = document.createElement('span');
+            shortcutDesc.className = 'ggsel-user-window__option-desc';
+            shortcutDesc.textContent = 'Комбинация для открытия и фокусировки строки поиска (работает в любой раскладке).';
+
+            shortcutInfo.appendChild(shortcutTitle);
+            shortcutInfo.appendChild(shortcutDesc);
+
+            const shortcutControls = document.createElement('div');
+            shortcutControls.className = 'ggsel-user-window__shortcut-controls';
+
+            const shortcutDisplay = document.createElement('div');
+            shortcutDisplay.className = 'ggsel-user-window__shortcut-display';
+
+            const shortcutButtons = document.createElement('div');
+            shortcutButtons.className = 'ggsel-user-window__shortcut-buttons';
+
+            const assignBtn = document.createElement('button');
+            assignBtn.type = 'button';
+            assignBtn.className = 'ggsel-user-window__shortcut-button';
+            assignBtn.textContent = 'Изменить';
+            assignBtn.addEventListener('click', () => {
+                beginShortcutCapture({ displayEl: shortcutDisplay, assignBtn });
+            });
+
+            const resetBtn = document.createElement('button');
+            resetBtn.type = 'button';
+            resetBtn.className = 'ggsel-user-window__shortcut-button';
+            resetBtn.textContent = 'Сбросить';
+            resetBtn.addEventListener('click', () => {
+                stopShortcutCapture();
+                state.settings.shortcut = cloneShortcut(DEFAULT_SHORTCUT);
+                saveSettings();
+                refreshShortcutDisplay();
+            });
+
+            shortcutButtons.appendChild(assignBtn);
+            shortcutButtons.appendChild(resetBtn);
+
+            shortcutControls.appendChild(shortcutDisplay);
+            shortcutControls.appendChild(shortcutButtons);
+
+            shortcutWrap.appendChild(shortcutInfo);
+            shortcutWrap.appendChild(shortcutControls);
+
+            options.appendChild(shortcutWrap);
             win.content.appendChild(options);
 
             checkbox.addEventListener('change', () => {
@@ -623,12 +893,14 @@
             });
 
             win.initialized = true;
-            win.controls = { checkbox };
+            win.controls = { checkbox, shortcutDisplay, shortcutAssign: assignBtn, shortcutReset: resetBtn };
         }
 
         if (win.controls?.checkbox) {
             win.controls.checkbox.checked = Boolean(state.settings.extraActions);
         }
+
+        refreshShortcutDisplay();
 
         win.element.hidden = false;
         requestAnimationFrame(() => {
@@ -647,8 +919,8 @@
                 position: fixed;
                 z-index: 9999;
                 pointer-events: none;
-                width: var(--ggsel-user-explorer-fab, 60px);
-                height: var(--ggsel-user-explorer-fab, 60px);
+                width: var(--ggsel-user-explorer-fab, 56px);
+                height: var(--ggsel-user-explorer-fab, 56px);
             }
             .ggsel-user-explorer-anchor.dragging * {
                 cursor: grabbing !important;
@@ -715,7 +987,7 @@
                 height: auto;
             }
             .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-panel {
-                height: var(--ggsel-user-explorer-fab, 60px);
+                height: var(--ggsel-user-explorer-fab, 56px);
             }
             .ggsel-user-explorer-anchor.expand-right .ggsel-user-explorer-panel {
                 left: 0;
@@ -761,12 +1033,12 @@
                 align-items: center;
                 justify-content: flex-start;
                 order: 1;
-                min-height: var(--ggsel-user-explorer-fab, 60px);
+                min-height: var(--ggsel-user-explorer-fab, 56px);
             }
             .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-search-row {
                 padding: 0 18px;
                 width: 100%;
-                min-height: var(--ggsel-user-explorer-fab, 60px);
+                min-height: var(--ggsel-user-explorer-fab, 56px);
             }
             .ggsel-user-explorer-results-wrapper {
                 display: flex;
@@ -813,8 +1085,8 @@
                 color: #eaeaea;
                 font-size: 15px;
                 padding: 0 18px;
-                height: var(--ggsel-user-explorer-fab, 60px);
-                line-height: var(--ggsel-user-explorer-fab, 60px);
+                height: calc(var(--ggsel-user-explorer-fab, 56px) - 12px);
+                line-height: calc(var(--ggsel-user-explorer-fab, 56px) - 12px);
                 outline: none;
                 box-shadow: 0 0 0 0 rgba(111, 137, 255, 0);
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -934,6 +1206,68 @@
             .ggsel-user-window__option-desc {
                 font-size: 11px;
                 color: #a8a8a8;
+            }
+            .ggsel-user-window__shortcut {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin-top: 8px;
+                background: #121212;
+                border: 1px solid #2f2f2f;
+                border-radius: 10px;
+                padding: 10px 12px;
+            }
+            .ggsel-user-window__shortcut-info {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            .ggsel-user-window__shortcut-controls {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                flex-wrap: wrap;
+            }
+            .ggsel-user-window__shortcut-display {
+                font-size: 12px;
+                font-weight: 600;
+                color: #eaeaea;
+                padding: 6px 14px;
+                border-radius: 999px;
+                border: 1px solid #2f2f2f;
+                background: #181818;
+                min-width: 120px;
+                text-align: center;
+                letter-spacing: 0.35px;
+            }
+            .ggsel-user-window__shortcut-display.capturing {
+                color: #8ab4ff;
+                border-color: #8ab4ff;
+                background: rgba(138, 180, 255, 0.15);
+            }
+            .ggsel-user-window__shortcut-buttons {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+            .ggsel-user-window__shortcut-button {
+                border-radius: 10px;
+                border: 1px solid #3a3a3a;
+                background: #1d1d1d;
+                color: #eaeaea;
+                padding: 6px 12px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: border-color 0.2s ease, color 0.2s ease;
+            }
+            .ggsel-user-window__shortcut-button:hover {
+                border-color: #8ab4ff;
+                color: #8ab4ff;
+            }
+            .ggsel-user-window__shortcut-button:disabled {
+                opacity: 0.5;
+                cursor: default;
             }
             .ggsel-user-explorer-results::-webkit-scrollbar {
                 width: 6px;
@@ -2595,6 +2929,66 @@
         }
     };
 
+    const focusSearchInput = ({ selectAll = false } = {}) => {
+        if (!state.input) return;
+        const applyFocus = () => {
+            if (!state.input) return;
+            try {
+                state.input.focus({ preventScroll: true });
+            } catch (error) {
+                state.input.focus();
+            }
+            if (selectAll) {
+                try {
+                    state.input.select();
+                } catch (err) {
+                    /* noop */
+                }
+            }
+        };
+        closeContextMenu();
+        if (!state.open) {
+            openPanel();
+            requestAnimationFrame(() => {
+                requestAnimationFrame(applyFocus);
+            });
+        } else {
+            applyFocus();
+        }
+    };
+
+    const handleGlobalShortcut = (event) => {
+        if (!event) return;
+        if (state.shortcutCapture?.active) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.code === 'Escape') {
+                stopShortcutCapture();
+                return;
+            }
+            if (isModifierCode(event.code)) {
+                return;
+            }
+            const nextShortcut = normalizeShortcut({
+                ctrl: event.ctrlKey,
+                alt: event.altKey,
+                shift: event.shiftKey,
+                meta: event.metaKey,
+                code: event.code
+            });
+            state.settings.shortcut = nextShortcut;
+            saveSettings();
+            stopShortcutCapture();
+            return;
+        }
+        if (!isShortcutPressed(event, state.settings.shortcut)) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        focusSearchInput({ selectAll: true });
+    };
+
     const init = () => {
         injectStyles();
         loadSettings();
@@ -2611,7 +3005,14 @@
         button.className = 'ggsel-user-explorer-button';
         button.title = 'Открыть поиск пользователей';
         button.innerHTML = HEADSET_ICON;
-        button.addEventListener('click', togglePanel);
+        button.addEventListener('click', (event) => {
+            if (state.suppressNextButtonClick) {
+                state.suppressNextButtonClick = false;
+                event.preventDefault();
+                return;
+            }
+            togglePanel();
+        });
         button.addEventListener('pointerdown', startAnchorDrag);
 
         const panel = document.createElement('div');
@@ -2699,6 +3100,7 @@
         updateSearchControlValueState();
         updateResultsVisibility();
 
+        document.addEventListener('keydown', handleGlobalShortcut, true);
         document.addEventListener('pointerdown', (event) => {
             if (!state.open || !state.panel || !state.button || !state.anchor) return;
             if (state.anchor.contains(event.target)) return;
