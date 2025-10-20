@@ -76,7 +76,8 @@
             visible: false,
             userId: null,
             card: null,
-            lastPosition: null
+            lastPosition: null,
+            mode: null
         }
     };
 
@@ -122,7 +123,7 @@
                 border-radius: 50%;
                 background: radial-gradient(circle at 30% 30%, #2a2a2a 0%, #161616 70%);
                 border: 1px solid #343434;
-                color: #ffd166;
+                color: #8ab4ff;
                 box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
                 cursor: pointer;
                 display: flex;
@@ -134,7 +135,7 @@
             }
             .ggsel-user-explorer-button:hover {
                 transform: translateY(-2px);
-                border-color: #ffd166;
+                border-color: #8ab4ff;
                 box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
             }
             .ggsel-user-explorer-button:active {
@@ -163,7 +164,7 @@
             .ggsel-user-explorer-close {
                 border: 1px solid #333;
                 background: #1b1b1b;
-                color: #ffd166;
+                color: #8ab4ff;
                 width: 34px;
                 height: 34px;
                 border-radius: 12px;
@@ -178,7 +179,7 @@
                 transition: border-color 0.2s ease;
             }
             .ggsel-user-explorer-close:hover {
-                border-color: #ffd166;
+                border-color: #8ab4ff;
             }
             .ggsel-user-explorer-body {
                 padding: 20px 18px 18px 18px;
@@ -199,7 +200,7 @@
                 transition: border-color 0.2s ease;
             }
             .ggsel-user-explorer-input:focus {
-                border-color: #ffd166;
+                border-color: #8ab4ff;
             }
             .ggsel-user-explorer-hints {
                 font-size: 11px;
@@ -248,7 +249,7 @@
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
             .ggsel-user-card:hover {
-                border-color: #ffd166;
+                border-color: #8ab4ff;
                 box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
             }
             .ggsel-user-card-header {
@@ -267,7 +268,7 @@
             .ggsel-user-card-name {
                 font-size: 13px;
                 font-weight: 600;
-                color: #ffd166;
+                color: #8ab4ff;
             }
             .ggsel-user-card-line {
                 font-size: 11px;
@@ -284,7 +285,7 @@
             .ggsel-user-card-toggle {
                 border: 1px solid #444;
                 background: #1e1e1e;
-                color: #ffd166;
+                color: #8ab4ff;
                 border-radius: 999px;
                 width: 32px;
                 height: 32px;
@@ -297,7 +298,7 @@
                 transition: border-color 0.2s ease;
             }
             .ggsel-user-card-toggle:hover {
-                border-color: #ffd166;
+                border-color: #8ab4ff;
             }
             .ggsel-user-card-body {
                 display: none;
@@ -328,8 +329,8 @@
                 transition: border-color 0.2s ease, color 0.2s ease;
             }
             .ggsel-user-action:hover {
-                border-color: #ffd166;
-                color: #ffd166;
+                border-color: #8ab4ff;
+                color: #8ab4ff;
             }
             .ggsel-user-detail-list {
                 display: grid;
@@ -365,7 +366,7 @@
                 width: 8px;
                 height: 8px;
                 border-radius: 50%;
-                background: #ffd166;
+                background: #8ab4ff;
                 opacity: 0.7;
                 animation: ggsel-bounce 1.2s infinite ease-in-out;
             }
@@ -392,8 +393,8 @@
                 transition: border-color 0.2s ease, color 0.2s ease;
             }
             .ggsel-user-load-more:hover {
-                border-color: #ffd166;
-                color: #ffd166;
+                border-color: #8ab4ff;
+                color: #8ab4ff;
             }
             .ggsel-user-load-more[disabled] {
                 opacity: 0.6;
@@ -443,8 +444,8 @@
             }
             .ggsel-user-context-menu__item:hover,
             .ggsel-user-context-menu__item:focus-visible {
-                background: rgba(255, 209, 102, 0.15);
-                color: #ffd166;
+                background: rgba(138, 180, 255, 0.15);
+                color: #8ab4ff;
                 outline: none;
             }
             .ggsel-user-context-menu__item[disabled] {
@@ -956,6 +957,7 @@
                 loading: cached && cached.status === 'pending'
             };
             renderContextMenu({
+                mode: 'user',
                 user: userData,
                 payload,
                 position,
@@ -978,6 +980,7 @@
         state.contextMenu.userId = null;
         state.contextMenu.card = null;
         state.contextMenu.lastPosition = null;
+        state.contextMenu.mode = null;
     }
 
     function executeRemoteAction(action) {
@@ -1025,65 +1028,96 @@
         }
     }
 
-    function buildContextMenuItems(user, payload, card) {
+    function buildContextMenuItems({ mode = 'user', user, payload, card }) {
         const items = [];
-        const loading = payload?.loading;
-        const details = payload?.details;
-
-        items.push({
-            type: 'action',
-            label: card && card.classList.contains('open') ? 'Скрыть подробности' : 'Показать подробности',
-            handler: () => {
-                if (card && typeof card.toggleCard === 'function') {
-                    card.toggleCard();
+        if (mode === 'panel') {
+            items.push({
+                type: 'action',
+                label: 'Очистить поиск',
+                handler: () => {
+                    state.input.value = '';
+                    onQueryChange('');
+                    onQueryChange.flush?.();
                 }
-            }
-        });
-
-        items.push({
-            type: 'action',
-            label: 'Открыть профиль в новой вкладке',
-            handler: () => {
-                window.open(user.profileUrl, '_blank');
-            }
-        });
-
-        items.push({ type: 'separator' });
-
-        items.push({
-            type: 'action',
-            label: 'Скопировать ID',
-            handler: () => copyToClipboard(user.id)
-        });
-
-        if (user.username) {
-            items.push({
-                type: 'action',
-                label: 'Скопировать username',
-                handler: () => copyToClipboard(user.username)
             });
-        }
 
-        if (user.email) {
-            items.push({
-                type: 'action',
-                label: 'Скопировать email',
-                handler: () => copyToClipboard(user.email)
-            });
-        }
-
-        if (loading) {
-            items.push({ type: 'separator' });
-            items.push({ type: 'info', label: 'Загружаем дополнительные действия…' });
-        } else if (details && details.actions && details.actions.length) {
-            items.push({ type: 'separator' });
-            details.actions.forEach((action) => {
+            if (state.query) {
+                items.push({ type: 'separator' });
                 items.push({
-                    type: 'remote',
-                    label: action.text,
-                    action
+                    type: 'action',
+                    label: 'Перезагрузить результаты',
+                    handler: () => {
+                        onQueryChange.flush?.();
+                        performSearch({ append: false });
+                    }
                 });
+            }
+
+            items.push({ type: 'separator' });
+            items.push({
+                type: 'action',
+                label: 'Скрыть панель',
+                handler: () => closePanel()
             });
+        } else if (mode === 'user' && user) {
+            const loading = payload?.loading;
+            const details = payload?.details;
+
+            items.push({
+                type: 'action',
+                label: card && card.classList.contains('open') ? 'Скрыть подробности' : 'Показать подробности',
+                handler: () => {
+                    if (card && typeof card.toggleCard === 'function') {
+                        card.toggleCard();
+                    }
+                }
+            });
+
+            items.push({
+                type: 'action',
+                label: 'Открыть профиль в новой вкладке',
+                handler: () => {
+                    window.open(user.profileUrl, '_blank');
+                }
+            });
+
+            items.push({ type: 'separator' });
+
+            items.push({
+                type: 'action',
+                label: 'Скопировать ID',
+                handler: () => copyToClipboard(user.id)
+            });
+
+            if (user.username) {
+                items.push({
+                    type: 'action',
+                    label: 'Скопировать username',
+                    handler: () => copyToClipboard(user.username)
+                });
+            }
+
+            if (user.email) {
+                items.push({
+                    type: 'action',
+                    label: 'Скопировать email',
+                    handler: () => copyToClipboard(user.email)
+                });
+            }
+
+            if (loading) {
+                items.push({ type: 'separator' });
+                items.push({ type: 'info', label: 'Загружаем дополнительные действия…' });
+            } else if (details && details.actions && details.actions.length) {
+                items.push({ type: 'separator' });
+                details.actions.forEach((action) => {
+                    items.push({
+                        type: 'remote',
+                        label: action.text,
+                        action
+                    });
+                });
+            }
         }
 
         // remove duplicate separators
@@ -1096,11 +1130,11 @@
         });
     }
 
-    function renderContextMenu({ user, payload, position, card, keepOpen = false }) {
+    function renderContextMenu({ mode = 'user', user, payload, position, card, keepOpen = false }) {
         const menu = ensureContextMenuElement();
         menu.innerHTML = '';
 
-        const items = buildContextMenuItems(user, payload, card);
+        const items = buildContextMenuItems({ mode, user, payload, card });
         if (!items.length) {
             const emptyButton = document.createElement('button');
             emptyButton.type = 'button';
@@ -1143,8 +1177,9 @@
 
         const rawPosition = position || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
         state.contextMenu.visible = true;
-        state.contextMenu.userId = user.id;
-        state.contextMenu.card = card || null;
+        state.contextMenu.mode = mode;
+        state.contextMenu.userId = mode === 'user' && user ? user.id : null;
+        state.contextMenu.card = mode === 'user' ? (card || null) : null;
         state.contextMenu.lastPosition = { x: rawPosition.x, y: rawPosition.y };
 
         menu.classList.add('open');
@@ -1180,11 +1215,12 @@
     }
 
     function updateContextMenuForUser(user, details) {
-        if (!state.contextMenu.visible || state.contextMenu.userId !== user.id) {
+        if (!state.contextMenu.visible || state.contextMenu.mode !== 'user' || state.contextMenu.userId !== user.id) {
             return;
         }
         const position = state.contextMenu.lastPosition || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
         renderContextMenu({
+            mode: 'user',
             user,
             payload: { details, loading: false },
             position,
@@ -1195,12 +1231,14 @@
 
     function openContextMenu(event, user, card) {
         event.preventDefault();
+        event.stopPropagation();
         const cached = state.detailCache.get(user.id);
         const payload = {
             details: cached && cached.status === 'ready' ? cached.data : null,
             loading: !cached || cached.status === 'pending'
         };
         renderContextMenu({
+            mode: 'user',
             user,
             payload,
             position: { x: event.clientX, y: event.clientY },
@@ -1209,6 +1247,29 @@
         if (!cached || cached.status !== 'ready') {
             ensureUserDetails(user).catch(() => {});
         }
+    }
+
+    function openPanelContextMenu(event) {
+        const card = event.target instanceof Element ? event.target.closest('.ggsel-user-card') : null;
+        if (card && card.__userData) {
+            openContextMenu(event, card.__userData, card);
+            return;
+        }
+        const editable = event.target instanceof Element ? event.target.closest('input, textarea, [contenteditable="true"]') : null;
+        if (editable) {
+            return;
+        }
+        if (!state.panel || !state.panel.contains(event.target)) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        renderContextMenu({
+            mode: 'panel',
+            position: { x: event.clientX, y: event.clientY },
+            card: null,
+            payload: null
+        });
     }
 
     const updateResults = (items, append = false) => {
@@ -1444,6 +1505,8 @@
         state.summary = summary;
         state.resultsContainer = resultsContainer;
         state.loadMoreButton = loadMoreButton;
+
+        panel.addEventListener('contextmenu', openPanelContextMenu);
 
         restoreState();
     };
