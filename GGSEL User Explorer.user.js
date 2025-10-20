@@ -29,6 +29,7 @@
         'Редактирование',
         'Заблокировать'
     ]);
+    const DETAIL_HIDDEN_LABELS = new Set(['Имя пользователя']);
     const FIELD_ALIASES = {
         id: 'search[id]',
         user: 'search[username_like]',
@@ -36,6 +37,8 @@
         name: 'search[username_like]',
         email: 'search[email_like]',
         mail: 'search[email_like]',
+        digi: 'search[ggsel_id_seller]',
+        digi_id: 'search[ggsel_id_seller]',
         ggsel: 'search[ggsel_id_seller]',
         seller: 'search[ggsel_id_seller]',
         ggsel_id: 'search[ggsel_id_seller]',
@@ -371,7 +374,7 @@
                 position: fixed;
                 bottom: 96px;
                 right: 24px;
-                width: min(640px, calc(100vw - 48px));
+                width: min(500px, calc(100vw - 48px));
                 max-height: min(80vh, 720px);
                 background: rgba(16, 16, 16, 0.92);
                 border: 1px solid #2f2f2f;
@@ -555,27 +558,9 @@
                 position: relative;
                 display: flex;
                 align-items: flex-start;
-                padding: 16px 48px 14px 18px;
+                padding: 16px 32px 14px 18px;
                 cursor: pointer;
                 gap: 12px;
-            }
-            .ggsel-user-card-header::after {
-                content: '\\25BC';
-                position: absolute;
-                top: 20px;
-                right: 18px;
-                font-size: 12px;
-                color: #8ab4ff;
-                opacity: 0.8;
-                transition: transform 0.2s ease, color 0.2s ease, opacity 0.2s ease;
-            }
-            .ggsel-user-card:hover .ggsel-user-card-header::after,
-            .ggsel-user-card.open .ggsel-user-card-header::after {
-                color: #9fc0ff;
-                opacity: 1;
-            }
-            .ggsel-user-card.open .ggsel-user-card-header::after {
-                transform: rotate(180deg);
             }
             .ggsel-user-card-meta {
                 display: flex;
@@ -602,18 +587,14 @@
                 letter-spacing: 0.2px;
             }
             .ggsel-user-card-id {
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
-                padding: 3px 10px;
-                border-radius: 999px;
-                border: 1px solid rgba(138, 180, 255, 0.45);
-                background: rgba(138, 180, 255, 0.18);
-                color: #bcd3ff;
+                color: #9fb7ff;
             }
             .ggsel-user-card-locale {
                 position: absolute;
-                top: 18px;
-                right: 44px;
+                top: 16px;
+                right: 18px;
                 font-size: 12px;
                 font-weight: 600;
                 padding: 2px 9px;
@@ -655,25 +636,29 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
+                align-items: stretch;
             }
             .ggsel-user-card-field {
                 display: inline-flex;
                 align-items: center;
                 gap: 6px;
-                padding: 5px 12px;
+                padding: 6px 12px;
                 border-radius: 12px;
                 border: 1px solid #2a2a2a;
                 background: #181818;
+                flex: 1 1 220px;
+                min-width: min(220px, 100%);
+                max-width: 100%;
                 flex-wrap: wrap;
             }
             .ggsel-user-card-field-label {
-                font-size: 11px;
+                font-size: 11.5px;
                 letter-spacing: 0.35px;
                 text-transform: uppercase;
                 color: #8d96b8;
             }
             .ggsel-user-card-field-value {
-                font-size: 12.5px;
+                font-size: 13px;
                 font-weight: 600;
                 color: #f3f5ff;
                 word-break: break-word;
@@ -1122,6 +1107,7 @@
         const title = collapseSpaces(box.querySelector('.box-header .box-title')?.textContent || '');
         const dl = box.querySelector('.box-body dl.dl-horizontal');
         const entries = [];
+        let userIdFromDetails = '';
         if (dl) {
             for (let node = dl.firstElementChild; node; node = node.nextElementSibling) {
                 if (node.tagName === 'DT') {
@@ -1131,6 +1117,10 @@
                         valueNode = valueNode.nextElementSibling;
                     }
                     const valueHtml = valueNode ? valueNode.innerHTML.trim() : '';
+                    const valueText = collapseSpaces(valueNode ? valueNode.textContent : '');
+                    if (!userIdFromDetails && label.toLowerCase() === 'id' && valueText) {
+                        userIdFromDetails = valueText;
+                    }
                     entries.push({ label, valueHtml });
                 }
             }
@@ -1163,17 +1153,26 @@
                 });
             }
         }
-        return { title, entries, actions };
+        return { title, entries, actions, userId: userIdFromDetails };
     };
 
     function renderUserDetails(container, details) {
         container.innerHTML = '';
         const title = document.createElement('div');
         title.className = 'ggsel-user-detail-title';
-        title.textContent = details?.title || 'Профиль пользователя';
+        if (details?.userId) {
+            title.textContent = `Карточка пользователя #${details.userId}`;
+        } else {
+            title.textContent = 'Карточка пользователя';
+        }
         container.appendChild(title);
 
-        const entries = (details?.entries || []).filter(({ valueHtml }) => hasMeaningfulHtmlValue(valueHtml));
+        const entries = (details?.entries || []).filter(({ label, valueHtml }) => {
+            if (DETAIL_HIDDEN_LABELS.has(label)) {
+                return false;
+            }
+            return hasMeaningfulHtmlValue(valueHtml);
+        });
 
         if (entries.length) {
             const grid = document.createElement('div');
