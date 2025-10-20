@@ -116,7 +116,8 @@
         loadMoreButton: null,
         searchControl: null,
         searchRow: null,
-        resultsWrapper: null
+        resultsWrapper: null,
+        lastPanelHeight: FAB_SIZE
     };
 
     const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
@@ -213,6 +214,11 @@
         };
     };
 
+    const getCurrentInputValue = () => {
+        if (!state.input) return '';
+        return state.input.value ? state.input.value.trim() : '';
+    };
+
     const updateAnchorOrientation = () => {
         if (!state.anchor) return;
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
@@ -221,10 +227,13 @@
         const margin = 24;
         const basePosition = getAnchorBasePosition();
         const panelHeight = state.panel ? state.panel.scrollHeight : 0;
+        if (panelHeight) {
+            state.lastPanelHeight = Math.max(FAB_SIZE, panelHeight);
+        }
         const expandLeft = basePosition.left + FAB_SIZE / 2 > viewportWidth / 2;
         const availableBelow = viewportHeight - (basePosition.top + FAB_SIZE) - margin;
         const availableAbove = basePosition.top - margin;
-        const estimatedHeightClosed = panelHeight || 360;
+        const estimatedHeightClosed = panelHeight || state.lastPanelHeight || FAB_SIZE;
         let expandUp = false;
         if (state.open) {
             const estimatedHeight = panelHeight || estimatedHeightClosed;
@@ -703,6 +712,10 @@
                 transform: scale(0.6);
                 transform-origin: var(--ggsel-panel-origin-x, left) var(--ggsel-panel-origin-y, top);
                 transition: transform 0.24s ease, opacity 0.2s ease, visibility 0.2s ease;
+                height: auto;
+            }
+            .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-panel {
+                height: var(--ggsel-user-explorer-fab, 60px);
             }
             .ggsel-user-explorer-anchor.expand-right .ggsel-user-explorer-panel {
                 left: 0;
@@ -738,11 +751,21 @@
                 flex: 1 1 auto;
                 min-height: 0;
             }
+            .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-body {
+                padding: 0;
+                gap: 0;
+                justify-content: center;
+            }
             .ggsel-user-explorer-search-row {
                 display: flex;
                 align-items: center;
                 justify-content: flex-start;
                 order: 1;
+                min-height: var(--ggsel-user-explorer-fab, 60px);
+            }
+            .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-search-row {
+                padding: 0 18px;
+                width: 100%;
                 min-height: var(--ggsel-user-explorer-fab, 60px);
             }
             .ggsel-user-explorer-results-wrapper {
@@ -2310,7 +2333,12 @@
         if (!state.resultsWrapper) return;
         const hasContent = Boolean(state.resultsContainer && state.resultsContainer.childElementCount > 0);
         const hasLoadMore = Boolean(state.loadMoreButton && !state.loadMoreButton.hidden);
-        state.resultsWrapper.hidden = !(hasContent || hasLoadMore);
+        const showWrapper = hasContent || hasLoadMore;
+        state.resultsWrapper.hidden = !showWrapper;
+        if (state.anchor) {
+            const shouldFlatten = !showWrapper && !state.loading;
+            state.anchor.classList.toggle('no-results', shouldFlatten);
+        }
         requestAnimationFrame(() => updateAnchorOrientation());
     };
 
@@ -2333,6 +2361,7 @@
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
             state.hasMore = false;
+            state.loading = false;
             updateResultsVisibility();
             return;
         }
@@ -2668,19 +2697,20 @@
         applyAnchorPosition();
 
         updateSearchControlValueState();
+        updateResultsVisibility();
 
         document.addEventListener('pointerdown', (event) => {
             if (!state.open || !state.panel || !state.button || !state.anchor) return;
             if (state.anchor.contains(event.target)) return;
-            if (state.query) return;
+            if (getCurrentInputValue()) return;
             closePanel();
         });
 
         panel.addEventListener('focusout', () => {
             if (!state.open) return;
-            if (state.query) return;
+            if (getCurrentInputValue()) return;
             setTimeout(() => {
-                if (!state.query && state.panel && !state.panel.contains(document.activeElement)) {
+                if (!getCurrentInputValue() && state.panel && !state.panel.contains(document.activeElement)) {
                     closePanel();
                 }
             }, 0);
@@ -2688,19 +2718,40 @@
 
         panel.addEventListener('wheel', (event) => {
             event.stopPropagation();
-            const target = event.target instanceof Element ? event.target.closest('.ggsel-user-explorer-results, .ggsel-user-card-body, .ggsel-user-window__content') : null;
-            if (!target) {
+            if (!(event.target instanceof Element)) {
                 event.preventDefault();
                 return;
             }
-            const { scrollTop, scrollHeight, clientHeight } = target;
+            let scrollTarget = event.target.closest('.ggsel-user-explorer-results, .ggsel-user-card-body, .ggsel-user-window__content');
+            if (scrollTarget && scrollTarget.classList.contains('ggsel-user-card-body') && scrollTarget.scrollHeight <= scrollTarget.clientHeight) {
+                const parentResults = scrollTarget.closest('.ggsel-user-explorer-results');
+                if (parentResults) {
+                    scrollTarget = parentResults;
+                }
+            }
+            if (!scrollTarget && state.resultsContainer) {
+                scrollTarget = state.resultsContainer;
+            }
+            if (!scrollTarget) {
+                event.preventDefault();
+                return;
+            }
+            const { scrollTop, scrollHeight, clientHeight } = scrollTarget;
             if (scrollHeight <= clientHeight) {
                 event.preventDefault();
                 return;
             }
             const delta = event.deltaY;
-            if ((delta < 0 && scrollTop <= 0) || (delta > 0 && scrollTop + clientHeight >= scrollHeight - 1)) {
+            const atTop = scrollTop <= 0;
+            const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+            if ((delta < 0 && atTop) || (delta > 0 && atBottom)) {
                 event.preventDefault();
+                if (delta < 0 && atTop) {
+                    scrollTarget.scrollTop = 0;
+                }
+                if (delta > 0 && atBottom) {
+                    scrollTarget.scrollTop = scrollHeight - clientHeight;
+                }
             }
         }, { passive: false });
 
