@@ -15,6 +15,7 @@
     const SETTINGS_KEY = 'ggsel-user-explorer:settings';
     const ANCHOR_POSITION_KEY = 'ggsel-user-explorer:anchor-position';
     const DEBOUNCE_MS = 600;
+    const FAB_SIZE = 60;
     const BASE_URL = window.location.origin;
     const USERS_URL = `${BASE_URL}/admin/users`;
     const LOAD_MORE_LABEL = 'Загрузить ещё';
@@ -106,6 +107,13 @@
             lastPosition: null,
             mode: null
         },
+        anchor: null,
+        shell: null,
+        button: null,
+        panel: null,
+        input: null,
+        resultsContainer: null,
+        loadMoreButton: null,
         searchControl: null,
         searchRow: null,
         resultsWrapper: null
@@ -164,41 +172,67 @@
         }
     };
 
-    const clampPositionToViewport = (position, element) => {
-        if (!position || !element) return position;
-        const rect = element.getBoundingClientRect();
+    const clampPositionToViewport = (position) => {
+        if (!position) return position;
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        const maxLeft = Math.max(0, Math.round(viewportWidth - rect.width));
-        const maxTop = Math.max(0, Math.round(viewportHeight - rect.height));
+        const width = FAB_SIZE;
+        const height = FAB_SIZE;
+        const maxLeft = Math.max(0, Math.round(viewportWidth - width));
+        const maxTop = Math.max(0, Math.round(viewportHeight - height));
         const left = Math.min(Math.max(Math.round(position.left), 0), maxLeft);
         const top = Math.min(Math.max(Math.round(position.top), 0), maxTop);
         return { left, top };
     };
 
-    const updateAnchorOrientation = () => {
+    const applyAnchorPositionStyles = (position) => {
         if (!state.anchor) return;
-        const rect = state.anchor.getBoundingClientRect();
+        if (!position) {
+            state.anchor.style.left = 'auto';
+            state.anchor.style.top = 'auto';
+            state.anchor.style.right = '24px';
+            state.anchor.style.bottom = '24px';
+        } else {
+            state.anchor.style.right = 'auto';
+            state.anchor.style.bottom = 'auto';
+            state.anchor.style.left = `${position.left}px`;
+            state.anchor.style.top = `${position.top}px`;
+        }
+    };
+
+    const getAnchorBasePosition = () => {
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
         const margin = 24;
-        const panelHeight = state.panel && !state.panel.hidden ? state.panel.offsetHeight : (state.panel ? state.panel.scrollHeight : 0);
-        const buttonHeight = state.button ? state.button.offsetHeight : 0;
-        const expandLeft = rect.left + rect.width / 2 > viewportWidth / 2;
-        const availableBelow = viewportHeight - rect.top - margin;
-        const availableAbove = rect.top - margin;
+        if (state.anchorPosition) {
+            return { ...state.anchorPosition };
+        }
+        return {
+            left: Math.max(0, viewportWidth - FAB_SIZE - margin),
+            top: Math.max(0, viewportHeight - FAB_SIZE - margin)
+        };
+    };
+
+    const updateAnchorOrientation = () => {
+        if (!state.anchor) return;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!viewportWidth || !viewportHeight) return;
+        const margin = 24;
+        const basePosition = getAnchorBasePosition();
+        const panelHeight = state.panel ? state.panel.scrollHeight : 0;
+        const expandLeft = basePosition.left + FAB_SIZE / 2 > viewportWidth / 2;
+        const availableBelow = viewportHeight - (basePosition.top + FAB_SIZE) - margin;
+        const availableAbove = basePosition.top - margin;
         const estimatedHeightClosed = panelHeight || 360;
         let expandUp = false;
         if (state.open) {
-            const estimatedHeight = panelHeight || rect.height || estimatedHeightClosed;
+            const estimatedHeight = panelHeight || estimatedHeightClosed;
             if (availableBelow < Math.min(estimatedHeight, viewportHeight * 0.7) && availableAbove > availableBelow) {
                 expandUp = true;
             }
-        } else {
-            const availableBelowClosed = viewportHeight - (rect.top + buttonHeight) - margin;
-            if (estimatedHeightClosed > availableBelowClosed && availableAbove > availableBelowClosed) {
-                expandUp = true;
-            }
+        } else if (estimatedHeightClosed > availableBelow && availableAbove > availableBelow) {
+            expandUp = true;
         }
         state.anchor.classList.toggle('expand-left', expandLeft);
         state.anchor.classList.toggle('expand-right', !expandLeft);
@@ -209,29 +243,27 @@
     const applyAnchorPosition = () => {
         if (!state.anchor) return;
         if (!state.anchorPosition) {
-            state.anchor.style.left = '';
-            state.anchor.style.top = '';
-            state.anchor.style.right = '24px';
-            state.anchor.style.bottom = '24px';
+            applyAnchorPositionStyles(null);
             updateAnchorOrientation();
             return;
         }
-        const normalized = clampPositionToViewport(state.anchorPosition, state.anchor);
+        const normalized = clampPositionToViewport(state.anchorPosition);
         state.anchorPosition = normalized;
-        state.anchor.style.right = 'auto';
-        state.anchor.style.bottom = 'auto';
-        state.anchor.style.left = `${normalized.left}px`;
-        state.anchor.style.top = `${normalized.top}px`;
+        applyAnchorPositionStyles(normalized);
         updateAnchorOrientation();
     };
 
     const beginAnchorDrag = (event) => {
         if (!state.anchor) return false;
-        const rect = state.anchor.getBoundingClientRect();
-        const offsetX = event.clientX - rect.left;
-        const offsetY = event.clientY - rect.top;
-        const width = rect.width;
-        const height = rect.height;
+        const basePosition = getAnchorBasePosition();
+        let offsetX = event.clientX - basePosition.left;
+        let offsetY = event.clientY - basePosition.top;
+        const width = FAB_SIZE;
+        const height = FAB_SIZE;
+        if (!Number.isFinite(offsetX)) offsetX = width / 2;
+        if (!Number.isFinite(offsetY)) offsetY = height / 2;
+        offsetX = Math.min(Math.max(Math.round(offsetX), 0), width);
+        offsetY = Math.min(Math.max(Math.round(offsetY), 0), height);
         state.anchor.classList.add('dragging');
         const onPointerMove = (moveEvent) => {
             if (moveEvent.pointerId !== event.pointerId) return;
@@ -265,7 +297,7 @@
     };
 
     const startAnchorDrag = (event) => {
-        if (!state.anchor || event.button !== 0 || !(event.ctrlKey && event.altKey)) return;
+        if (!state.anchor || event.button !== 0 || !(event.ctrlKey && event.altKey) || state.open) return;
         beginAnchorDrag(event);
     };
 
@@ -279,7 +311,7 @@
                 return;
             }
             const rect = panel.getBoundingClientRect();
-            const topZoneHeight = 48;
+            const topZoneHeight = FAB_SIZE;
             if (event.clientY - rect.top > topZoneHeight) {
                 return;
             }
@@ -606,111 +638,112 @@
                 position: fixed;
                 z-index: 9999;
                 pointer-events: none;
-                display: flex;
-                flex-direction: column;
-                align-items: flex-start;
-                justify-content: flex-start;
-                gap: 0;
-            }
-            .ggsel-user-explorer-anchor > * {
-                pointer-events: auto;
-            }
-            .ggsel-user-explorer-anchor.collapsed .ggsel-user-explorer-panel {
-                display: none;
-            }
-            .ggsel-user-explorer-anchor.collapsed .ggsel-user-explorer-button {
-                display: inline-flex;
-            }
-            .ggsel-user-explorer-anchor.expanded .ggsel-user-explorer-panel {
-                display: flex;
-            }
-            .ggsel-user-explorer-anchor.expanded .ggsel-user-explorer-button {
-                display: none;
-            }
-            .ggsel-user-explorer-anchor.expand-left {
-                align-items: flex-end;
-            }
-            .ggsel-user-explorer-anchor.expand-right {
-                align-items: flex-start;
-            }
-            .ggsel-user-explorer-anchor.expand-up {
-                justify-content: flex-end;
-            }
-            .ggsel-user-explorer-anchor.expand-down {
-                justify-content: flex-start;
-            }
-            .ggsel-user-explorer-anchor.dragging {
-                pointer-events: none;
+                width: var(--ggsel-user-explorer-fab, 60px);
+                height: var(--ggsel-user-explorer-fab, 60px);
             }
             .ggsel-user-explorer-anchor.dragging * {
                 cursor: grabbing !important;
             }
-            .ggsel-user-explorer-button {
+            .ggsel-user-explorer-shell {
                 position: relative;
-                width: 60px;
-                height: 60px;
+                width: 100%;
+                height: 100%;
+                pointer-events: auto;
+                overflow: visible;
+            }
+            .ggsel-user-explorer-button {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
                 border-radius: 18px;
-                background: radial-gradient(circle at 30% 30%, #2a2a2a 0%, #161616 70%);
-                border: 1px solid #3a3d4a;
+                background: rgba(16, 16, 16, 0.92);
+                border: 1px solid #2f2f2f;
                 color: #8ab4ff;
                 box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
                 cursor: pointer;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-                touch-action: none;
+                transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+                touch-action: manipulation;
             }
             .ggsel-user-explorer-button svg {
                 width: 28px;
                 height: 28px;
             }
             .ggsel-user-explorer-button:hover {
-                transform: translateY(-2px);
                 border-color: #8ab4ff;
                 box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
             }
             .ggsel-user-explorer-button:active {
                 transform: scale(0.95);
             }
-            .ggsel-user-explorer-button.dragging {
-                cursor: grabbing;
-            }
-            .ggsel-user-explorer-button.ggsel-user-explorer-button--hidden {
+            .ggsel-user-explorer-anchor.expanded .ggsel-user-explorer-button {
                 opacity: 0;
+                transform: scale(0.7);
                 pointer-events: none;
-                transform: scale(0.85);
             }
             .ggsel-user-explorer-panel {
-                position: relative;
+                position: absolute;
                 width: min(500px, calc(100vw - 48px));
                 max-height: min(80vh, 720px);
                 background: rgba(16, 16, 16, 0.92);
                 border: 1px solid #2f2f2f;
                 border-radius: 14px;
                 color: #eaeaea;
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+                box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
                 display: flex;
                 flex-direction: column;
                 overflow: hidden;
                 backdrop-filter: blur(6px);
-                touch-action: none;
+                opacity: 0;
+                visibility: hidden;
+                pointer-events: none;
+                transform: scale(0.6);
+                transform-origin: var(--ggsel-panel-origin-x, left) var(--ggsel-panel-origin-y, top);
+                transition: transform 0.24s ease, opacity 0.2s ease, visibility 0.2s ease;
             }
-            .ggsel-user-explorer-panel[hidden] {
-                display: none !important;
+            .ggsel-user-explorer-anchor.expand-right .ggsel-user-explorer-panel {
+                left: 0;
+                right: auto;
+                --ggsel-panel-origin-x: left;
+            }
+            .ggsel-user-explorer-anchor.expand-left .ggsel-user-explorer-panel {
+                left: auto;
+                right: 0;
+                --ggsel-panel-origin-x: right;
+            }
+            .ggsel-user-explorer-anchor.expand-down .ggsel-user-explorer-panel {
+                top: 0;
+                bottom: auto;
+                --ggsel-panel-origin-y: top;
+            }
+            .ggsel-user-explorer-anchor.expand-up .ggsel-user-explorer-panel {
+                top: auto;
+                bottom: 0;
+                --ggsel-panel-origin-y: bottom;
+            }
+            .ggsel-user-explorer-anchor.expanded .ggsel-user-explorer-panel {
+                opacity: 1;
+                visibility: visible;
+                transform: scale(1);
+                pointer-events: auto;
             }
             .ggsel-user-explorer-body {
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
                 padding: 18px;
-                overflow: hidden;
+                flex: 1 1 auto;
+                min-height: 0;
             }
             .ggsel-user-explorer-search-row {
                 display: flex;
                 align-items: center;
                 justify-content: flex-start;
                 order: 1;
+                min-height: var(--ggsel-user-explorer-fab, 60px);
             }
             .ggsel-user-explorer-results-wrapper {
                 display: flex;
@@ -718,6 +751,7 @@
                 gap: 12px;
                 order: 2;
                 flex: 1 1 auto;
+                min-height: 0;
             }
             .ggsel-user-explorer-results-wrapper[hidden] {
                 display: none !important;
@@ -731,10 +765,17 @@
             .ggsel-user-explorer-search-control {
                 flex: 1 1 auto;
                 display: flex;
+                align-items: center;
                 transition: opacity 0.2s ease, transform 0.2s ease;
                 opacity: 0;
                 transform: scaleX(0.9);
                 pointer-events: none;
+            }
+            .ggsel-user-explorer-anchor.expand-left .ggsel-user-explorer-search-control {
+                transform-origin: right center;
+            }
+            .ggsel-user-explorer-anchor.expand-right .ggsel-user-explorer-search-control {
+                transform-origin: left center;
             }
             .ggsel-user-explorer-search-control.expanded {
                 opacity: 1;
@@ -748,7 +789,9 @@
                 background: rgba(12, 14, 20, 0.95);
                 color: #eaeaea;
                 font-size: 15px;
-                padding: 14px 18px;
+                padding: 0 18px;
+                height: var(--ggsel-user-explorer-fab, 60px);
+                line-height: var(--ggsel-user-explorer-fab, 60px);
                 outline: none;
                 box-shadow: 0 0 0 0 rgba(111, 137, 255, 0);
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -765,9 +808,10 @@
                 flex-direction: column;
                 gap: 10px;
                 flex: 1 1 auto;
-                max-height: 60vh;
+                min-height: 0;
                 overflow-y: auto;
                 padding-right: 4px;
+                overscroll-behavior: contain;
             }
             .ggsel-user-window {
                 position: fixed;
@@ -1757,12 +1801,15 @@
             const isOpen = card.classList.contains('open');
             if (isOpen) {
                 card.classList.remove('open');
+                requestAnimationFrame(() => updateAnchorOrientation());
                 return;
             }
             card.classList.add('open');
+            requestAnimationFrame(() => updateAnchorOrientation());
             const cached = state.detailCache.get(user.id);
             if (cached && cached.status === 'ready') {
                 renderUserDetails(body, cached.data);
+                requestAnimationFrame(() => updateAnchorOrientation());
                 return;
             }
             body.innerHTML = '';
@@ -1771,6 +1818,7 @@
                 const details = await ensureUserDetails(user);
                 if (card.classList.contains('open')) {
                     renderUserDetails(body, details);
+                    requestAnimationFrame(() => updateAnchorOrientation());
                 }
             } catch (error) {
                 body.innerHTML = '';
@@ -1778,6 +1826,7 @@
                 errorEl.className = 'ggsel-user-error';
                 errorEl.textContent = `Не удалось загрузить карточку пользователя: ${error.message}`;
                 body.appendChild(errorEl);
+                requestAnimationFrame(() => updateAnchorOrientation());
             }
         };
 
@@ -2476,9 +2525,8 @@
         state.open = true;
         state.anchor.classList.remove('collapsed');
         state.anchor.classList.add('expanded');
-        state.panel.hidden = false;
         state.button.setAttribute('aria-pressed', 'true');
-        state.button.classList.add('ggsel-user-explorer-button--hidden');
+        state.panel.setAttribute('aria-hidden', 'false');
         localStorage.setItem(PANEL_STATE_KEY, '1');
         requestAnimationFrame(() => {
             applyAnchorPosition();
@@ -2498,14 +2546,16 @@
         state.open = false;
         state.anchor.classList.add('collapsed');
         state.anchor.classList.remove('expanded');
-        state.panel.hidden = true;
         state.button.setAttribute('aria-pressed', 'false');
-        state.button.classList.remove('ggsel-user-explorer-button--hidden');
+        state.panel.setAttribute('aria-hidden', 'true');
         localStorage.setItem(PANEL_STATE_KEY, '0');
         collapseSearchControl();
         updateSearchControlValueState();
         closeContextMenu();
         closeAllWindows();
+        requestAnimationFrame(() => {
+            applyAnchorPosition();
+        });
     };
 
     const togglePanel = () => {
@@ -2522,6 +2572,10 @@
 
         const anchor = document.createElement('div');
         anchor.className = 'ggsel-user-explorer-anchor collapsed expand-right expand-down';
+        anchor.style.setProperty('--ggsel-user-explorer-fab', `${FAB_SIZE}px`);
+
+        const shell = document.createElement('div');
+        shell.className = 'ggsel-user-explorer-shell';
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -2533,7 +2587,7 @@
 
         const panel = document.createElement('div');
         panel.className = 'ggsel-user-explorer-panel';
-        panel.hidden = true;
+        panel.setAttribute('aria-hidden', 'true');
 
         const body = document.createElement('div');
         body.className = 'ggsel-user-explorer-body';
@@ -2588,11 +2642,13 @@
 
         panel.appendChild(body);
 
-        anchor.appendChild(button);
-        anchor.appendChild(panel);
+        shell.appendChild(button);
+        shell.appendChild(panel);
+        anchor.appendChild(shell);
         document.body.appendChild(anchor);
 
         state.anchor = anchor;
+        state.shell = shell;
         state.button = button;
         state.panel = panel;
         state.input = input;
