@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL User Explorer
 // @description  Быстрый поиск и просмотр данных пользователей в админке GGSEL
-// @version      1.1.0
+// @version      1.2.0
 // @match        https://back-office.ggsel.net/admin/users*
 // @grant        GM_addStyle
 // ==/UserScript==
@@ -71,6 +71,7 @@
         results: [],
         lastToken: 0,
         detailCache: new Map(),
+        searchPlan: null,
         contextMenu: {
             element: null,
             visible: false,
@@ -161,26 +162,6 @@
             .ggsel-user-explorer-panel[hidden] {
                 display: none !important;
             }
-            .ggsel-user-explorer-close {
-                border: 1px solid #333;
-                background: #1b1b1b;
-                color: #8ab4ff;
-                width: 34px;
-                height: 34px;
-                border-radius: 12px;
-                font-size: 20px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                position: absolute;
-                top: 12px;
-                right: 12px;
-                transition: border-color 0.2s ease;
-            }
-            .ggsel-user-explorer-close:hover {
-                border-color: #8ab4ff;
-            }
             .ggsel-user-explorer-body {
                 padding: 20px 18px 18px 18px;
                 display: flex;
@@ -207,24 +188,11 @@
                 color: #bbbbbb;
                 line-height: 1.4;
             }
-            .ggsel-user-explorer-summary {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                padding: 4px 10px;
-                border-radius: 999px;
-                border: 1px solid #333;
-                background: #1b1b1b;
-                color: #bbbbbb;
-                font-size: 11px;
-                align-self: flex-start;
-                letter-spacing: 0.15px;
-            }
             .ggsel-user-explorer-results {
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
-                max-height: 46vh;
+                max-height: 60vh;
                 overflow-y: auto;
                 padding-right: 4px;
             }
@@ -245,7 +213,7 @@
                 background: #121212;
                 border-radius: 12px;
                 border: 1px solid #2f2f2f;
-                overflow: hidden;
+                overflow: visible;
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
             .ggsel-user-card:hover {
@@ -265,10 +233,41 @@
                 flex-direction: column;
                 gap: 4px;
             }
+            .ggsel-user-card-title-row {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
             .ggsel-user-card-name {
                 font-size: 13px;
                 font-weight: 600;
                 color: #8ab4ff;
+            }
+            .ggsel-user-card-badge {
+                padding: 2px 8px;
+                border-radius: 999px;
+                font-size: 10.5px;
+                letter-spacing: 0.2px;
+                border: 1px solid rgba(138, 180, 255, 0.4);
+                background: rgba(138, 180, 255, 0.12);
+                color: #8ab4ff;
+                text-transform: uppercase;
+                font-weight: 600;
+            }
+            .ggsel-user-card-badge--id {
+                border-color: rgba(138, 180, 255, 0.45);
+                background: rgba(138, 180, 255, 0.18);
+            }
+            .ggsel-user-card-badge--ggsel {
+                border-color: rgba(255, 210, 102, 0.45);
+                background: rgba(255, 210, 102, 0.18);
+                color: #f3d37a;
+            }
+            .ggsel-user-card-badge--both {
+                border-color: rgba(138, 180, 255, 0.45);
+                background: linear-gradient(135deg, rgba(138, 180, 255, 0.18), rgba(255, 210, 102, 0.22));
+                color: #f0f6ff;
             }
             .ggsel-user-card-line {
                 font-size: 11px;
@@ -302,13 +301,36 @@
             }
             .ggsel-user-card-body {
                 display: none;
-                padding: 0 14px 14px 14px;
+                padding: 12px 14px 14px 14px;
                 border-top: 1px solid #2f2f2f;
             }
             .ggsel-user-card.open .ggsel-user-card-body {
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
+            }
+            .ggsel-user-card.match-id {
+                border-color: rgba(138, 180, 255, 0.85);
+                box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.35), 0 10px 28px rgba(0, 0, 0, 0.35);
+            }
+            .ggsel-user-card.match-id:hover {
+                border-color: rgba(138, 180, 255, 0.95);
+            }
+            .ggsel-user-card.match-ggsel {
+                border-color: rgba(255, 210, 102, 0.85);
+                box-shadow: 0 0 0 1px rgba(255, 210, 102, 0.28), 0 10px 28px rgba(0, 0, 0, 0.35);
+            }
+            .ggsel-user-card.match-ggsel:hover {
+                border-color: rgba(255, 220, 140, 0.95);
+            }
+            .ggsel-user-card.match-id.match-ggsel,
+            .ggsel-user-card.match-both {
+                border-color: rgba(168, 205, 255, 0.9);
+                box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.32), 0 0 0 3px rgba(255, 210, 102, 0.15), 0 12px 32px rgba(0, 0, 0, 0.38);
+            }
+            .ggsel-user-card.match-both:hover,
+            .ggsel-user-card.match-id.match-ggsel:hover {
+                border-color: rgba(188, 220, 255, 0.98);
             }
             .ggsel-user-card-actions {
                 display: flex;
@@ -494,11 +516,18 @@
     };
 
     const parseSearchInput = (rawInput) => {
-        const params = { ...DEFAULT_PARAMS };
+        let params = { ...DEFAULT_PARAMS };
         const summary = [];
         const input = (rawInput || '').trim();
         if (!input) {
-            return { params, summary: 'Фильтры не применены' };
+            return {
+                params,
+                summary: 'Фильтры не применены',
+                plan: {
+                    type: 'single',
+                    queries: [{ key: 'default', params, highlight: null }]
+                }
+            };
         }
 
         const tokens = [];
@@ -525,6 +554,8 @@
 
         // free text (parts not covered by explicit tokens)
         const looksLikeEmail = (value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/i.test(value);
+        const looksLikeIp = (value) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value);
+        const looksLikeDigits = (value) => /^\d+$/.test(value);
 
         const freeParts = remainder
             .split(/\s+/)
@@ -532,6 +563,8 @@
             .filter(part => part.length);
 
         let emailCandidate = '';
+        let ipCandidate = '';
+        let digitsCandidate = '';
         const residualParts = [];
         for (const part of freeParts) {
             const cleaned = part.replace(/[.,;]+$/g, '');
@@ -539,6 +572,12 @@
                 if (!emailCandidate) {
                     emailCandidate = cleaned;
                 }
+            } else if (!params['search[ip_ilike]'] && looksLikeIp(cleaned)) {
+                if (!ipCandidate) {
+                    ipCandidate = cleaned;
+                }
+            } else if (!digitsCandidate && looksLikeDigits(cleaned)) {
+                digitsCandidate = cleaned;
             } else {
                 residualParts.push(part);
             }
@@ -549,21 +588,48 @@
             summary.push(`email: ${emailCandidate}`);
         }
 
-        if (!emailCandidate && residualParts.length && !params['search[username_like]']) {
+        if (!emailCandidate && ipCandidate) {
+            params['search[ip_ilike]'] = ipCandidate;
+            summary.push(`ip: ${ipCandidate}`);
+        }
+
+        let numericPlan = null;
+        if (!tokens.length && !emailCandidate && !ipCandidate && digitsCandidate) {
+            const idParams = { ...DEFAULT_PARAMS, 'search[id]': digitsCandidate };
+            const ggselParams = { ...DEFAULT_PARAMS, 'search[ggsel_id_seller]': digitsCandidate };
+            params = idParams;
+            summary.push(`id: ${digitsCandidate}`);
+            summary.push(`ggsel: ${digitsCandidate}`);
+            numericPlan = {
+                type: 'multi',
+                queries: [
+                    { key: 'id', params: idParams, highlight: 'id', label: `ID: ${digitsCandidate}` },
+                    { key: 'ggsel', params: ggselParams, highlight: 'ggsel', label: `GGSEL ID: ${digitsCandidate}` }
+                ]
+            };
+        }
+
+        if (!numericPlan && !emailCandidate && !ipCandidate && residualParts.length && !params['search[username_like]']) {
             const freeText = residualParts.join(' ');
             params['search[username_like]'] = freeText;
             summary.push(`username: ${freeText}`);
         }
 
-        // fallbacks if only number provided (no tokens)
-        if (!tokens.length && !emailCandidate && /^\d+$/.test(input)) {
-            params['search[id]'] = input;
-            summary.push(`id: ${input}`);
+        if (numericPlan) {
+            return {
+                params,
+                summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
+                plan: numericPlan
+            };
         }
 
         return {
             params,
-            summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`
+            summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
+            plan: {
+                type: 'single',
+                queries: [{ key: 'default', params, highlight: null }]
+            }
         };
     };
 
@@ -826,6 +892,26 @@
         name.className = 'ggsel-user-card-name';
         name.textContent = user.username || '(без имени)';
 
+        const titleRow = document.createElement('div');
+        titleRow.className = 'ggsel-user-card-title-row';
+        titleRow.appendChild(name);
+
+        if (user.matchType) {
+            const badge = document.createElement('span');
+            badge.className = 'ggsel-user-card-badge';
+            if (user.matchType === 'id') {
+                badge.classList.add('ggsel-user-card-badge--id');
+                badge.textContent = 'Совпадение ID';
+            } else if (user.matchType === 'ggsel') {
+                badge.classList.add('ggsel-user-card-badge--ggsel');
+                badge.textContent = 'Совпадение GGSEL ID';
+            } else {
+                badge.classList.add('ggsel-user-card-badge--both');
+                badge.textContent = 'ID и GGSEL ID';
+            }
+            titleRow.appendChild(badge);
+        }
+
         const line = document.createElement('div');
         line.className = 'ggsel-user-card-line';
         line.innerHTML = `
@@ -843,7 +929,7 @@
             <span>Вывод: ${user.withdrawals || '—'}</span>
         `;
 
-        meta.appendChild(name);
+        meta.appendChild(titleRow);
         meta.appendChild(line);
         meta.appendChild(line2);
 
@@ -860,6 +946,14 @@
 
         card.appendChild(header);
         card.appendChild(body);
+
+        if (user.matchType === 'id') {
+            card.classList.add('match-id');
+        } else if (user.matchType === 'ggsel') {
+            card.classList.add('match-ggsel');
+        } else if (user.matchType === 'both') {
+            card.classList.add('match-both', 'match-id', 'match-ggsel');
+        }
 
         const toggleCard = async () => {
             const isOpen = card.classList.contains('open');
@@ -1310,75 +1404,158 @@
             placeholder.textContent = 'Введите запрос для поиска пользователей';
             state.resultsContainer.appendChild(placeholder);
             state.loadMoreButton.hidden = true;
+            state.loadMoreButton.disabled = true;
+            state.hasMore = false;
             return;
         }
+
+        const plan = state.searchPlan || {
+            type: 'single',
+            queries: [{ key: 'default', params: state.params, highlight: null }]
+        };
+
+        if (plan.type !== 'single' && append) {
+            return;
+        }
+
         const token = ++state.lastToken;
         state.loading = true;
         const loader = createLoader('Выполняем поиск...');
-        if (!append) {
+        if (!append || plan.type !== 'single') {
             state.resultsContainer.innerHTML = '';
             state.resultsContainer.appendChild(loader);
         } else {
             state.loadMoreButton.disabled = true;
             state.loadMoreButton.textContent = 'Загружаем...';
         }
-        const page = append ? state.page + 1 : 1;
-        try {
-            const url = buildUrlWithParams(state.params, page);
-            const doc = await fetchDocument(url);
-            if (token !== state.lastToken) {
-                return;
-            }
-            const items = parseListFromDocument(doc);
-            state.page = page;
-            state.hasMore = hasNextPage(doc);
-            state.results = append ? state.results.concat(items) : items;
-            if (!append) {
-                updateResults(state.results, false);
-            } else {
-                updateResults(items, true);
-            }
-            await prefetchUserDetails(append ? items : state.results);
-            if (token !== state.lastToken) {
-                return;
-            }
+
+        const resetLoadMore = () => {
             state.loadMoreButton.hidden = !state.hasMore;
-            state.loadMoreButton.disabled = false;
+            state.loadMoreButton.disabled = !state.hasMore;
             state.loadMoreButton.textContent = LOAD_MORE_LABEL;
-            if (!items.length && append) {
-                state.loadMoreButton.hidden = true;
+        };
+
+        try {
+            if (plan.type === 'single') {
+                const queryDef = plan.queries[0];
+                const page = append ? state.page + 1 : 1;
+                const url = buildUrlWithParams(queryDef.params, page);
+                const doc = await fetchDocument(url);
+                if (token !== state.lastToken) {
+                    return;
+                }
+                const items = parseListFromDocument(doc).map((item) => ({
+                    ...item,
+                    matchType: queryDef.highlight || null
+                }));
+                state.page = page;
+                state.hasMore = hasNextPage(doc);
+                state.results = append ? state.results.concat(items) : items;
+                if (!append) {
+                    updateResults(state.results, false);
+                } else {
+                    updateResults(items, true);
+                }
+                await prefetchUserDetails(append ? items : state.results);
+                if (token !== state.lastToken) {
+                    return;
+                }
+                resetLoadMore();
+                if (!items.length && append) {
+                    state.loadMoreButton.hidden = true;
+                    state.loadMoreButton.disabled = true;
+                }
+                return;
             }
-        } catch (error) {
-            if (!append) {
-                state.resultsContainer.innerHTML = '';
+
+            // multi-query flow (например, поиск по ID и GGSEL ID)
+            state.page = 1;
+            state.hasMore = false;
+            const aggregated = [];
+            const seen = new Map();
+            const errors = [];
+
+            for (const queryDef of plan.queries) {
+                try {
+                    const url = buildUrlWithParams(queryDef.params, 1);
+                    const doc = await fetchDocument(url);
+                    if (token !== state.lastToken) {
+                        return;
+                    }
+                    const items = parseListFromDocument(doc);
+                    items.forEach((item) => {
+                        const matchType = queryDef.highlight || null;
+                        const existing = seen.get(item.id);
+                        if (!existing) {
+                            item.matchType = matchType;
+                            aggregated.push(item);
+                            seen.set(item.id, item);
+                        } else if (matchType) {
+                            if (existing.matchType && existing.matchType !== matchType) {
+                                existing.matchType = 'both';
+                            } else if (!existing.matchType) {
+                                existing.matchType = matchType;
+                            }
+                        }
+                    });
+                } catch (error) {
+                    errors.push({ query: queryDef, error });
+                }
+            }
+
+            if (token !== state.lastToken) {
+                return;
+            }
+
+            state.results = aggregated;
+            state.resultsContainer.innerHTML = '';
+
+            if (aggregated.length) {
+                updateResults(aggregated, false);
+            } else if (!errors.length) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'ggsel-user-explorer-placeholder';
+                placeholder.textContent = 'По вашему запросу ничего не найдено';
+                state.resultsContainer.appendChild(placeholder);
+            }
+
+            if (errors.length) {
                 const errorEl = document.createElement('div');
                 errorEl.className = 'ggsel-user-error';
-                errorEl.textContent = `Ошибка при поиске пользователей: ${error.message}`;
+                errorEl.textContent = errors
+                    .map(({ query, error }) => `Ошибка по запросу «${query.label || query.key}»: ${error.message}`)
+                    .join(' ');
                 state.resultsContainer.appendChild(errorEl);
-                state.loadMoreButton.hidden = true;
-            } else {
-                state.loadMoreButton.hidden = false;
-                state.loadMoreButton.disabled = false;
-                state.loadMoreButton.textContent = 'Ошибка загрузки';
-                setTimeout(() => {
-                    if (state.hasMore) {
-                        state.loadMoreButton.textContent = LOAD_MORE_LABEL;
-                        state.loadMoreButton.disabled = false;
-                    } else {
-                        state.loadMoreButton.hidden = true;
-                    }
-                }, 2000);
             }
+
+            state.loadMoreButton.hidden = true;
+            state.loadMoreButton.disabled = true;
+
+            if (aggregated.length) {
+                await prefetchUserDetails(aggregated);
+            }
+        } catch (error) {
+            state.resultsContainer.innerHTML = '';
+            const errorEl = document.createElement('div');
+            errorEl.className = 'ggsel-user-error';
+            errorEl.textContent = `Ошибка при поиске пользователей: ${error.message}`;
+            state.resultsContainer.appendChild(errorEl);
+            state.loadMoreButton.hidden = true;
+            state.loadMoreButton.disabled = true;
         } finally {
+            if (plan.type === 'single' && !state.hasMore) {
+                state.loadMoreButton.hidden = true;
+                state.loadMoreButton.disabled = true;
+            }
             state.loading = false;
         }
     };
 
     const onQueryChange = debounce((value) => {
         state.query = value.trim();
-        const { params, summary } = parseSearchInput(state.query);
+        const { params, plan } = parseSearchInput(state.query);
         state.params = params;
-        state.summary.textContent = summary;
+        state.searchPlan = plan;
         localStorage.setItem(STORAGE_KEY, state.query);
         state.page = 1;
         state.hasMore = false;
@@ -1393,9 +1570,9 @@
             if (savedQuery) {
                 state.input.value = savedQuery;
                 state.query = savedQuery;
-                const { params, summary } = parseSearchInput(savedQuery);
+                const { params, plan } = parseSearchInput(savedQuery);
                 state.params = params;
-                state.summary.textContent = summary;
+                state.searchPlan = plan;
                 performSearch({ append: false });
             }
             const openState = localStorage.getItem(PANEL_STATE_KEY);
@@ -1408,6 +1585,7 @@
     };
 
     const openPanel = () => {
+        if (!state.panel || !state.button) return;
         state.panel.hidden = false;
         state.button.setAttribute('aria-pressed', 'true');
         state.open = true;
@@ -1416,6 +1594,7 @@
     };
 
     const closePanel = () => {
+        if (!state.panel || !state.button) return;
         state.panel.hidden = true;
         state.button.setAttribute('aria-pressed', 'false');
         state.open = false;
@@ -1445,12 +1624,6 @@
         panel.className = 'ggsel-user-explorer-panel';
         panel.hidden = true;
 
-        const closeBtn = document.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.className = 'ggsel-user-explorer-close';
-        closeBtn.innerHTML = '&times;';
-        closeBtn.addEventListener('click', closePanel);
-
         const body = document.createElement('div');
         body.className = 'ggsel-user-explorer-body';
 
@@ -1470,10 +1643,6 @@
         hints.className = 'ggsel-user-explorer-hints';
         hints.innerHTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
 
-        const summary = document.createElement('div');
-        summary.className = 'ggsel-user-explorer-summary';
-        summary.textContent = 'Фильтры не применены';
-
         const resultsContainer = document.createElement('div');
         resultsContainer.className = 'ggsel-user-explorer-results';
 
@@ -1489,11 +1658,9 @@
 
         body.appendChild(input);
         body.appendChild(hints);
-        body.appendChild(summary);
         body.appendChild(resultsContainer);
         body.appendChild(loadMoreButton);
 
-        panel.appendChild(closeBtn);
         panel.appendChild(body);
 
         document.body.appendChild(button);
@@ -1502,9 +1669,39 @@
         state.button = button;
         state.panel = panel;
         state.input = input;
-        state.summary = summary;
         state.resultsContainer = resultsContainer;
         state.loadMoreButton = loadMoreButton;
+        state.searchPlan = {
+            type: 'single',
+            queries: [{ key: 'default', params: { ...state.params }, highlight: null }]
+        };
+
+        document.addEventListener('pointerdown', (event) => {
+            if (!state.open || !state.panel || !state.button) return;
+            if (state.panel.contains(event.target) || state.button.contains(event.target)) return;
+            if (state.query) return;
+            closePanel();
+        });
+
+        panel.addEventListener('focusout', () => {
+            if (!state.open) return;
+            if (state.query) return;
+            setTimeout(() => {
+                if (!state.query && state.panel && !state.panel.contains(document.activeElement)) {
+                    closePanel();
+                }
+            }, 0);
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                if (state.contextMenu.visible) {
+                    closeContextMenu();
+                } else if (state.open) {
+                    closePanel();
+                }
+            }
+        });
 
         panel.addEventListener('contextmenu', openPanelContextMenu);
 
