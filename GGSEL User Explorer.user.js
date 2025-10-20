@@ -434,7 +434,7 @@
     };
 
     const updateAnchorOrientation = () => {
-        if (!state.anchor) return;
+        if (!state.anchor || state.anchorDragActive) return;
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!viewportWidth || !viewportHeight) return;
@@ -525,6 +525,7 @@
             }
             state.anchorDragFromButton = false;
             state.anchorDragMoved = false;
+            updateAnchorOrientation();
         };
         document.addEventListener('pointermove', onPointerMove);
         document.addEventListener('pointerup', finishDrag);
@@ -1111,12 +1112,12 @@
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
-                padding: 16px 0 18px;
+                padding: 0 16px;
                 flex: 1 1 auto;
                 min-height: 0;
             }
             .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-body {
-                padding: 0;
+                padding: 0 16px;
                 gap: 0;
                 justify-content: center;
             }
@@ -1127,6 +1128,7 @@
                 order: 1;
                 min-height: var(--ggsel-user-explorer-fab, 56px);
                 padding: 0;
+                width: 100%;
             }
             .ggsel-user-explorer-anchor.no-results .ggsel-user-explorer-search-row {
                 padding: 0;
@@ -1140,6 +1142,7 @@
                 order: 2;
                 flex: 1 1 auto;
                 min-height: 0;
+                padding: 0 0 16px;
             }
             .ggsel-user-explorer-results-wrapper[hidden] {
                 display: none !important;
@@ -1149,6 +1152,7 @@
             }
             .ggsel-user-explorer-anchor.expand-up .ggsel-user-explorer-results-wrapper {
                 order: 1;
+                padding: 16px 0 0;
             }
             .ggsel-user-explorer-search-control {
                 flex: 1 1 auto;
