@@ -1,18 +1,40 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.0
+// @version      1.1.1
 // @description  Прячет старые таблицы, вытягивает данные и рисует компактный «умный» интерфейс. Email сразу виден. Технический блок с кнопками. Все стили изолированы (префикс vui-).
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
 (function () {
   'use strict';
   const log = (...a) => console.log('[VIBE-UI]', ...a);
+
+  const PREHIDE_CLASS = 'vui-prehide';
+  let prehideTimer = null;
+  let prehideReleased = false;
+  const prehideStyle = document.createElement('style');
+  prehideStyle.textContent = `
+html.${PREHIDE_CLASS} body{background:#0f1115!important;}
+html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
+`;
+  document.documentElement.classList.add(PREHIDE_CLASS);
+  document.documentElement.appendChild(prehideStyle);
+  const releasePrehide = () => {
+    if (prehideReleased) return;
+    prehideReleased = true;
+    if (prehideTimer) {
+      clearTimeout(prehideTimer);
+      prehideTimer = null;
+    }
+    document.documentElement.classList.remove(PREHIDE_CLASS);
+    if (prehideStyle.parentNode) prehideStyle.parentNode.removeChild(prehideStyle);
+  };
+  prehideTimer = setTimeout(releasePrehide, 4000);
 
   // ---------- helpers ----------
   const txt = n => (n ? n.textContent.trim() : '');
@@ -1144,18 +1166,28 @@ body{color-scheme:dark;}
   // ---------- main ----------
   function main() {
     const isOrderPage = /\/admin\/orders\/\d+($|[?#])/.test(location.pathname);
-    if (!isOrderPage) return;
+    if (!isOrderPage) {
+      releasePrehide();
+      return;
+    }
 
-    injectStyles();
-    const data = collectData();
-    log('Collected:', data);
+    try {
+      injectStyles();
+      const data = collectData();
+      log('Collected:', data);
 
-    hideOld(data.domRefs);
-    const wrap = buildUI(data);
-    loadProfileSections(data, wrap);
-    loadChatSection(data, wrap);
-    loadProductSection(data, wrap);
-    log('Overlay ready (namespaced styles).');
+      hideOld(data.domRefs);
+      const wrap = buildUI(data);
+      releasePrehide();
+      loadProfileSections(data, wrap);
+      loadChatSection(data, wrap);
+      loadProductSection(data, wrap);
+      log('Overlay ready (namespaced styles).');
+    } catch (error) {
+      console.error('[VIBE-UI] Failed to initialize overlay', error);
+      releasePrehide();
+      throw error;
+    }
   }
 
   if (document.readyState === 'loading') {
