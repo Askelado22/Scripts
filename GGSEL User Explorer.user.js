@@ -467,7 +467,13 @@
         const items = [];
         for (const row of rows) {
             const cells = Array.from(row.children);
-            if (!cells.length || !cells[0].querySelector('a')) {
+            if (!cells.length) {
+                continue;
+            }
+            if (cells[0].tagName === 'TH') {
+                continue;
+            }
+            if (!cells[0].querySelector('a')) {
                 continue;
             }
             const idLink = cells[0].querySelector('a');
