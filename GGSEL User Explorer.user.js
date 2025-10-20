@@ -11,11 +11,24 @@
 
     const STORAGE_KEY = 'ggsel-user-explorer:last-query';
     const PANEL_STATE_KEY = 'ggsel-user-explorer:panel-open';
+    const SETTINGS_KEY = 'ggsel-user-explorer:settings';
     const DEBOUNCE_MS = 600;
     const BASE_URL = window.location.origin;
     const USERS_URL = `${BASE_URL}/admin/users`;
     const LOAD_MORE_LABEL = 'Загрузить ещё';
     const DETAIL_PREFETCH_CONCURRENCY = 3;
+    const HINTS_HTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
+    const DEFAULT_SETTINGS = Object.freeze({
+        extraActions: true
+    });
+    const EXCLUDED_ACTION_LABELS = new Set(['Назад к списку']);
+    const OPTIONAL_ACTION_LABELS = new Set([
+        'Отключить все товары от GGSel',
+        'Включить все товары для GGSel',
+        'Импортировать все товары из GGSel',
+        'Редактирование',
+        'Заблокировать'
+    ]);
     const FIELD_ALIASES = {
         id: 'search[id]',
         user: 'search[username_like]',
@@ -72,6 +85,11 @@
         lastToken: 0,
         detailCache: new Map(),
         searchPlan: null,
+        settings: { ...DEFAULT_SETTINGS },
+        windows: {
+            help: null,
+            settings: null
+        },
         contextMenu: {
             element: null,
             visible: false,
@@ -111,6 +129,170 @@
         }
         document.body.removeChild(textarea);
         return success;
+    };
+
+    const loadSettings = () => {
+        try {
+            const raw = localStorage.getItem(SETTINGS_KEY);
+            if (!raw) {
+                state.settings = { ...DEFAULT_SETTINGS };
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                state.settings = { ...DEFAULT_SETTINGS, ...parsed };
+            } else {
+                state.settings = { ...DEFAULT_SETTINGS };
+            }
+        } catch (error) {
+            console.warn('Не удалось загрузить настройки GGSEL User Explorer', error);
+            state.settings = { ...DEFAULT_SETTINGS };
+        }
+    };
+
+    const saveSettings = () => {
+        try {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+        } catch (error) {
+            console.warn('Не удалось сохранить настройки GGSEL User Explorer', error);
+        }
+    };
+
+    const ensureWindow = (type, title) => {
+        let win = state.windows[type];
+        if (win && win.element) {
+            win.title.textContent = title;
+            return win;
+        }
+        const element = document.createElement('div');
+        element.className = 'ggsel-user-window';
+        element.setAttribute('data-window', type);
+        element.hidden = true;
+        element.tabIndex = -1;
+
+        const header = document.createElement('div');
+        header.className = 'ggsel-user-window__header';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'ggsel-user-window__title';
+        titleEl.textContent = title;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'ggsel-user-window__close';
+        closeBtn.innerHTML = '&#x2715;';
+        closeBtn.addEventListener('click', () => closeWindow(type));
+
+        header.appendChild(titleEl);
+        header.appendChild(closeBtn);
+
+        const content = document.createElement('div');
+        content.className = 'ggsel-user-window__content';
+
+        element.appendChild(header);
+        element.appendChild(content);
+
+        document.body.appendChild(element);
+
+        win = {
+            element,
+            title: titleEl,
+            content,
+            close: () => closeWindow(type)
+        };
+        state.windows[type] = win;
+        return win;
+    };
+
+    const closeWindow = (type) => {
+        const win = state.windows[type];
+        if (!win || !win.element || win.element.hidden) {
+            return;
+        }
+        win.element.hidden = true;
+    };
+
+    const closeAllWindows = () => {
+        Object.keys(state.windows).forEach((key) => closeWindow(key));
+    };
+
+    const getOpenWindow = () => {
+        for (const key of Object.keys(state.windows)) {
+            const win = state.windows[key];
+            if (win && win.element && !win.element.hidden) {
+                return { key, window: win };
+            }
+        }
+        return null;
+    };
+
+    const openHelpWindow = () => {
+        const win = ensureWindow('help', 'Справка');
+        win.content.innerHTML = `<div class="ggsel-user-explorer-hints">${HINTS_HTML}</div>`;
+        win.element.hidden = false;
+        requestAnimationFrame(() => {
+            try {
+                win.element.focus({ preventScroll: true });
+            } catch (error) {
+                win.element.focus();
+            }
+        });
+    };
+
+    const openSettingsWindow = () => {
+        const win = ensureWindow('settings', 'Настройки');
+        if (!win.initialized) {
+            const options = document.createElement('div');
+            options.className = 'ggsel-user-window__options';
+
+            const label = document.createElement('label');
+            label.className = 'ggsel-user-window__option';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.name = 'extraActions';
+
+            const textWrap = document.createElement('div');
+            textWrap.className = 'ggsel-user-window__option-label';
+
+            const title = document.createElement('span');
+            title.className = 'ggsel-user-window__option-title';
+            title.textContent = 'Доп. действия в контекстное меню';
+
+            const desc = document.createElement('span');
+            desc.className = 'ggsel-user-window__option-desc';
+            desc.textContent = 'Показывать дополнительные действия из карточки пользователя.';
+
+            textWrap.appendChild(title);
+            textWrap.appendChild(desc);
+
+            label.appendChild(checkbox);
+            label.appendChild(textWrap);
+            options.appendChild(label);
+            win.content.appendChild(options);
+
+            checkbox.addEventListener('change', () => {
+                state.settings.extraActions = checkbox.checked;
+                saveSettings();
+                closeContextMenu();
+            });
+
+            win.initialized = true;
+            win.controls = { checkbox };
+        }
+
+        if (win.controls?.checkbox) {
+            win.controls.checkbox.checked = Boolean(state.settings.extraActions);
+        }
+
+        win.element.hidden = false;
+        requestAnimationFrame(() => {
+            try {
+                win.element.focus({ preventScroll: true });
+            } catch (error) {
+                win.element.focus();
+            }
+        });
     };
 
     const injectStyles = () => {
@@ -195,6 +377,95 @@
                 max-height: 60vh;
                 overflow-y: auto;
                 padding-right: 4px;
+            }
+            .ggsel-user-window {
+                position: fixed;
+                top: 80px;
+                right: 24px;
+                width: min(360px, calc(100vw - 48px));
+                background: rgba(16, 16, 16, 0.94);
+                border: 1px solid #2f2f2f;
+                border-radius: 14px;
+                color: #eaeaea;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+                backdrop-filter: blur(6px);
+                z-index: 10001;
+                display: flex;
+                flex-direction: column;
+                pointer-events: auto;
+            }
+            .ggsel-user-window[hidden] {
+                display: none;
+            }
+            .ggsel-user-window__header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 10px 14px 6px;
+                gap: 12px;
+            }
+            .ggsel-user-window__title {
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                color: #8ab4ff;
+            }
+            .ggsel-user-window__close {
+                background: #1e1e1e;
+                border: 1px solid #444;
+                color: #eaeaea;
+                border-radius: 999px;
+                width: 28px;
+                height: 28px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                font-size: 16px;
+                line-height: 1;
+                padding: 0;
+            }
+            .ggsel-user-window__close:hover {
+                border-color: #8ab4ff;
+            }
+            .ggsel-user-window__content {
+                padding: 0 14px 14px;
+                font-size: 12px;
+                color: #d5d5d5;
+            }
+            .ggsel-user-window__options {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 6px;
+            }
+            .ggsel-user-window__option {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background: #121212;
+                border: 1px solid #2f2f2f;
+                border-radius: 10px;
+                padding: 8px 10px;
+            }
+            .ggsel-user-window__option input[type="checkbox"] {
+                width: 18px;
+                height: 18px;
+                accent-color: #8ab4ff;
+            }
+            .ggsel-user-window__option-label {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            .ggsel-user-window__option-title {
+                font-size: 12px;
+                font-weight: 600;
+                color: #eaeaea;
+            }
+            .ggsel-user-window__option-desc {
+                font-size: 11px;
+                color: #a8a8a8;
             }
             .ggsel-user-explorer-results::-webkit-scrollbar {
                 width: 6px;
@@ -734,6 +1005,7 @@
             for (const link of links) {
                 const text = collapseSpaces(link.textContent);
                 if (!text) continue;
+                if (EXCLUDED_ACTION_LABELS.has(text)) continue;
                 const href = link.getAttribute('href');
                 if (!href) continue;
                 const key = `${text}|${href}`;
@@ -762,31 +1034,6 @@
         title.className = 'ggsel-user-card-name';
         title.textContent = details?.title || 'Профиль пользователя';
         container.appendChild(title);
-
-        if (details && details.actions && details.actions.length) {
-            const actionsWrap = document.createElement('div');
-            actionsWrap.className = 'ggsel-user-card-actions';
-            details.actions.forEach((action) => {
-                const link = document.createElement('a');
-                link.className = 'ggsel-user-action';
-                link.textContent = action.text;
-                link.href = action.href;
-                if (action.attributes.target) {
-                    link.setAttribute('target', action.attributes.target);
-                }
-                if (action.attributes.rel) {
-                    link.setAttribute('rel', action.attributes.rel);
-                }
-                if (action.attributes.dataset.method) {
-                    link.dataset.method = action.attributes.dataset.method;
-                }
-                if (action.attributes.dataset.confirm) {
-                    link.dataset.confirm = action.attributes.dataset.confirm;
-                }
-                actionsWrap.appendChild(link);
-            });
-            container.appendChild(actionsWrap);
-        }
 
         if (details && details.entries && details.entries.length) {
             const list = document.createElement('dl');
@@ -1134,9 +1381,7 @@
                     onQueryChange.flush?.();
                 }
             });
-
             if (state.query) {
-                items.push({ type: 'separator' });
                 items.push({
                     type: 'action',
                     label: 'Перезагрузить результаты',
@@ -1146,6 +1391,24 @@
                     }
                 });
             }
+
+            items.push({ type: 'separator' });
+
+            items.push({
+                type: 'action',
+                label: 'Справка',
+                handler: () => {
+                    openHelpWindow();
+                }
+            });
+
+            items.push({
+                type: 'action',
+                label: 'Настройки',
+                handler: () => {
+                    openSettingsWindow();
+                }
+            });
 
             items.push({ type: 'separator' });
             items.push({
@@ -1203,14 +1466,23 @@
                 items.push({ type: 'separator' });
                 items.push({ type: 'info', label: 'Загружаем дополнительные действия…' });
             } else if (details && details.actions && details.actions.length) {
-                items.push({ type: 'separator' });
-                details.actions.forEach((action) => {
-                    items.push({
-                        type: 'remote',
-                        label: action.text,
-                        action
-                    });
+                const availableActions = details.actions.filter((action) => {
+                    const label = collapseSpaces(action.text);
+                    if (!label) return false;
+                    if (EXCLUDED_ACTION_LABELS.has(label)) return false;
+                    if (!state.settings.extraActions && OPTIONAL_ACTION_LABELS.has(label)) return false;
+                    return true;
                 });
+                if (availableActions.length) {
+                    items.push({ type: 'separator' });
+                    availableActions.forEach((action) => {
+                        items.push({
+                            type: 'remote',
+                            label: action.text,
+                            action
+                        });
+                    });
+                }
             }
         }
 
@@ -1600,6 +1872,7 @@
         state.open = false;
         localStorage.setItem(PANEL_STATE_KEY, '0');
         closeContextMenu();
+        closeAllWindows();
     };
 
     const togglePanel = () => {
@@ -1612,6 +1885,7 @@
 
     const init = () => {
         injectStyles();
+        loadSettings();
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -1639,10 +1913,6 @@
             }
         });
 
-        const hints = document.createElement('div');
-        hints.className = 'ggsel-user-explorer-hints';
-        hints.innerHTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
-
         const resultsContainer = document.createElement('div');
         resultsContainer.className = 'ggsel-user-explorer-results';
 
@@ -1657,7 +1927,6 @@
         });
 
         body.appendChild(input);
-        body.appendChild(hints);
         body.appendChild(resultsContainer);
         body.appendChild(loadMoreButton);
 
@@ -1695,6 +1964,12 @@
 
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
+                const openWin = getOpenWindow();
+                if (openWin) {
+                    event.preventDefault();
+                    closeWindow(openWin.key);
+                    return;
+                }
                 if (state.contextMenu.visible) {
                     closeContextMenu();
                 } else if (state.open) {
