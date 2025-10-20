@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         GGSEL User Explorer
 // @description  Быстрый поиск и просмотр данных пользователей в админке GGSEL
-// @version      1.2.0
-// @match        https://back-office.ggsel.net/admin/users*
+// @version      1.3.0
+// @match        https://back-office.ggsel.net/admin
+// @match        https://back-office.ggsel.net/admin/*
 // @grant        GM_addStyle
 // ==/UserScript==
 
@@ -94,6 +95,7 @@
         settings: { ...DEFAULT_SETTINGS },
         buttonPosition: null,
         panelPosition: null,
+        panelPositionManual: false,
         windows: {
             help: null,
             settings: null
@@ -227,14 +229,24 @@
         const buttonRect = state.button.getBoundingClientRect();
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        let left = buttonRect.left + (buttonRect.width / 2) - (panelRect.width / 2);
-        left = Math.min(Math.max(Math.round(left), 16), Math.max(16, Math.round(viewportWidth - panelRect.width - 16)));
-        let top = buttonRect.top - panelRect.height - 16;
-        if (top < 16) {
-            top = buttonRect.bottom + 16;
+        const panelWidth = panelRect.width || state.panel.offsetWidth || 0;
+        const panelHeight = panelRect.height || state.panel.offsetHeight || 0;
+        const buttonCenterX = buttonRect.left + (buttonRect.width / 2);
+        const buttonCenterY = buttonRect.top + (buttonRect.height / 2);
+        let searchCenterOffset = panelHeight / 2;
+        if (state.searchControl) {
+            const controlRect = state.searchControl.getBoundingClientRect();
+            if (controlRect.height) {
+                searchCenterOffset = (controlRect.top - panelRect.top) + (controlRect.height / 2);
+            }
         }
-        const maxTop = Math.max(16, Math.round(viewportHeight - panelRect.height - 16));
-        top = Math.min(Math.max(Math.round(top), 16), maxTop);
+        let left = buttonCenterX - (panelWidth / 2);
+        const margin = 16;
+        left = Math.min(Math.max(Math.round(left), margin), Math.max(margin, Math.round(viewportWidth - panelWidth - margin)));
+        let top = buttonCenterY - searchCenterOffset;
+        const maxTop = Math.max(margin, Math.round(viewportHeight - panelHeight - margin));
+        top = Math.min(Math.max(Math.round(top), margin), maxTop);
+        state.panelPositionManual = false;
         state.panelPosition = { left, top };
         applyPanelPosition();
     };
@@ -278,6 +290,7 @@
 
     const startPanelDrag = (event) => {
         if (!state.panel || state.panel.hidden || event.button !== 0 || !(event.ctrlKey && event.altKey)) return;
+        state.panelPositionManual = true;
         const rect = state.panel.getBoundingClientRect();
         const offsetX = event.clientX - rect.left;
         const offsetY = event.clientY - rect.top;
@@ -311,6 +324,52 @@
         document.addEventListener('pointerup', finishDrag);
         document.addEventListener('pointercancel', finishDrag);
         event.preventDefault();
+    };
+
+    const enablePanelHandleDragging = (handle) => {
+        if (!handle) return;
+        const onPointerDown = (event) => {
+            if (event.button !== 0 || !state.panel || state.panel.hidden) return;
+            state.panelPositionManual = true;
+            const rect = state.panel.getBoundingClientRect();
+            const offsetX = event.clientX - rect.left;
+            const offsetY = event.clientY - rect.top;
+            const width = rect.width;
+            const height = rect.height;
+            state.panel.classList.add('dragging');
+            const onPointerMove = (moveEvent) => {
+                if (moveEvent.pointerId !== event.pointerId) return;
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                const maxLeft = Math.max(0, Math.round(viewportWidth - width));
+                const maxTop = Math.max(0, Math.round(viewportHeight - height));
+                let nextLeft = moveEvent.clientX - offsetX;
+                let nextTop = moveEvent.clientY - offsetY;
+                nextLeft = Math.min(Math.max(Math.round(nextLeft), 0), maxLeft);
+                nextTop = Math.min(Math.max(Math.round(nextTop), 0), maxTop);
+                state.panel.style.left = `${nextLeft}px`;
+                state.panel.style.top = `${nextTop}px`;
+                state.panel.style.right = 'auto';
+                state.panel.style.bottom = 'auto';
+                state.panelPosition = { left: nextLeft, top: nextTop };
+                updatePanelDocking();
+            };
+            const finishDrag = (upEvent) => {
+                if (upEvent.pointerId !== event.pointerId) return;
+                state.panel.classList.remove('dragging');
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', finishDrag);
+                document.removeEventListener('pointercancel', finishDrag);
+                if (state.panelPosition) {
+                    savePosition(PANEL_POSITION_KEY, state.panelPosition);
+                }
+            };
+            document.addEventListener('pointermove', onPointerMove);
+            document.addEventListener('pointerup', finishDrag);
+            document.addEventListener('pointercancel', finishDrag);
+            event.preventDefault();
+        };
+        handle.addEventListener('pointerdown', onPointerDown);
     };
 
     const expandSearchControl = () => {
@@ -644,6 +703,11 @@
             .ggsel-user-explorer-button.dragging {
                 cursor: grabbing;
             }
+            .ggsel-user-explorer-button.ggsel-user-explorer-button--hidden {
+                opacity: 0;
+                pointer-events: none;
+                transform: scale(0.85);
+            }
             .ggsel-user-explorer-panel {
                 position: fixed;
                 width: min(500px, calc(100vw - 48px));
@@ -659,6 +723,25 @@
                 z-index: 9999;
                 backdrop-filter: blur(6px);
                 touch-action: none;
+            }
+            .ggsel-user-explorer-panel-handle {
+                flex: 0 0 16px;
+                cursor: grab;
+                border-bottom: 1px solid rgba(47, 47, 47, 0.85);
+                background: linear-gradient(180deg, rgba(18, 18, 18, 0.8), rgba(18, 18, 18, 0));
+            }
+            .ggsel-user-explorer-panel-handle::after {
+                content: '';
+                display: block;
+                width: 54px;
+                height: 4px;
+                margin: 6px auto 0;
+                border-radius: 999px;
+                background: rgba(138, 180, 255, 0.32);
+            }
+            .ggsel-user-explorer-panel.dragging,
+            .ggsel-user-explorer-panel.dragging .ggsel-user-explorer-panel-handle {
+                cursor: grabbing;
             }
             .ggsel-user-explorer-panel.dragging {
                 cursor: grabbing;
@@ -685,6 +768,9 @@
                 gap: 12px;
                 order: 2;
                 flex: 1 1 auto;
+            }
+            .ggsel-user-explorer-results-wrapper[hidden] {
+                display: none !important;
             }
             .ggsel-user-explorer-panel.dock-bottom .ggsel-user-explorer-search-row {
                 order: 2;
@@ -735,6 +821,8 @@
                 border-color: rgba(112, 138, 220, 0.85);
                 background: rgba(40, 52, 88, 0.62);
                 box-shadow: 0 18px 44px rgba(40, 52, 88, 0.5);
+                opacity: 0;
+                transform: scale(0.82);
             }
             .ggsel-user-explorer-search-control.has-value .ggsel-user-explorer-search-toggle {
                 opacity: 0;
@@ -941,6 +1029,8 @@
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
+                width: 100%;
+                flex: 1 1 auto;
             }
             .ggsel-user-card-title-row {
                 display: flex;
@@ -1011,7 +1101,7 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
-                align-items: stretch;
+                align-items: center;
             }
             .ggsel-user-card-field {
                 display: inline-flex;
@@ -1021,22 +1111,29 @@
                 border-radius: 12px;
                 border: 1px solid #2a2a2a;
                 background: #181818;
-                flex: 1 1 220px;
-                min-width: min(220px, 100%);
+                flex: 0 1 auto;
+                min-width: 0;
                 max-width: 100%;
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
+                white-space: nowrap;
             }
             .ggsel-user-card-field-label {
                 font-size: 11.5px;
                 letter-spacing: 0.35px;
                 text-transform: uppercase;
                 color: #8d96b8;
+                white-space: nowrap;
             }
             .ggsel-user-card-field-value {
+                display: inline-block;
                 font-size: 13px;
                 font-weight: 600;
                 color: #f3f5ff;
-                word-break: break-word;
+                word-break: normal;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 240px;
             }
             .ggsel-user-card-body {
                 display: none;
@@ -1709,7 +1806,9 @@
                 labelEl.textContent = label;
                 const valueEl = document.createElement('span');
                 valueEl.className = 'ggsel-user-card-field-value';
-                valueEl.textContent = value == null || value === '' ? '—' : value;
+                const displayValue = value == null || value === '' ? '—' : String(value);
+                valueEl.textContent = displayValue;
+                field.title = displayValue === '—' ? label : `${label}: ${displayValue}`;
                 field.appendChild(labelEl);
                 field.appendChild(valueEl);
                 line.appendChild(field);
@@ -2197,12 +2296,23 @@
             placeholder.className = 'ggsel-user-explorer-placeholder';
             placeholder.textContent = 'По вашему запросу ничего не найдено';
             state.resultsContainer.appendChild(placeholder);
+            updateResultsVisibility();
             return;
         }
+        const fragment = document.createDocumentFragment();
         items.forEach((item) => {
             const card = renderUserCard(item);
-            state.resultsContainer.appendChild(card);
+            fragment.appendChild(card);
         });
+        state.resultsContainer.appendChild(fragment);
+        updateResultsVisibility();
+    };
+
+    const updateResultsVisibility = () => {
+        if (!state.resultsWrapper) return;
+        const hasContent = Boolean(state.resultsContainer && state.resultsContainer.childElementCount > 0);
+        const hasLoadMore = Boolean(state.loadMoreButton && !state.loadMoreButton.hidden);
+        state.resultsWrapper.hidden = !(hasContent || hasLoadMore);
     };
 
     const buildUrlWithParams = (params, page) => {
@@ -2221,13 +2331,10 @@
     const performSearch = async ({ append = false } = {}) => {
         if (!state.query) {
             state.resultsContainer.innerHTML = '';
-            const placeholder = document.createElement('div');
-            placeholder.className = 'ggsel-user-explorer-placeholder';
-            placeholder.textContent = 'Введите запрос для поиска пользователей';
-            state.resultsContainer.appendChild(placeholder);
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
             state.hasMore = false;
+            updateResultsVisibility();
             return;
         }
 
@@ -2246,6 +2353,7 @@
         if (!append || plan.type !== 'single') {
             state.resultsContainer.innerHTML = '';
             state.resultsContainer.appendChild(loader);
+            updateResultsVisibility();
         } else {
             state.loadMoreButton.disabled = true;
             state.loadMoreButton.textContent = 'Загружаем...';
@@ -2255,6 +2363,7 @@
             state.loadMoreButton.hidden = !state.hasMore;
             state.loadMoreButton.disabled = !state.hasMore;
             state.loadMoreButton.textContent = LOAD_MORE_LABEL;
+            updateResultsVisibility();
         };
 
         try {
@@ -2339,6 +2448,7 @@
                 placeholder.className = 'ggsel-user-explorer-placeholder';
                 placeholder.textContent = 'По вашему запросу ничего не найдено';
                 state.resultsContainer.appendChild(placeholder);
+                updateResultsVisibility();
             }
 
             if (errors.length) {
@@ -2348,6 +2458,7 @@
                     .map(({ query, error }) => `Ошибка по запросу «${query.label || query.key}»: ${error.message}`)
                     .join(' ');
                 state.resultsContainer.appendChild(errorEl);
+                updateResultsVisibility();
             }
 
             state.loadMoreButton.hidden = true;
@@ -2364,12 +2475,14 @@
             state.resultsContainer.appendChild(errorEl);
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
+            updateResultsVisibility();
         } finally {
             if (plan.type === 'single' && !state.hasMore) {
                 state.loadMoreButton.hidden = true;
                 state.loadMoreButton.disabled = true;
             }
             state.loading = false;
+            updateResultsVisibility();
         }
     };
 
@@ -2415,11 +2528,12 @@
         state.open = true;
         localStorage.setItem(PANEL_STATE_KEY, '1');
         requestAnimationFrame(() => {
-            if (state.panelPosition) {
+            if (state.panelPosition && state.panelPositionManual) {
                 applyPanelPosition();
             } else {
                 alignPanelToButton();
             }
+            state.button.classList.add('ggsel-user-explorer-button--hidden');
             expandSearchControl();
             updateSearchControlValueState();
             if (!state.input) return;
@@ -2437,6 +2551,13 @@
         state.button.setAttribute('aria-pressed', 'false');
         state.open = false;
         localStorage.setItem(PANEL_STATE_KEY, '0');
+        state.button.classList.remove('ggsel-user-explorer-button--hidden');
+        if (!state.panelPositionManual) {
+            state.panelPosition = null;
+        }
+        if (!state.panelPosition) {
+            state.panelPositionManual = false;
+        }
         collapseSearchControl();
         updateSearchControlValueState();
         closeContextMenu();
@@ -2467,6 +2588,9 @@
         panel.className = 'ggsel-user-explorer-panel';
         panel.hidden = true;
         panel.addEventListener('pointerdown', startPanelDrag);
+
+        const panelHandle = document.createElement('div');
+        panelHandle.className = 'ggsel-user-explorer-panel-handle';
 
         const body = document.createElement('div');
         body.className = 'ggsel-user-explorer-body';
@@ -2515,6 +2639,7 @@
 
         const resultsWrapper = document.createElement('div');
         resultsWrapper.className = 'ggsel-user-explorer-results-wrapper';
+        resultsWrapper.hidden = true;
 
         const resultsContainer = document.createElement('div');
         resultsContainer.className = 'ggsel-user-explorer-results';
@@ -2535,6 +2660,7 @@
         body.appendChild(searchRow);
         body.appendChild(resultsWrapper);
 
+        panel.appendChild(panelHandle);
         panel.appendChild(body);
 
         document.body.appendChild(button);
@@ -2548,6 +2674,7 @@
         state.searchControl = searchControl;
         state.searchRow = searchRow;
         state.resultsWrapper = resultsWrapper;
+        enablePanelHandleDragging(panelHandle);
         state.searchPlan = {
             type: 'single',
             queries: [{ key: 'default', params: { ...state.params }, highlight: null }]
@@ -2557,6 +2684,7 @@
         applyButtonPosition();
 
         state.panelPosition = loadPosition(PANEL_POSITION_KEY);
+        state.panelPositionManual = Boolean(state.panelPosition);
 
         updateSearchControlValueState();
 
