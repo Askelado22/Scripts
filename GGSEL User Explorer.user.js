@@ -102,6 +102,49 @@
 
     const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
 
+    const formatBalanceValue = (rawValue) => {
+        if (rawValue == null) return '';
+        const normalized = String(rawValue).replace(/\s+/g, '').replace(',', '.');
+        const amount = Number(normalized);
+        if (!Number.isFinite(amount)) {
+            return collapseSpaces(rawValue) || '';
+        }
+        const fixed = amount.toFixed(2);
+        return fixed.replace(/\.00$/, '').replace(/(\.\d*?)0+$/, '$1');
+    };
+
+    const formatBooleanValue = (value) => {
+        if (value == null) return '';
+        if (typeof value === 'boolean') {
+            return value ? 'Да' : 'Нет';
+        }
+        const normalized = collapseSpaces(String(value)).toLowerCase();
+        if (!normalized) return '';
+        if (['true', 'yes', '1', 'да'].includes(normalized)) return 'Да';
+        if (['false', 'no', '0', 'нет'].includes(normalized)) return 'Нет';
+        return collapseSpaces(String(value));
+    };
+
+    const formatLocaleValue = (value) => {
+        const normalized = collapseSpaces(value || '');
+        if (!normalized) return '';
+        const lower = normalized.toLowerCase();
+        if (lower.length <= 3) {
+            return lower.charAt(0).toUpperCase() + lower.slice(1);
+        }
+        return normalized;
+    };
+
+    const hasMeaningfulHtmlValue = (valueHtml) => {
+        if (!valueHtml) return false;
+        const text = valueHtml
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return Boolean(text);
+    };
+
     const copyToClipboard = async (text) => {
         if (text == null) return false;
         try {
@@ -481,45 +524,113 @@
                 color: #a5a5a5;
             }
             .ggsel-user-card {
+                position: relative;
                 background: #121212;
-                border-radius: 12px;
+                border-radius: 14px;
                 border: 1px solid #2f2f2f;
                 overflow: visible;
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
+            .ggsel-user-card::before {
+                content: '';
+                position: absolute;
+                inset: -1px;
+                border-radius: inherit;
+                pointer-events: none;
+                border: 1px solid transparent;
+                box-shadow: 0 0 0 0 rgba(138, 180, 255, 0.3);
+                opacity: 0;
+                transition: opacity 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+            }
+            .ggsel-user-card.seller-card::before {
+                border-color: rgba(138, 180, 255, 0.5);
+                box-shadow: 0 0 18px rgba(138, 180, 255, 0.2);
+                opacity: 1;
+            }
             .ggsel-user-card:hover {
                 border-color: #8ab4ff;
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+                box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
             }
             .ggsel-user-card-header {
+                position: relative;
                 display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 12px 14px;
+                align-items: flex-start;
+                padding: 16px 48px 14px 18px;
                 cursor: pointer;
                 gap: 12px;
+            }
+            .ggsel-user-card-header::after {
+                content: '\\25BC';
+                position: absolute;
+                top: 20px;
+                right: 18px;
+                font-size: 12px;
+                color: #8ab4ff;
+                opacity: 0.8;
+                transition: transform 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+            }
+            .ggsel-user-card:hover .ggsel-user-card-header::after,
+            .ggsel-user-card.open .ggsel-user-card-header::after {
+                color: #9fc0ff;
+                opacity: 1;
+            }
+            .ggsel-user-card.open .ggsel-user-card-header::after {
+                transform: rotate(180deg);
             }
             .ggsel-user-card-meta {
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
+                gap: 10px;
             }
             .ggsel-user-card-title-row {
                 display: flex;
                 align-items: center;
+                justify-content: space-between;
+                gap: 12px;
                 flex-wrap: wrap;
+            }
+            .ggsel-user-card-title-group {
+                display: flex;
+                align-items: center;
                 gap: 8px;
+                flex-wrap: wrap;
             }
             .ggsel-user-card-name {
-                font-size: 13px;
+                font-size: 15px;
                 font-weight: 600;
-                color: #8ab4ff;
+                color: #e0e8ff;
+                letter-spacing: 0.2px;
+            }
+            .ggsel-user-card-id {
+                font-size: 12px;
+                font-weight: 600;
+                padding: 3px 10px;
+                border-radius: 999px;
+                border: 1px solid rgba(138, 180, 255, 0.45);
+                background: rgba(138, 180, 255, 0.18);
+                color: #bcd3ff;
+            }
+            .ggsel-user-card-locale {
+                position: absolute;
+                top: 18px;
+                right: 44px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 2px 9px;
+                border-radius: 999px;
+                border: 1px solid rgba(138, 180, 255, 0.35);
+                background: rgba(138, 180, 255, 0.12);
+                color: #d3e2ff;
+                letter-spacing: 0.2px;
+            }
+            .ggsel-user-card-locale[hidden] {
+                display: none !important;
             }
             .ggsel-user-card-badge {
                 padding: 2px 8px;
                 border-radius: 999px;
-                font-size: 10.5px;
-                letter-spacing: 0.2px;
+                font-size: 11px;
+                letter-spacing: 0.25px;
                 border: 1px solid rgba(138, 180, 255, 0.4);
                 background: rgba(138, 180, 255, 0.12);
                 color: #8ab4ff;
@@ -541,44 +652,42 @@
                 color: #f0f6ff;
             }
             .ggsel-user-card-line {
-                font-size: 11px;
-                color: #a8a8a8;
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
             }
-            .ggsel-user-card-line span {
+            .ggsel-user-card-field {
                 display: inline-flex;
                 align-items: center;
-                gap: 4px;
+                gap: 6px;
+                padding: 5px 12px;
+                border-radius: 12px;
+                border: 1px solid #2a2a2a;
+                background: #181818;
+                flex-wrap: wrap;
             }
-            .ggsel-user-card-toggle {
-                border: 1px solid #444;
-                background: #1e1e1e;
-                color: #8ab4ff;
-                border-radius: 999px;
-                width: 32px;
-                height: 32px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 16px;
-                cursor: pointer;
-                flex-shrink: 0;
-                transition: border-color 0.2s ease;
+            .ggsel-user-card-field-label {
+                font-size: 11px;
+                letter-spacing: 0.35px;
+                text-transform: uppercase;
+                color: #8d96b8;
             }
-            .ggsel-user-card-toggle:hover {
-                border-color: #8ab4ff;
+            .ggsel-user-card-field-value {
+                font-size: 12.5px;
+                font-weight: 600;
+                color: #f3f5ff;
+                word-break: break-word;
             }
             .ggsel-user-card-body {
                 display: none;
-                padding: 12px 14px 14px 14px;
+                padding: 16px 18px 18px 18px;
                 border-top: 1px solid #2f2f2f;
+                background: #111;
             }
             .ggsel-user-card.open .ggsel-user-card-body {
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 16px;
             }
             .ggsel-user-card.match-id {
                 border-color: rgba(138, 180, 255, 0.85);
@@ -625,25 +734,45 @@
                 border-color: #8ab4ff;
                 color: #8ab4ff;
             }
-            .ggsel-user-detail-list {
-                display: grid;
-                grid-template-columns: minmax(180px, 220px) 1fr;
-                gap: 4px 12px;
-                font-size: 11.5px;
-                color: #d9d9d9;
-            }
-            .ggsel-user-detail-list dt {
+            .ggsel-user-detail-title {
+                font-size: 15px;
                 font-weight: 600;
-                color: #a8a8a8;
+                color: #f0f4ff;
+                letter-spacing: 0.25px;
             }
-            .ggsel-user-detail-list dd {
-                margin: 0;
-                color: #eaeaea;
+            .ggsel-user-detail-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                gap: 12px;
+            }
+            .ggsel-user-detail-item {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                padding: 12px 14px;
+                border-radius: 12px;
+                border: 1px solid #2f2f2f;
+                background: #181818;
+                color: #f3f5ff;
+            }
+            .ggsel-user-detail-item__label {
+                font-size: 11px;
+                letter-spacing: 0.35px;
+                text-transform: uppercase;
+                color: #8f9bbd;
+            }
+            .ggsel-user-detail-item__value {
+                font-size: 13px;
+                line-height: 1.45;
                 word-break: break-word;
+            }
+            .ggsel-user-detail-item__value a {
+                color: #9fc0ff;
             }
             .ggsel-user-detail-empty {
                 color: #7f7f7f;
                 font-style: italic;
+                font-size: 12px;
             }
             .ggsel-user-card-loader,
             .ggsel-user-loader {
@@ -951,10 +1080,15 @@
             const username = collapseSpaces(cells[1] ? cells[1].textContent : '');
             const email = collapseSpaces(cells[2] ? cells[2].textContent : '');
             const status = collapseSpaces(cells[3] ? cells[3].textContent : '');
-            const balance = collapseSpaces(cells[4] ? cells[4].textContent : '');
-            const withdrawals = collapseSpaces(cells[5] ? cells[5].textContent : '');
+            const balanceRaw = collapseSpaces(cells[4] ? cells[4].textContent : '');
+            const withdrawalsRaw = collapseSpaces(cells[5] ? cells[5].textContent : '');
             const ggselId = collapseSpaces(cells[6] ? cells[6].textContent : '');
-            const locale = collapseSpaces(cells[7] ? cells[7].textContent : '');
+            const localeRaw = collapseSpaces(cells[7] ? cells[7].textContent : '');
+
+            const balance = formatBalanceValue(balanceRaw);
+            const withdrawalsDisplay = formatBooleanValue(withdrawalsRaw) || withdrawalsRaw;
+            const localeDisplay = formatLocaleValue(localeRaw);
+            const isSeller = /продав/i.test(status.toLowerCase()) || /seller/i.test(status.toLowerCase());
 
             items.push({
                 id,
@@ -962,10 +1096,14 @@
                 username,
                 email,
                 status,
+                isSeller,
                 balance,
-                withdrawals,
+                balanceRaw,
+                withdrawals: withdrawalsDisplay,
+                withdrawalsRaw,
                 ggselId,
-                locale
+                locale: localeRaw,
+                localeDisplay
             });
         }
         return items;
@@ -1031,25 +1169,42 @@
     function renderUserDetails(container, details) {
         container.innerHTML = '';
         const title = document.createElement('div');
-        title.className = 'ggsel-user-card-name';
+        title.className = 'ggsel-user-detail-title';
         title.textContent = details?.title || 'Профиль пользователя';
         container.appendChild(title);
 
-        if (details && details.entries && details.entries.length) {
-            const list = document.createElement('dl');
-            list.className = 'ggsel-user-detail-list';
-            details.entries.forEach(({ label, valueHtml }) => {
-                const dt = document.createElement('dt');
-                dt.textContent = label || '';
-                const dd = document.createElement('dd');
-                dd.innerHTML = valueHtml || '<span class="ggsel-user-detail-empty">—</span>';
-                if (!valueHtml) {
-                    dd.classList.add('ggsel-user-detail-empty');
+        const entries = (details?.entries || []).filter(({ valueHtml }) => hasMeaningfulHtmlValue(valueHtml));
+
+        if (entries.length) {
+            const grid = document.createElement('div');
+            grid.className = 'ggsel-user-detail-grid';
+            entries.forEach(({ label, valueHtml }) => {
+                const item = document.createElement('div');
+                item.className = 'ggsel-user-detail-item';
+
+                const labelEl = document.createElement('div');
+                labelEl.className = 'ggsel-user-detail-item__label';
+                labelEl.textContent = label || '';
+
+                const valueEl = document.createElement('div');
+                valueEl.className = 'ggsel-user-detail-item__value';
+                valueEl.innerHTML = valueHtml || '';
+
+                const plainText = valueEl.textContent.trim().toLowerCase();
+                if (['true', 'false', 'yes', 'no', 'да', 'нет', '1', '0'].includes(plainText)) {
+                    valueEl.textContent = formatBooleanValue(plainText);
                 }
-                list.appendChild(dt);
-                list.appendChild(dd);
+
+                if (!valueHtml) {
+                    valueEl.textContent = '—';
+                    valueEl.classList.add('ggsel-user-detail-empty');
+                }
+
+                item.appendChild(labelEl);
+                item.appendChild(valueEl);
+                grid.appendChild(item);
             });
-            container.appendChild(list);
+            container.appendChild(grid);
         } else {
             const empty = document.createElement('div');
             empty.className = 'ggsel-user-detail-empty';
@@ -1141,7 +1296,10 @@
 
         const titleRow = document.createElement('div');
         titleRow.className = 'ggsel-user-card-title-row';
-        titleRow.appendChild(name);
+
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'ggsel-user-card-title-group';
+        titleGroup.appendChild(name);
 
         if (user.matchType) {
             const badge = document.createElement('span');
@@ -1156,43 +1314,67 @@
                 badge.classList.add('ggsel-user-card-badge--both');
                 badge.textContent = 'ID и GGSEL ID';
             }
-            titleRow.appendChild(badge);
+            titleGroup.appendChild(badge);
         }
 
-        const line = document.createElement('div');
-        line.className = 'ggsel-user-card-line';
-        line.innerHTML = `
-            <span>#${user.id}</span>
-            <span>Почта: ${user.email || '—'}</span>
-            <span>Статус: ${user.status || '—'}</span>
-            <span>Баланс: ${user.balance || '—'}</span>
-        `;
+        const idTag = document.createElement('span');
+        idTag.className = 'ggsel-user-card-id';
+        idTag.textContent = `#${user.id}`;
 
-        const line2 = document.createElement('div');
-        line2.className = 'ggsel-user-card-line';
-        line2.innerHTML = `
-            <span>GGSEL ID: ${user.ggselId || '—'}</span>
-            <span>Locale: ${user.locale || '—'}</span>
-            <span>Вывод: ${user.withdrawals || '—'}</span>
-        `;
+        titleRow.appendChild(titleGroup);
+        titleRow.appendChild(idTag);
+
+        const createInfoLine = (fields) => {
+            const line = document.createElement('div');
+            line.className = 'ggsel-user-card-line';
+            fields.forEach(({ label, value }) => {
+                const field = document.createElement('span');
+                field.className = 'ggsel-user-card-field';
+                const labelEl = document.createElement('span');
+                labelEl.className = 'ggsel-user-card-field-label';
+                labelEl.textContent = label;
+                const valueEl = document.createElement('span');
+                valueEl.className = 'ggsel-user-card-field-value';
+                valueEl.textContent = value == null || value === '' ? '—' : value;
+                field.appendChild(labelEl);
+                field.appendChild(valueEl);
+                line.appendChild(field);
+            });
+            return line;
+        };
+
+        const primaryLine = createInfoLine([
+            { label: 'Почта', value: user.email },
+            { label: 'Баланс', value: user.balance }
+        ]);
+
+        const secondaryLine = createInfoLine([
+            { label: 'GGSEL ID', value: user.ggselId },
+            { label: 'Вывод', value: user.withdrawals }
+        ]);
 
         meta.appendChild(titleRow);
-        meta.appendChild(line);
-        meta.appendChild(line2);
-
-        const toggle = document.createElement('button');
-        toggle.className = 'ggsel-user-card-toggle';
-        toggle.type = 'button';
-        toggle.textContent = '+';
+        meta.appendChild(primaryLine);
+        meta.appendChild(secondaryLine);
 
         header.appendChild(meta);
-        header.appendChild(toggle);
+
+        if (user.localeDisplay) {
+            const localeTag = document.createElement('div');
+            localeTag.className = 'ggsel-user-card-locale';
+            localeTag.textContent = user.localeDisplay;
+            header.appendChild(localeTag);
+        }
 
         const body = document.createElement('div');
         body.className = 'ggsel-user-card-body';
 
         card.appendChild(header);
         card.appendChild(body);
+
+        if (user.isSeller) {
+            card.classList.add('seller-card');
+        }
 
         if (user.matchType === 'id') {
             card.classList.add('match-id');
@@ -1206,11 +1388,9 @@
             const isOpen = card.classList.contains('open');
             if (isOpen) {
                 card.classList.remove('open');
-                toggle.textContent = '+';
                 return;
             }
             card.classList.add('open');
-            toggle.textContent = '−';
             const cached = state.detailCache.get(user.id);
             if (cached && cached.status === 'ready') {
                 renderUserDetails(body, cached.data);
@@ -1235,10 +1415,6 @@
         card.toggleCard = toggleCard;
 
         header.addEventListener('click', toggleCard);
-        toggle.addEventListener('click', (event) => {
-            event.stopPropagation();
-            toggleCard();
-        });
         card.addEventListener('contextmenu', (event) => {
             openContextMenu(event, user, card);
         });
