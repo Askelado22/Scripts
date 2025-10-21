@@ -39,7 +39,8 @@
   const STAGE_META = {
     stage1: { label: 'Этап 1 — Названия', donePhase: 'stage1_done' },
     stage2: { label: 'Этап 2 — Цена и параметры', donePhase: 'stage2_done' },
-    stage3: { label: 'Этап 3 — Инструкции', donePhase: 'done' }
+    stage3: { label: 'Этап 3 — Инструкции', donePhase: 'done' },
+    stageAll: { label: 'Все этапы', donePhase: 'done' }
   };
   const STAGE_ACTION_BUTTONS = {
     stage1: [
@@ -225,7 +226,7 @@
           <textarea id="vibe-desc" rows="5" placeholder="Вставьте/напишите описание выбранной вкладки"></textarea>
         </div>
         <div class="row"><label>Параметры</label><div class="chips"><div class="chip" data-flag="useNick">Никнейм</div><div class="chip" data-flag="useRegion">Регион</div></div></div>
-        <div class="row"><label>Этап</label><div class="chips"><div class="chip" data-stage="stage1">Этап 1</div><div class="chip" data-stage="stage2">Этап 2</div><div class="chip" data-stage="stage3">Этап 3</div></div></div>
+        <div class="row"><label>Этап</label><div class="chips"><div class="chip" data-stage="stage1">Этап 1</div><div class="chip" data-stage="stage2">Этап 2</div><div class="chip" data-stage="stage3">Этап 3</div><div class="chip" data-stage="stageAll">Все этапы</div></div></div>
         <div class="row"><label>Действия этапа</label><div id="vibe-stage-actions"></div></div>
         <div class="row" id="vibe-id-badge" style="display:none;"><span class="small">Offer ID:</span><span id="vibe-id">—</span><button class="chip" id="vibe-copy-id">Копировать</button></div>
         <div class="row" id="vibe-row-actions"><button class="btn" id="vibe-run">Заполнить</button><button class="btn secondary" id="vibe-continue">Продолжить</button><button class="btn warn" id="vibe-reset">Сбросить кэш</button></div>
@@ -331,6 +332,12 @@
         log('⚠️ Этап 3 доступен на страницах «Цена товара» или «Инструкция для покупателя».');
         state.started = false; saveState(); refreshPhase(); return;
       }
+    } else if (stage === 'stageAll'){
+      if (!isCreatePage()){
+        log('⚠️ Режим «Все этапы» запускайте на странице создания оффера.');
+        state.started = false; saveState(); refreshPhase(); return;
+      }
+      nextPhase = 'fill_general';
     }
 
     if (!nextPhase){ log('❗ Не удалось определить фазу запуска.'); return; }
@@ -839,6 +846,7 @@
       return;
     }
     if (state.stage === 'stage3') finishStage('Инструкции заполнены. Можно сохранять оффер.');
+    else if (state.stage === 'stageAll') finishStage('Все этапы заполнены. Проверьте данные и сохраните оффер.');
     else { state.phase='done'; saveState(); refreshPhase(); }
   }
 
