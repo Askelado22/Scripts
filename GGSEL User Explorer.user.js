@@ -702,6 +702,42 @@
         return success;
     };
 
+    const markChipCopied = (element) => {
+        if (!element) return;
+        element.classList.add('copied');
+        window.setTimeout(() => {
+            element.classList.remove('copied');
+        }, 900);
+    };
+
+    const attachCopyHandler = (element, getText) => {
+        if (!element || element.__ggselCopyHandler) {
+            return;
+        }
+        const handler = async (event) => {
+            if (event.defaultPrevented || event.button !== 0) {
+                return;
+            }
+            if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+                return;
+            }
+            const text = typeof getText === 'function'
+                ? collapseSpaces(getText(element, event))
+                : collapseSpaces(element.textContent || '');
+            if (!text) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            const success = await copyToClipboard(text);
+            if (success) {
+                markChipCopied(element);
+            }
+        };
+        element.addEventListener('click', handler);
+        element.__ggselCopyHandler = handler;
+    };
+
     const loadSettings = () => {
         state.settings = getDefaultSettings();
         try {
@@ -1333,7 +1369,7 @@
                 box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
                 display: flex;
                 flex-direction: column;
-                overflow: hidden;
+                overflow: visible;
                 backdrop-filter: blur(6px);
                 opacity: 0;
                 visibility: hidden;
@@ -1534,7 +1570,7 @@
                 gap: 6px;
                 max-height: 220px;
                 overflow-y: auto;
-                z-index: 5;
+                z-index: 12;
             }
             .ggsel-user-history-popover[hidden] {
                 display: none !important;
@@ -1981,6 +2017,9 @@
                 min-width: 0;
                 max-width: 100%;
                 white-space: nowrap;
+                cursor: pointer;
+                user-select: none;
+                transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
             }
             .ggsel-user-card-field-label {
                 font-size: 12px;
@@ -2159,8 +2198,15 @@
                 color: #eaeaea;
                 text-decoration: none;
                 font-size: 12.5px;
-                transition: border-color 0.2s ease, color 0.2s ease;
+                transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
                 max-width: 100%;
+                cursor: pointer;
+                user-select: none;
+            }
+            .ggsel-user-card-field.copied,
+            .ggsel-order-chip.copied {
+                box-shadow: 0 0 0 2px rgba(138, 180, 255, 0.35);
+                border-color: rgba(138, 180, 255, 0.55) !important;
             }
             .ggsel-order-chip.status-default {
                 border-color: #2a2a2a;
@@ -3421,6 +3467,7 @@
                     field.appendChild(valueEl);
                 }
                 chips.appendChild(field);
+                attachCopyHandler(field, () => (labelText ? `${labelText}: ${normalized}` : normalized));
                 hasChips = true;
             });
         };
@@ -3620,6 +3667,7 @@
                 } else {
                     chip.textContent = normalized;
                 }
+                attachCopyHandler(chip, () => (label ? `${label}: ${normalized}` : normalized));
                 chipRow.appendChild(chip);
                 hasChips = true;
             });
