@@ -56,7 +56,7 @@
       { id: 'stage3_instructions', label: '1. Инструкция для покупателя', phase: 'instructions_ru' }
     ]
   };
-  const STAGE_LINK_URL = 'https://key-steam.store/gift';
+  const STAGE_LINK_URL = 'https://gifts-steam.ru/gift';
   const persist = {
     set(k, v) { try { GM_setValue(`${NS}.${k}`, v); } catch { localStorage.setItem(`${NS}.${k}`, JSON.stringify(v)); } },
     get(k, d) { try { const v = GM_GetValue(`${NS}.${k}`, undefined); return v === undefined ? _ls(k, d) : v; } catch { return _ls(k, d); }
@@ -488,7 +488,7 @@
       if (redirectInput){
         if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
           setReactValue(redirectInput, STAGE_LINK_URL);
-          log('Установлена ссылка перенаправления на https://key-steam.store/gift.');
+          log('Установлена ссылка перенаправления на https://gifts-steam.ru/gift.');
         } else {
           log('Ссылка перенаправления уже установлена.');
         }
@@ -565,7 +565,7 @@
 
     if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
       setReactValue(redirectInput, STAGE_LINK_URL);
-      log('Ссылка перенаправления обновлена на https://key-steam.store/gift.');
+      log('Ссылка перенаправления обновлена на https://gifts-steam.ru/gift.');
     } else {
       log('Ссылка перенаправления уже установлена.');
     }
@@ -721,7 +721,7 @@
 
     const enParamTitle = modal.querySelector('.field-lang._visible .styles_Input__U2Hd0 input') || modal.querySelector('.styles_Input__U2Hd0 input');
     if (!enParamTitle){ log('❗ Не найдено поле EN «Заголовок параметра»'); scheduleNext(400); return; }
-    setReactValue(enParamTitle, 'LINK ON STEAM PROFILE'); log('EN заголовок для Никнейма установлен.');
+    setReactValue(enParamTitle, 'LINK ON STEAM PROFILE (example: https://steamcommunity.com/id/nickname/)'); log('EN заголовок для Никнейма установлен.');
 
     const addBtn = findByText('.ant-modal-footer button span', 'Добавить', { root: modal, exact:true })?.closest('button');
     if (!addBtn){ log('❗ В модале не найдена кнопка «Добавить»'); scheduleNext(400); return; }
