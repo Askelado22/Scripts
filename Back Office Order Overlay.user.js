@@ -356,10 +356,20 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
 
     const hRev = findH('h4', 'Отзыв покупателя');
     const tblRev = hRev ? nearest(hRev.parentElement, 'table') : null;
+    const reviewLinkEl = hRev
+      ? hRev.querySelector('a')
+        || hRev.parentElement?.querySelector('a')
+        || hRev.closest('.col-sm-3')?.querySelector('a')
+      : null;
+    const reviewLink = reviewLinkEl
+      ? new URL(reviewLinkEl.getAttribute('href') || reviewLinkEl.href, location.origin).href
+      : '';
+
     const review = {
       text: rowValueByLabel(tblRev, 'Текст отзыва'),
       rating: rowValueByLabel(tblRev, 'Оценка'),
       date: rowValueByLabel(tblRev, 'Дата отзыва'),
+      link: reviewLink,
     };
     const reviewExists = !isEmptyVal(review.text) || !isEmptyVal(review.rating) || !isEmptyVal(review.date);
 
@@ -388,6 +398,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       qty_available: rowValueByLabel(tblProd, 'Количество'),
       optionsRaw: rowValueByLabel(tblProd, 'Выбранные опции'),
       created_at: rowValueByLabel(tblProd, 'Дата создания'),
+      issued_item: rowValueByLabel(tblProd, 'Выданный товар'),
       link_admin: firstLinkWithin(prodFooter, 'Открыть товар'),
       link_public: firstLinkWithin(prodFooter, 'на GGSel'),
       link_category: firstLinkWithin(prodFooter, 'Категорию'),
@@ -477,6 +488,8 @@ body{color-scheme:dark;}
 .vui-btn{padding:8px 12px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1b1e;color:var(--vui-text);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font:inherit;line-height:1.2;}
 .vui-btn--primary{background:var(--vui-accent);color:#0b1526;}
 .vui-btn--danger{border-color:#4a2222;background:#2a1212;}
+.vui-btn--alert{border-color:rgba(248,81,73,.7);background:rgba(248,81,73,.18);color:#ffb3ad;}
+.vui-btn--alert:hover{background:rgba(248,81,73,.28);}
 .vui-btn--ghost{background:transparent;}
 .vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
 .vui-layoutSide{min-width:280px;}
@@ -870,6 +883,19 @@ body{color-scheme:dark;}
     };
     const rate = (r) => isEmptyVal(r) ? '' : `${r}★`;
     const safe = (v) => isEmptyVal(v) ? '' : v;
+    const formatIssuedItem = (value) => {
+      const raw = value || '';
+      const match = raw.match(/https?:\/\/\S+/);
+      if (!match) return esc(raw);
+      const url = match[0];
+      const before = raw.slice(0, match.index).replace(/[;,\s]+$/,'').trim();
+      const after = raw.slice(match.index + url.length).replace(/^[;,\s]+/,'').trim();
+      const parts = [];
+      if (before) parts.push(`<span>${esc(before)}</span>`);
+      parts.push(`<a class="vui-linkAction" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`);
+      if (after) parts.push(`<span>${esc(after)}</span>`);
+      return parts.join('<br>');
+    };
 
     const chronologyOrder = [
       { key: 'created_at', label: 'Создан' },
@@ -948,9 +974,9 @@ body{color-scheme:dark;}
       ? `<div class="vui-headStat">${rewardLabelTop}<b>${esc(data.cost.seller_reward)}</b></div>`
       : '';
     const bottomButtons = [
-      data.actions.close ? `<a class="vui-btn" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
-      data.actions.refund ? `<a class="vui-btn vui-btn--danger" href="${esc(data.actions.refund)}">Возврат</a>` : '',
-      data.actions.edit ? `<a class="vui-btn" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
+      data.actions.edit ? `<a class="vui-btn" data-confirm-message="Открыть редактирование заказа?" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
+      data.actions.refund ? `<a class="vui-btn vui-btn--danger" data-confirm-message="Перейти к оформлению возврата?" href="${esc(data.actions.refund)}">Возврат</a>` : '',
+      data.actions.close ? `<a class="vui-btn vui-btn--alert" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
     ].filter(Boolean).join('');
 
     const statsSection = (totalBlock || rewardBlock)
@@ -981,6 +1007,10 @@ body{color-scheme:dark;}
         </div>`
       : '';
 
+    const issuedItemBlock = safe(data.product.issued_item)
+      ? `<div class="vui-line"><span>Выданный товар</span><b>${formatIssuedItem(data.product.issued_item)}</b></div>`
+      : '';
+
     const productTitleValue = safe(data.product.title);
     const productTitleMarkup = productTitleValue
       ? (data.product.link_admin
@@ -992,6 +1022,24 @@ body{color-scheme:dark;}
     const orderTitleMarkup = orderNumberValue
       ? `Заказ №<button class="vui-orderNumber" type="button" data-order-number${orderUuidAttr} title="Клик — скопировать номер, Alt+клик — UUID">${esc(orderNumberValue)}</button>`
       : 'Заказ';
+
+    const hasReviewLink = data.review && !isEmptyVal(data.review.link);
+    const reviewTitleMarkup = hasReviewLink
+      ? `<a class="vui-linkAction" href="${esc(data.review.link)}" target="_blank" rel="noopener noreferrer">Отзывы</a>`
+      : 'Отзывы';
+    const reviewBodyMarkup = data.reviewExists
+      ? `
+          ${safe(data.review.rating) ? `<div class="vui-line"><span>Оценка</span><b>${data.review.rating}★</b></div>` : ''}
+          ${safe(data.review.text) ? `<p style="margin:6px 0 0">${data.review.text}</p>` : ''}
+          ${safe(data.review.date) ? `<div class="vui-muted" style="margin-top:6px">${data.review.date}</div>` : ''}`
+      : '<div class="vui-empty">Отзыв отсутствует.</div>';
+    const reviewCardMarkup = (data.reviewExists || hasReviewLink)
+      ? `
+          <article class="vui-card">
+            <header class="vui-card__head"><div class="vui-title">${reviewTitleMarkup}</div></header>
+            <div class="vui-card__body">${reviewBodyMarkup}</div>
+          </article>`
+      : '';
 
     wrap.innerHTML = `
       <section class="vui-layout">
@@ -1015,6 +1063,7 @@ body{color-scheme:dark;}
             <div class="vui-card__body">
               ${categoryLine}
               ${safe(data.product.delivery_type) ? `<div class="vui-line"><span>Тип выдачи</span><b>${data.product.delivery_type}</b></div>` : ''}
+              ${issuedItemBlock}
               ${Array.isArray(data.product.options) && data.product.options.length ? `
                 <details class="vui-acc"><summary>Выбранные опции</summary>
                   <ul style="margin:8px 0 0 18px;">
@@ -1099,15 +1148,7 @@ body{color-scheme:dark;}
             </div>
           </article>` : ''}
 
-          ${data.reviewExists ? `
-          <article class="vui-card">
-            <header class="vui-card__head"><div class="vui-title">Отзыв покупателя</div></header>
-            <div class="vui-card__body">
-              ${safe(data.review.rating) ? `<div class="vui-line"><span>Оценка</span><b>${data.review.rating}★</b></div>` : ''}
-              ${safe(data.review.text) ? `<p style="margin:6px 0 0">${data.review.text}</p>` : ''}
-              ${safe(data.review.date) ? `<div class="vui-muted" style="margin-top:6px">${data.review.date}</div>` : ''}
-            </div>
-          </article>` : ''}
+          ${reviewCardMarkup}
         </div>
       </section>
       <div class="vui-footerNote">GsellersBackOffice © 2025 | SERVER TIMEZONE: Moscow</div>
@@ -1147,6 +1188,16 @@ body{color-scheme:dark;}
         if (!value) return;
         event.preventDefault();
         copy(value, btn);
+      });
+    });
+
+    wrap.querySelectorAll('[data-confirm-message]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        const message = link.getAttribute('data-confirm-message');
+        if (!message) return;
+        if (!window.confirm(message)) {
+          event.preventDefault();
+        }
       });
     });
 
