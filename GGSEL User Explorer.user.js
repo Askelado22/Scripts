@@ -1939,21 +1939,11 @@
             }
             .ggsel-user-card-info {
                 display: flex;
-                align-items: flex-start;
+                align-items: flex-end;
                 justify-content: flex-start;
-                gap: 10px;
+                gap: 6px;
                 width: 100%;
                 flex-wrap: wrap;
-            }
-            .ggsel-user-card-footer {
-                display: flex;
-                align-items: center;
-                justify-content: flex-end;
-                gap: 8px;
-                flex-shrink: 0;
-                margin-left: auto;
-                align-self: flex-end;
-                min-width: 0;
             }
             .ggsel-user-card-id {
                 font-size: 14px;
@@ -1967,6 +1957,8 @@
                 letter-spacing: 0.3px;
                 text-transform: uppercase;
                 white-space: nowrap;
+                margin-left: auto;
+                align-self: flex-end;
             }
             .ggsel-user-card-locale[hidden] {
                 display: none !important;
@@ -2000,7 +1992,7 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 6px;
-                align-items: center;
+                align-items: flex-end;
                 width: 100%;
                 flex: 1 1 auto;
                 min-width: 0;
@@ -2158,32 +2150,25 @@
             }
             .ggsel-order-card-info {
                 display: flex;
-                align-items: flex-start;
+                align-items: flex-end;
                 justify-content: flex-start;
-                gap: 10px;
+                gap: 6px;
                 width: 100%;
                 flex-wrap: wrap;
-            }
-            .ggsel-order-card-footer {
-                display: flex;
-                align-items: center;
-                justify-content: flex-end;
-                flex-shrink: 0;
-                margin-left: auto;
-                align-self: flex-end;
-                min-width: 0;
             }
             .ggsel-order-card-created {
                 font-size: 12px;
                 color: #a3abc8;
                 letter-spacing: 0.25px;
                 white-space: nowrap;
+                margin-left: auto;
+                align-self: flex-end;
             }
             .ggsel-order-chip-row {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 6px;
-                align-items: center;
+                align-items: flex-end;
                 flex: 1 1 auto;
                 min-width: 0;
             }
@@ -3499,18 +3484,13 @@
         card.appendChild(header);
         card.appendChild(body);
 
-        const footer = document.createElement('div');
-        footer.className = 'ggsel-user-card-footer';
         if (user.localeDisplay) {
             const localeTag = document.createElement('div');
             localeTag.className = 'ggsel-user-card-locale';
             localeTag.textContent = user.localeDisplay;
-            footer.appendChild(localeTag);
+            infoRow.appendChild(localeTag);
         }
-        if (footer.childElementCount) {
-            infoRow.appendChild(footer);
-        }
-        if (hasChips || footer.childElementCount) {
+        if (hasChips || user.localeDisplay) {
             meta.appendChild(infoRow);
         }
 
@@ -3674,7 +3654,7 @@
         };
 
         appendChipGroup([
-            { key: 'status', label: 'Статус', value: order.status },
+            { key: 'status', label: '', value: order.status },
             { key: 'amount', label: 'Сумма', value: order.amount },
             { key: 'count', label: 'Кол-во', value: order.count }
         ]);
@@ -3690,21 +3670,19 @@
         infoRow.className = 'ggsel-order-card-info';
         infoRow.appendChild(chipRow);
 
-        let footer = null;
+        let hasMeta = false;
         if (orderFieldSettings.created) {
             const createdText = collapseSpaces(order.createdAt || '');
             if (createdText) {
-                footer = document.createElement('div');
-                footer.className = 'ggsel-order-card-footer';
                 const createdEl = document.createElement('div');
                 createdEl.className = 'ggsel-order-card-created';
                 createdEl.textContent = createdText;
-                footer.appendChild(createdEl);
-                infoRow.appendChild(footer);
+                infoRow.appendChild(createdEl);
+                hasMeta = true;
             }
         }
 
-        if (hasChips || (footer && footer.childElementCount)) {
+        if (hasChips || hasMeta) {
             content.appendChild(infoRow);
         }
 
