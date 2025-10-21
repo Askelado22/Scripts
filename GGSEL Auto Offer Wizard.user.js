@@ -33,12 +33,27 @@
     offerId: null,
     lastUrl: location.href,
     desc: { ru: '', en: '', kz: '', kzEn: '' },
-    logs: []
+    logs: [],
+    currentAction: null
   };
   const STAGE_META = {
     stage1: { label: 'Этап 1 — Названия', donePhase: 'stage1_done' },
     stage2: { label: 'Этап 2 — Цена и параметры', donePhase: 'stage2_done' },
     stage3: { label: 'Этап 3 — Инструкции', donePhase: 'done' }
+  };
+  const STAGE_ACTION_BUTTONS = {
+    stage1: [
+      { id: 'stage1_names', label: '1. Названия и описания', phase: 'fill_general' },
+      { id: 'stage1_link', label: '2. Ссылка перенаправления', phase: 'stage1_link' }
+    ],
+    stage2: [
+      { id: 'stage2_price', label: '1. Цена и «Безлимитный»', phase: 'pricing_price' },
+      { id: 'stage2_nick', label: '2. Ссылка на Steam профиль', phase: 'pricing_add_nick' },
+      { id: 'stage2_region', label: '3. Регион аккаунта', phase: 'pricing_add_region' }
+    ],
+    stage3: [
+      { id: 'stage3_instructions', label: '1. Инструкция для покупателя', phase: 'instructions_ru' }
+    ]
   };
   const STAGE_LINK_URL = 'https://key-steam.store/gift';
   const persist = {
@@ -147,10 +162,20 @@
     const meta = getStageMeta(state.stage);
     state.started = false;
     state.phase = meta.donePhase || 'idle';
+    state.currentAction = null;
     saveState();
     refreshPhase();
     if (message) log(message);
     log(`✅ ${meta.label} завершён.`);
+  }
+
+  function stopAction(message){
+    state.started = false;
+    state.phase = 'idle';
+    state.currentAction = null;
+    saveState();
+    refreshPhase();
+    if (message) log(message);
   }
 
   // ==========================
@@ -177,6 +202,11 @@
 #vibe-row-actions{display:flex;gap:8px;}
 #vibe-id-badge{display:flex;gap:8px;align-items:center;}
 #vibe-id{font-weight:700;color:#a8ffad;}
+#vibe-stage-actions{display:flex;flex-wrap:wrap;gap:8px;}
+#vibe-stage-actions .stage-btn{flex:1 1 45%;padding:8px 10px;background:#1b2330;border:1px solid #2d3440;border-radius:8px;color:#eaeef5;cursor:pointer;font-size:12px;text-align:center;transition:border-color .2s ease,background .2s ease;}
+#vibe-stage-actions .stage-btn:hover{border-color:#5a9cff;background:rgba(90,156,255,.12);}
+#vibe-stage-actions .stage-btn:disabled{opacity:.55;cursor:not-allowed;}
+#vibe-stage-actions .stage-btn.active{border-color:#9b82ff;background:rgba(155,130,255,.18);}
 `;
   try { GM_addStyle(css); } catch(e){ const st=document.createElement('style'); st.textContent=css; document.head.appendChild(st); }
 
@@ -188,7 +218,6 @@
       <div class="hd"><div>Auto Offer Wizard</div><div class="small">phase: <span id="vibe-phase">${state.phase}</span></div></div>
       <div class="bd">
         <div class="row"><label>Название игры (RU/KZ)</label><input id="vibe-game-ru" type="text" placeholder="Напр.: ARK: Survival Evolved"></div>
-        <div class="row"><label>Название (EN) — опционально</label><input id="vibe-game-en" type="text" placeholder="If blank — will use RU"></div>
         <div class="row"><label>Рынок</label><div class="chips"><div class="chip" data-market="RU">RU</div><div class="chip" data-market="KZ">KZ</div></div></div>
         <div class="row">
           <label>Описание (кэшируется)</label>
@@ -197,6 +226,7 @@
         </div>
         <div class="row"><label>Параметры</label><div class="chips"><div class="chip" data-flag="useNick">Никнейм</div><div class="chip" data-flag="useRegion">Регион</div></div></div>
         <div class="row"><label>Этап</label><div class="chips"><div class="chip" data-stage="stage1">Этап 1</div><div class="chip" data-stage="stage2">Этап 2</div><div class="chip" data-stage="stage3">Этап 3</div></div></div>
+        <div class="row"><label>Действия этапа</label><div id="vibe-stage-actions"></div></div>
         <div class="row" id="vibe-id-badge" style="display:none;"><span class="small">Offer ID:</span><span id="vibe-id">—</span><button class="chip" id="vibe-copy-id">Копировать</button></div>
         <div class="row" id="vibe-row-actions"><button class="btn" id="vibe-run">Заполнить</button><button class="btn secondary" id="vibe-continue">Продолжить</button><button class="btn warn" id="vibe-reset">Сбросить кэш</button></div>
         <div class="row"><label>Логи</label><div id="vibe-log-box"></div></div>
@@ -204,7 +234,6 @@
     document.body.appendChild(host);
 
     const gameRu = host.querySelector('#vibe-game-ru');
-    const gameEn = host.querySelector('#vibe-game-en');
     const descArea = host.querySelector('#vibe-desc');
     const tabs=[...host.querySelectorAll('.tab')];
     const chipsMarket=[...host.querySelectorAll('.chip[data-market]')];
@@ -212,7 +241,6 @@
     const chipsStage=[...host.querySelectorAll('.chip[data-stage]')];
 
     gameRu.value=state.gameNameRu||'';
-    gameEn.value=state.gameNameEn||'';
 
     let activeDTab = persist.get('activeDTab','ru');
     function renderDescTab(){ tabs.forEach(t=>t.classList.toggle('active', t.getAttribute('data-dtab')===activeDTab)); descArea.value = state.desc[activeDTab] || ''; }
@@ -221,19 +249,18 @@
     function renderStage(){ chipsStage.forEach(c=>c.classList.toggle('active', c.getAttribute('data-stage')===state.stage)); }
 
     gameRu.addEventListener('input', ()=>{ state.gameNameRu=gameRu.value; saveState(); });
-    gameEn.addEventListener('input', ()=>{ state.gameNameEn=gameEn.value; saveState(); });
     descArea.addEventListener('input', ()=>{ state.desc[activeDTab]=descArea.value; saveState(); });
     tabs.forEach(t=>t.addEventListener('click', ()=>{ activeDTab=t.getAttribute('data-dtab'); persist.set('activeDTab', activeDTab); renderDescTab(); }));
     chipsMarket.forEach(c=>c.addEventListener('click', ()=>{ state.market=c.getAttribute('data-market'); saveState(); renderMarket(); log(`Рынок переключен на ${state.market}`); }));
     chipsFlags.forEach(c=>c.addEventListener('click', ()=>{ const k=c.getAttribute('data-flag'); state[k]=!state[k]; saveState(); renderFlags(); log(`Флаг ${k} = ${state[k]?'ON':'OFF'}`); }));
-    chipsStage.forEach(c=>c.addEventListener('click', ()=>{ state.stage=c.getAttribute('data-stage'); saveState(); renderStage(); log(`Выбран ${getStageLabel(state.stage)}`); }));
+    chipsStage.forEach(c=>c.addEventListener('click', ()=>{ state.stage=c.getAttribute('data-stage'); state.currentAction=null; saveState(); renderStage(); renderStageActions(); log(`Выбран ${getStageLabel(state.stage)}`); }));
 
     host.querySelector('#vibe-run').addEventListener('click', onRun);
-    host.querySelector('#vibe-continue').addEventListener('click', ()=>{ state.started = true; saveState(); scheduleNext(50); });
+    host.querySelector('#vibe-continue').addEventListener('click', ()=>{ state.started = true; state.currentAction = null; saveState(); scheduleNext(50); });
     host.querySelector('#vibe-reset').addEventListener('click', ()=>{
       state = Object.assign({}, DEF_STATE, { logs:[] });
-      saveState(); renderMarket(); renderFlags(); renderDescTab(); renderStage();
-      gameRu.value=''; gameEn.value='';
+      saveState(); renderMarket(); renderFlags(); renderDescTab(); renderStage(); renderStageActions();
+      gameRu.value='';
       host.querySelector('#vibe-phase').textContent = state.phase;
       host.querySelector('#vibe-log-box').innerHTML='';
       document.querySelector('#vibe-id-badge').style.display='none';
@@ -242,11 +269,46 @@
     host.querySelector('#vibe-copy-id').addEventListener('click', ()=>{ if(state.offerId){ copyToClipboard(state.offerId); log(`ID ${state.offerId} скопирован.`); } });
 
     (state.logs||[]).forEach(l=>{ const d=document.createElement('div'); d.textContent=l; host.querySelector('#vibe-log-box').appendChild(d); });
-    renderMarket(); renderFlags(); renderStage(); renderDescTab(); refreshIdBadge();
+    renderMarket(); renderFlags(); renderStage(); renderDescTab(); renderStageActions(); refreshIdBadge();
   }
 
-  function refreshPhase(){ const el=document.querySelector('#vibe-phase'); if(el) el.textContent=state.phase; }
+  function refreshPhase(){ const el=document.querySelector('#vibe-phase'); if(el) el.textContent=state.phase; renderStageActions(); }
   function refreshIdBadge(){ const wrap=document.querySelector('#vibe-id-badge'); const idEl=document.querySelector('#vibe-id'); if(!wrap) return; if(state.offerId){ wrap.style.display=''; if(idEl) idEl.textContent=state.offerId; } else wrap.style.display='none'; }
+
+  function renderStageActions(){
+    const host = document.querySelector('#vibe-stage-actions');
+    if (!host) return;
+    const stageKey = state.stage;
+    const defs = STAGE_ACTION_BUTTONS[stageKey] || [];
+    host.innerHTML = '';
+    if (!defs.length){ host.style.display='none'; return; }
+    host.style.display='flex';
+    defs.forEach(def => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'stage-btn';
+      btn.textContent = def.label;
+      if (state.started) btn.disabled = true;
+      if (state.started && state.currentAction === def.id) btn.classList.add('active');
+      btn.addEventListener('click', ()=> startStageAction(def, stageKey));
+      host.appendChild(btn);
+    });
+  }
+
+  function startStageAction(def, stageKey){
+    if (state.started){
+      log('⚠️ Дождитесь завершения текущего процесса.');
+      return;
+    }
+    state.stage = stageKey;
+    state.currentAction = def.id;
+    state.started = true;
+    state.phase = def.phase;
+    saveState();
+    refreshPhase();
+    scheduleNext(60);
+    log(`▶️ Действие этапа (${getStageLabel(stageKey)}): ${def.label}`);
+  }
 
   function onRun(){
     const stage = state.stage || 'stage1';
@@ -274,6 +336,7 @@
     if (!nextPhase){ log('❗ Не удалось определить фазу запуска.'); return; }
 
     state.started = true;
+    state.currentAction = null;
     state.phase = nextPhase;
     saveState(); refreshPhase();
     scheduleNext(50);
@@ -333,6 +396,7 @@
       switch(state.phase){
         case 'fill_general': await phaseFillGeneral(); break;
         case 'fill_en': await phaseFillEN(); break;
+        case 'stage1_link': await phaseStage1Link(); break;
         case 'goto_pricing': await phaseGotoPricing(); break;
         case 'pricing_price': await phasePricingPrice(); break;
         case 'pricing_add_nick': await phasePricingAddNick(); break;
@@ -395,31 +459,71 @@
   // ==========================
 
   // CREATE: RU
-  async function phaseFillGeneral(){
-    if(!isCreatePage()){ log('Ожидание «Категория размещения»...'); scheduleNext(500); return; }
-    log('Фаза: Заполнение RU полей.');
+  async function fillRuBasics({ includeLink = true } = {}){
+    if (!isCreatePage()){ log('Ожидание «Категория размещения»...'); return false; }
+    if (!state.gameNameRu?.trim()){ log('❗ Введите «Название игры (RU/KZ)».'); return false; }
+
     const marker = await waitFor(()=>findByText('.style_OffersCreationTitleWithHint__fa4kw h5, h5', 'Категория размещения', { exact:true }), 15000);
-    if(!marker){ log('❗ Не найден заголовок «Категория размещения».'); scheduleNext(500); return; }
+    if(!marker){ log('❗ Не найден заголовок «Категория размещения».'); return false; }
 
     const titleRu = await waitForSelector('#titleRu');
-    if(!titleRu){ log('❗ Не найдено поле #titleRu'); scheduleNext(500); return; }
+    if(!titleRu){ log('❗ Не найдено поле #titleRu'); return false; }
     const ruTitle = `${state.gameNameRu.trim()} — Steam — ${state.market} — авто`;
     setReactValue(titleRu, ruTitle); log(`Название RU → ${ruTitle}`);
 
     const descRuEl = await waitForSelector('#descriptionRu');
-    if(!descRuEl){ log('❗ Не найдено поле #descriptionRu'); scheduleNext(500); return; }
+    if(!descRuEl){ log('❗ Не найдено поле #descriptionRu'); return false; }
     const ruDesc = state.market==='RU' ? (state.desc.ru||'') : (state.desc.kz||'');
     setReactValue(descRuEl, ruDesc); log(`Описание RU заполнено (${ruDesc.length} симв.).`);
 
-    const redirectInput = await waitForSelector('#redirectUrl');
-    if (redirectInput){
-      if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
-        setReactValue(redirectInput, STAGE_LINK_URL);
-        log('Установлена ссылка перенаправления на https://key-steam.store/gift.');
-      } else {
-        log('Ссылка перенаправления уже установлена.');
-      }
-    } else log('⚠️ Поле redirectUrl не найдено.');
+    if (includeLink){
+      const redirectInput = await waitForSelector('#redirectUrl');
+      if (redirectInput){
+        if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
+          setReactValue(redirectInput, STAGE_LINK_URL);
+          log('Установлена ссылка перенаправления на https://key-steam.store/gift.');
+        } else {
+          log('Ссылка перенаправления уже установлена.');
+        }
+      } else log('⚠️ Поле redirectUrl не найдено.');
+    }
+    return true;
+  }
+
+  async function fillEnBasics(){
+    if (!isCreatePage()){ log('Ожидание формы с вкладками EN...'); return false; }
+    let enTab =
+      findByText('.ant-tabs-tab .ant-tabs-tab-btn, .ant-tabs-tab[role="tab"] .ant-tabs-tab-btn', 'EN', { exact:true }) ||
+      document.querySelector('[data-node-key="en"] .ant-tabs-tab-btn, [data-node-key="en"]') ||
+      document.querySelector('[id^="rc-tabs-"][id$="-tab-en"]');
+    if(!enTab){ await sleep(200);
+      enTab =
+        findByText('.ant-tabs-tab .ant-tabs-tab-btn, .ant-tabs-tab[role="tab"] .ant-tabs-tab-btn', 'EN', { exact:true }) ||
+        document.querySelector('[data-node-key="en"] .ant-tabs-tab-btn, [data-node-key="en"]') ||
+        document.querySelector('[id^="rc-tabs-"][id$="-tab-en"]'); }
+    if(!enTab){ log('❗ Не найдена вкладка EN'); return false; }
+    realisticClick(enTab); await sleep(250);
+
+    let titleEn = await waitForSelector('#titleEn');
+    let descEnEl = await waitForSelector('#descriptionEn');
+    if(!titleEn || !descEnEl){ realisticClick(enTab); await sleep(250); titleEn = await waitForSelector('#titleEn'); descEnEl = await waitForSelector('#descriptionEn'); }
+    if(!titleEn || !descEnEl){ log('❗ Не найдены EN поля (#titleEn / #descriptionEn)'); return false; }
+
+    const gameEn = state.gameNameEn?.trim() || state.gameNameRu?.trim();
+    const enTitle = `${gameEn} – Steam – ${state.market} – auto`;
+    setReactValue(titleEn, enTitle); log(`Название EN → ${enTitle}`);
+
+    const enDesc = state.market==='RU' ? (state.desc.en||'') : ((state.desc.kzEn&&state.desc.kzEn.trim())?state.desc.kzEn:(state.desc.en||''));
+    setReactValue(descEnEl, enDesc); log(`Описание EN заполнено (${enDesc.length} симв.).`);
+    return true;
+  }
+
+  async function phaseFillGeneral(){
+    const includeLink = state.currentAction !== 'stage1_names';
+    if (state.currentAction === 'stage1_names' && !state.gameNameRu?.trim()){ stopAction('❗ Введите «Название игры (RU/KZ)» и повторите действие.'); return; }
+    log('Фаза: Заполнение RU полей.');
+    const ok = await fillRuBasics({ includeLink });
+    if(!ok){ scheduleNext(500); return; }
 
     state.phase='fill_en'; saveState(); refreshPhase();
     scheduleNext(200);
@@ -430,35 +534,36 @@
     if(!isCreatePage()){ scheduleNext(500); return; }
     log('Фаза: Заполнение EN вкладки.');
 
-    let enTab =
-      findByText('.ant-tabs-tab .ant-tabs-tab-btn, .ant-tabs-tab[role="tab"] .ant-tabs-tab-btn', 'EN', { exact:true }) ||
-      document.querySelector('[data-node-key="en"] .ant-tabs-tab-btn, [data-node-key="en"]') ||
-      document.querySelector('[id^="rc-tabs-"][id$="-tab-en"]');
-    if(!enTab){ await sleep(200);
-      enTab =
-        findByText('.ant-tabs-tab .ant-tabs-tab-btn, .ant-tabs-tab[role="tab"] .ant-tabs-tab-btn', 'EN', { exact:true }) ||
-        document.querySelector('[data-node-key="en"] .ant-tabs-tab-btn, [data-node-key="en"]') ||
-        document.querySelector('[id^="rc-tabs-"][id$="-tab-en"]'); }
-    if(!enTab){ log('❗ Не найдена вкладка EN'); scheduleNext(500); return; }
-    realisticClick(enTab); await sleep(250);
+    const ok = await fillEnBasics();
+    if(!ok){ scheduleNext(500); return; }
 
-    let titleEn = await waitForSelector('#titleEn');
-    let descEnEl = await waitForSelector('#descriptionEn');
-    if(!titleEn || !descEnEl){ realisticClick(enTab); await sleep(250); titleEn = await waitForSelector('#titleEn'); descEnEl = await waitForSelector('#descriptionEn'); }
-    if(!titleEn || !descEnEl){ log('❗ Не найдены EN поля (#titleEn / #descriptionEn)'); scheduleNext(500); return; }
-
-    const gameEn = state.gameNameEn?.trim() || state.gameNameRu?.trim();
-    const enTitle = `${gameEn} – Steam – ${state.market} – auto`;
-    setReactValue(titleEn, enTitle); log(`Название EN → ${enTitle}`);
-
-    const enDesc = state.market==='RU' ? (state.desc.en||'') : ((state.desc.kzEn&&state.desc.kzEn.trim())?state.desc.kzEn:(state.desc.en||''));
-    setReactValue(descEnEl, enDesc); log(`Описание EN заполнено (${enDesc.length} симв.).`);
+    if (state.currentAction === 'stage1_names'){
+      stopAction('✅ Названия и описания заполнены.');
+      return;
+    }
 
     const nextBtn = await waitFor(()=> findByText('button span', 'Далее', { exact:true })?.closest('button'), 10000);
     if(!nextBtn){ log('❗ Кнопка «Далее» не найдена. Нажмите её вручную и затем «Продолжить».'); state.phase='goto_pricing'; saveState(); refreshPhase(); scheduleNext(600); return; }
     realisticClick(nextBtn); log('Нажата «Далее» → Pricing...');
     state.phase='goto_pricing'; saveState(); refreshPhase();
     scheduleNext(800);
+  }
+
+  async function phaseStage1Link(){
+    if(!isCreatePage()){ log('Ожидание страницы создания оффера...'); scheduleNext(500); return; }
+    log('Фаза: Установка ссылки перенаправления.');
+
+    const redirectInput = await waitForSelector('#redirectUrl');
+    if(!redirectInput){ log('❗ Поле redirectUrl не найдено.'); scheduleNext(500); return; }
+
+    if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
+      setReactValue(redirectInput, STAGE_LINK_URL);
+      log('Ссылка перенаправления обновлена на https://key-steam.store/gift.');
+    } else {
+      log('Ссылка перенаправления уже установлена.');
+    }
+
+    stopAction('✅ Ссылка перенаправления заполнена.');
   }
 
   // PRICING: переход
@@ -489,6 +594,11 @@
     const unl = await waitFor(()=> findByText('.ant-segmented-item .ant-segmented-item-label', 'Безлимитный', { exact:true }), 5000);
     if (unl){ realisticClick(unl); log('Выбран режим: Безлимитный'); await sleep(150); }
     else { log('⚠️ Не найден переключатель «Безлимитный». Пропускаю.'); }
+
+    if (state.currentAction === 'stage2_price'){
+      stopAction('✅ Цена и режим обновлены.');
+      return;
+    }
 
     if (state.useNick) state.phase='pricing_add_nick';
     else if (state.useRegion) state.phase='pricing_add_region';
@@ -611,6 +721,11 @@
     realisticClick(addBtn); log('Параметр «Никнейм» добавлен.');
     await sleep(300);
 
+    if (state.currentAction === 'stage2_nick'){
+      stopAction('✅ Параметр «ССЫЛКА НА STEAM ПРОФИЛЬ» создан.');
+      return;
+    }
+
     state.phase = state.useRegion ? 'pricing_add_region' : 'pricing_next';
     saveState(); refreshPhase();
     scheduleNext(250);
@@ -656,6 +771,11 @@
     if (!addBtn){ log('❗ В модале не найдена кнопка «Добавить»'); scheduleNext(400); return; }
     realisticClick(addBtn); log('Параметр «Регион» добавлен.');
     await sleep(300);
+
+    if (state.currentAction === 'stage2_region'){
+      stopAction('✅ Параметр «Регион аккаунта» создан.');
+      return;
+    }
 
     state.phase='pricing_next'; saveState(); refreshPhase();
     scheduleNext(250);
@@ -714,6 +834,10 @@
     const oid = extractOfferIdFromUrl();
     if (oid){ state.offerId=oid; saveState(); refreshIdBadge(); log(`✅ Завершено. Offer ID: ${oid}`); }
     else { log('⚠️ ID не распознан в URL.'); }
+    if (state.currentAction === 'stage3_instructions'){
+      stopAction('✅ Инструкции (RU/EN) заполнены.');
+      return;
+    }
     if (state.stage === 'stage3') finishStage('Инструкции заполнены. Можно сохранять оффер.');
     else { state.phase='done'; saveState(); refreshPhase(); }
   }
