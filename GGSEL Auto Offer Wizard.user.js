@@ -24,6 +24,7 @@
   const DEF_STATE = {
     started: false,
     phase: 'idle',
+    stage: 'stage1',
     market: 'RU',
     gameNameRu: '',
     gameNameEn: '',
@@ -34,6 +35,12 @@
     desc: { ru: '', en: '', kz: '', kzEn: '' },
     logs: []
   };
+  const STAGE_META = {
+    stage1: { label: 'Этап 1 — Названия', donePhase: 'stage1_done' },
+    stage2: { label: 'Этап 2 — Цена и параметры', donePhase: 'stage2_done' },
+    stage3: { label: 'Этап 3 — Инструкции', donePhase: 'done' }
+  };
+  const STAGE_LINK_URL = 'https://key-steam.store/gift';
   const persist = {
     set(k, v) { try { GM_setValue(`${NS}.${k}`, v); } catch { localStorage.setItem(`${NS}.${k}`, JSON.stringify(v)); } },
     get(k, d) { try { const v = GM_GetValue(`${NS}.${k}`, undefined); return v === undefined ? _ls(k, d) : v; } catch { return _ls(k, d); }
@@ -43,6 +50,7 @@
   function GM_GetValue(k, d){ try { return GM_getValue(k, d); } catch { return d; } }
 
   let state = Object.assign({}, DEF_STATE, persist.get('state', DEF_STATE));
+  if (!STAGE_META[state.stage]) state.stage = 'stage1';
 
   function saveState(){ persist.set('state', state); }
   function nowTs(){ return new Date().toLocaleTimeString(); }
@@ -133,6 +141,18 @@
     catch { navigator.clipboard?.writeText(text).catch(()=>{}); }
   }
 
+  function getStageMeta(stage){ return STAGE_META[stage] || STAGE_META.stage1; }
+  function getStageLabel(stage){ return getStageMeta(stage).label; }
+  function finishStage(message){
+    const meta = getStageMeta(state.stage);
+    state.started = false;
+    state.phase = meta.donePhase || 'idle';
+    saveState();
+    refreshPhase();
+    if (message) log(message);
+    log(`✅ ${meta.label} завершён.`);
+  }
+
   // ==========================
   // 🎛️ Панель
   // ==========================
@@ -176,6 +196,7 @@
           <textarea id="vibe-desc" rows="5" placeholder="Вставьте/напишите описание выбранной вкладки"></textarea>
         </div>
         <div class="row"><label>Параметры</label><div class="chips"><div class="chip" data-flag="useNick">Никнейм</div><div class="chip" data-flag="useRegion">Регион</div></div></div>
+        <div class="row"><label>Этап</label><div class="chips"><div class="chip" data-stage="stage1">Этап 1</div><div class="chip" data-stage="stage2">Этап 2</div><div class="chip" data-stage="stage3">Этап 3</div></div></div>
         <div class="row" id="vibe-id-badge" style="display:none;"><span class="small">Offer ID:</span><span id="vibe-id">—</span><button class="chip" id="vibe-copy-id">Копировать</button></div>
         <div class="row" id="vibe-row-actions"><button class="btn" id="vibe-run">Заполнить</button><button class="btn secondary" id="vibe-continue">Продолжить</button><button class="btn warn" id="vibe-reset">Сбросить кэш</button></div>
         <div class="row"><label>Логи</label><div id="vibe-log-box"></div></div>
@@ -188,6 +209,7 @@
     const tabs=[...host.querySelectorAll('.tab')];
     const chipsMarket=[...host.querySelectorAll('.chip[data-market]')];
     const chipsFlags=[...host.querySelectorAll('.chip[data-flag]')];
+    const chipsStage=[...host.querySelectorAll('.chip[data-stage]')];
 
     gameRu.value=state.gameNameRu||'';
     gameEn.value=state.gameNameEn||'';
@@ -196,6 +218,7 @@
     function renderDescTab(){ tabs.forEach(t=>t.classList.toggle('active', t.getAttribute('data-dtab')===activeDTab)); descArea.value = state.desc[activeDTab] || ''; }
     function renderMarket(){ chipsMarket.forEach(c=>c.classList.toggle('active', c.getAttribute('data-market')===state.market)); }
     function renderFlags(){ chipsFlags.forEach(c=>c.classList.toggle('active', !!state[c.getAttribute('data-flag')])); }
+    function renderStage(){ chipsStage.forEach(c=>c.classList.toggle('active', c.getAttribute('data-stage')===state.stage)); }
 
     gameRu.addEventListener('input', ()=>{ state.gameNameRu=gameRu.value; saveState(); });
     gameEn.addEventListener('input', ()=>{ state.gameNameEn=gameEn.value; saveState(); });
@@ -203,12 +226,13 @@
     tabs.forEach(t=>t.addEventListener('click', ()=>{ activeDTab=t.getAttribute('data-dtab'); persist.set('activeDTab', activeDTab); renderDescTab(); }));
     chipsMarket.forEach(c=>c.addEventListener('click', ()=>{ state.market=c.getAttribute('data-market'); saveState(); renderMarket(); log(`Рынок переключен на ${state.market}`); }));
     chipsFlags.forEach(c=>c.addEventListener('click', ()=>{ const k=c.getAttribute('data-flag'); state[k]=!state[k]; saveState(); renderFlags(); log(`Флаг ${k} = ${state[k]?'ON':'OFF'}`); }));
+    chipsStage.forEach(c=>c.addEventListener('click', ()=>{ state.stage=c.getAttribute('data-stage'); saveState(); renderStage(); log(`Выбран ${getStageLabel(state.stage)}`); }));
 
     host.querySelector('#vibe-run').addEventListener('click', onRun);
-    host.querySelector('#vibe-continue').addEventListener('click', ()=> scheduleNext(50));
+    host.querySelector('#vibe-continue').addEventListener('click', ()=>{ state.started = true; saveState(); scheduleNext(50); });
     host.querySelector('#vibe-reset').addEventListener('click', ()=>{
       state = Object.assign({}, DEF_STATE, { logs:[] });
-      saveState(); renderMarket(); renderFlags(); renderDescTab();
+      saveState(); renderMarket(); renderFlags(); renderDescTab(); renderStage();
       gameRu.value=''; gameEn.value='';
       host.querySelector('#vibe-phase').textContent = state.phase;
       host.querySelector('#vibe-log-box').innerHTML='';
@@ -218,21 +242,42 @@
     host.querySelector('#vibe-copy-id').addEventListener('click', ()=>{ if(state.offerId){ copyToClipboard(state.offerId); log(`ID ${state.offerId} скопирован.`); } });
 
     (state.logs||[]).forEach(l=>{ const d=document.createElement('div'); d.textContent=l; host.querySelector('#vibe-log-box').appendChild(d); });
-    renderMarket(); renderFlags(); renderDescTab(); refreshIdBadge();
+    renderMarket(); renderFlags(); renderStage(); renderDescTab(); refreshIdBadge();
   }
 
   function refreshPhase(){ const el=document.querySelector('#vibe-phase'); if(el) el.textContent=state.phase; }
   function refreshIdBadge(){ const wrap=document.querySelector('#vibe-id-badge'); const idEl=document.querySelector('#vibe-id'); if(!wrap) return; if(state.offerId){ wrap.style.display=''; if(idEl) idEl.textContent=state.offerId; } else wrap.style.display='none'; }
 
   function onRun(){
-    if (!state.gameNameRu?.trim() && isCreatePage()) { log('❗ Введите «Название игры (RU/KZ)»'); return; }
-    state.started=true;
-    if (isCreatePage()) state.phase='fill_general';
-    else if (isPricingPage()) state.phase='pricing_price';
-    else if (isInstructionsPage()) state.phase='instructions_ru';
-    else state.phase='pricing_price';
+    const stage = state.stage || 'stage1';
+    if (stage === 'stage1' && !state.gameNameRu?.trim() && isCreatePage()) { log('❗ Введите «Название игры (RU/KZ)»'); return; }
+
+    let nextPhase = null;
+    if (stage === 'stage1'){
+      nextPhase = 'fill_general';
+    } else if (stage === 'stage2'){
+      if (isPricingPage()) nextPhase = 'pricing_price';
+      else if (isCreatePage()) nextPhase = 'goto_pricing';
+      else if (isInstructionsPage()){
+        log('⚠️ Этап 2 запускайте на странице «Цена товара».');
+        state.started = false; saveState(); refreshPhase(); return;
+      } else nextPhase = 'goto_pricing';
+    } else if (stage === 'stage3'){
+      if (isInstructionsPage()) nextPhase = 'instructions_ru';
+      else if (isPricingPage()) nextPhase = 'pricing_next';
+      else {
+        log('⚠️ Этап 3 доступен на страницах «Цена товара» или «Инструкция для покупателя».');
+        state.started = false; saveState(); refreshPhase(); return;
+      }
+    }
+
+    if (!nextPhase){ log('❗ Не удалось определить фазу запуска.'); return; }
+
+    state.started = true;
+    state.phase = nextPhase;
     saveState(); refreshPhase();
     scheduleNext(50);
+    log(`▶️ Запуск: ${getStageLabel(stage)} (фаза ${state.phase})`);
   }
 
   // ==========================
@@ -295,6 +340,8 @@
         case 'pricing_next': await phasePricingNext(); break;
         case 'instructions_ru': await phaseInstructionsRU(); break;
         case 'instructions_en': await phaseInstructionsEN(); break;
+        case 'stage1_done':
+        case 'stage2_done':
         case 'done': break;
         default: log(`Неизвестная фаза: ${state.phase}`); break;
       }
@@ -364,6 +411,16 @@
     const ruDesc = state.market==='RU' ? (state.desc.ru||'') : (state.desc.kz||'');
     setReactValue(descRuEl, ruDesc); log(`Описание RU заполнено (${ruDesc.length} симв.).`);
 
+    const redirectInput = await waitForSelector('#redirectUrl');
+    if (redirectInput){
+      if ((redirectInput.value||'').trim() !== STAGE_LINK_URL){
+        setReactValue(redirectInput, STAGE_LINK_URL);
+        log('Установлена ссылка перенаправления на https://key-steam.store/gift.');
+      } else {
+        log('Ссылка перенаправления уже установлена.');
+      }
+    } else log('⚠️ Поле redirectUrl не найдено.');
+
     state.phase='fill_en'; saveState(); refreshPhase();
     scheduleNext(200);
   }
@@ -412,6 +469,10 @@
     }
     log('Фаза: Pricing → установка цены.');
     state.offerId = extractOfferIdFromUrl() || state.offerId; saveState(); refreshIdBadge();
+    if (state.stage === 'stage1'){
+      finishStage('Перешли на шаг «Цена товара». Для продолжения запустите этап 2.');
+      return;
+    }
     state.phase='pricing_price'; saveState(); refreshPhase();
     scheduleNext(200);
   }
@@ -423,7 +484,7 @@
 
     const priceInput = await waitForSelector('#offerCost');
     if(!priceInput){ log('❗ Поле #offerCost не найдено'); scheduleNext(600); return; }
-    setReactValue(priceInput, '1'); log('Цена установлена: 1');
+    setReactValue(priceInput, '99999'); log('Цена установлена: 99999');
 
     const unl = await waitFor(()=> findByText('.ant-segmented-item .ant-segmented-item-label', 'Безлимитный', { exact:true }), 5000);
     if (unl){ realisticClick(unl); log('Выбран режим: Безлимитный'); await sleep(150); }
@@ -438,12 +499,23 @@
 
   // helper: модал «Добавление параметра»
   async function openAddParamModal(){
-    let addBtn = [...document.querySelectorAll('button')].find(b=>/Добавить/i.test(b.textContent));
+    const addBtn = [...document.querySelectorAll('button')].find(b=>/Добавить/i.test(b.textContent||''));
     if(!addBtn){ log('❗ Кнопка «Добавить» для параметра не найдена'); return null; }
-    realisticClick(addBtn);
-    log('Открываю модал «Добавление параметра»...');
-    const modal = await waitForSelector('.ant-modal-content');
-    return modal;
+    const knownModals = new Set([...document.querySelectorAll('.ant-modal-content')]);
+    for (let attempt=1; attempt<=3; attempt++){
+      realisticClick(addBtn);
+      log(`Открываю модал «Добавление параметра» (попытка ${attempt})...`);
+      const modal = await waitFor(() => {
+        const modals = [...document.querySelectorAll('.ant-modal-content')].filter(m=>isVisible(m));
+        const fresh = modals.find(m=>!knownModals.has(m));
+        return fresh || modals[0] || null;
+      }, 3000);
+      if (modal) return modal;
+      log('⚠️ Модал не появился, повторяю нажатие «Добавить».');
+      await sleep(200);
+    }
+    log('❗ Не удалось открыть модал параметров.');
+    return null;
   }
 
   // helper: открыть выпадашку типов
@@ -597,6 +669,10 @@
     const nextBtn = await waitFor(()=> findByText('button span', 'Далее', { exact:true })?.closest('button'), 10000);
     if (!nextBtn){ log('❗ Кнопка «Далее» не найдена на Pricing. Нажмите её вручную и жмите «Продолжить».'); scheduleNext(800); return; }
     realisticClick(nextBtn); log('Нажата «Далее» → инструкции.');
+    if (state.stage === 'stage2'){
+      finishStage('Шаг «Цена товара» завершён. Запустите этап 3 для заполнения инструкций.');
+      return;
+    }
     state.phase='instructions_ru'; saveState(); refreshPhase();
     scheduleNext(900);
   }
@@ -638,7 +714,8 @@
     const oid = extractOfferIdFromUrl();
     if (oid){ state.offerId=oid; saveState(); refreshIdBadge(); log(`✅ Завершено. Offer ID: ${oid}`); }
     else { log('⚠️ ID не распознан в URL.'); }
-    state.phase='done'; saveState(); refreshPhase();
+    if (state.stage === 'stage3') finishStage('Инструкции заполнены. Можно сохранять оффер.');
+    else { state.phase='done'; saveState(); refreshPhase(); }
   }
 
   // ==========================
