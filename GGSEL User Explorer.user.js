@@ -1866,6 +1866,7 @@
                 gap: 12px;
                 width: 100%;
                 flex: 1 1 auto;
+                min-width: 0;
             }
             .ggsel-user-card-title-row {
                 display: flex;
@@ -1901,8 +1902,11 @@
             .ggsel-user-card-footer {
                 margin-top: 6px;
                 display: flex;
+                align-items: center;
                 justify-content: flex-end;
-                width: 100%;
+                gap: 8px;
+                align-self: flex-end;
+                margin-left: auto;
             }
             .ggsel-user-card-id {
                 font-size: 14px;
@@ -2101,6 +2105,8 @@
                 display: flex;
                 justify-content: flex-end;
                 padding-top: 4px;
+                align-self: flex-end;
+                margin-left: auto;
             }
             .ggsel-order-card-created {
                 font-size: 12px;
@@ -2111,6 +2117,7 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 6px;
+                align-items: center;
             }
             .ggsel-order-chip {
                 display: inline-flex;
@@ -3115,9 +3122,11 @@
 
         titleRow.appendChild(titleGroup);
 
-        const createInfoLine = (fields) => {
-            const line = document.createElement('div');
-            line.className = 'ggsel-user-card-line';
+        const chips = document.createElement('div');
+        chips.className = 'ggsel-user-card-line';
+        let hasChips = false;
+
+        const appendFields = (fields) => {
             fields.forEach(({ key, label, value }) => {
                 if (key && Object.prototype.hasOwnProperty.call(userFieldSettings, key)) {
                     if (!userFieldSettings[key]) {
@@ -3140,27 +3149,23 @@
                 field.title = `${label}: ${normalized}`;
                 field.appendChild(labelEl);
                 field.appendChild(valueEl);
-                line.appendChild(field);
+                chips.appendChild(field);
+                hasChips = true;
             });
-            return line;
         };
 
-        const primaryLine = createInfoLine([
+        appendFields([
             { key: 'email', label: 'Почта', value: user.email },
             { key: 'balance', label: 'Баланс', value: user.balance }
         ]);
-
-        const secondaryLine = createInfoLine([
+        appendFields([
             { key: 'ggselId', label: 'GGSEL ID', value: user.ggselId },
             { key: 'withdrawals', label: 'Вывод', value: user.withdrawals }
         ]);
 
         meta.appendChild(titleRow);
-        if (primaryLine.childElementCount) {
-            meta.appendChild(primaryLine);
-        }
-        if (secondaryLine.childElementCount) {
-            meta.appendChild(secondaryLine);
+        if (hasChips) {
+            meta.appendChild(chips);
         }
 
         header.appendChild(meta);
@@ -3289,9 +3294,11 @@
         const content = document.createElement('div');
         content.className = 'ggsel-order-card-content';
 
-        const createChipRow = (fields) => {
-            const row = document.createElement('div');
-            row.className = 'ggsel-order-chip-row';
+        const chipRow = document.createElement('div');
+        chipRow.className = 'ggsel-order-chip-row';
+        let hasChips = false;
+
+        const appendChipGroup = (fields) => {
             fields.forEach(({ key, label, value, url }) => {
                 if (key && Object.prototype.hasOwnProperty.call(orderFieldSettings, key)) {
                     if (!orderFieldSettings[key]) {
@@ -3324,27 +3331,27 @@
                 } else {
                     chip.textContent = normalized;
                 }
-                row.appendChild(chip);
+                chipRow.appendChild(chip);
+                hasChips = true;
             });
-            if (row.childElementCount) {
-                content.appendChild(row);
-            }
         };
 
-        createChipRow([
+        appendChipGroup([
             { key: 'status', label: 'Статус', value: order.status },
             { key: 'amount', label: 'Сумма', value: order.amount },
             { key: 'count', label: 'Кол-во', value: order.count }
         ]);
-
-        createChipRow([
+        appendChipGroup([
             { key: 'buyer', label: 'Покупатель', value: order.userId, url: order.userUrl },
             { key: 'payment', label: 'Платёж', value: order.paymentSystem }
         ]);
-
-        createChipRow([
+        appendChipGroup([
             { key: 'product', label: 'Товар', value: order.offerLabel, url: order.offerUrl }
         ]);
+
+        if (hasChips) {
+            content.appendChild(chipRow);
+        }
 
         if (orderFieldSettings.created) {
             const createdText = collapseSpaces(order.createdAt || '');
