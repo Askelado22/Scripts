@@ -23,6 +23,7 @@
     const ORDERS_URL = `${BASE_URL}/admin/orders`;
     const LOAD_MORE_LABEL = 'Загрузить ещё';
     const DETAIL_PREFETCH_CONCURRENCY = 3;
+    const OFFER_PREFETCH_CONCURRENCY = 3;
     const HINTS_HTML = 'Доступные фильтры: <code>id</code>, <code>username</code>, <code>email</code>, <code>ggsel</code>, <code>status</code>, <code>amount</code>, <code>created_from</code>, <code>created_to</code>, <code>last_login_from</code>, <code>last_login_to</code>, <code>ip</code>, <code>wallet</code>, <code>phone</code>. Используйте <code>ключ:значение</code> или свободный текст.';
     const HEADSET_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a5 5 0 0 0-5 5v1h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a6 6 0 1 1 12 0v6a2.5 2.5 0 0 1-2.5 2.5H9.366a1 1 0 0 1-.866.5h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 .866.5H11.5A1.5 1.5 0 0 0 13 12h-1a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1V6a5 5 0 0 0-5-5"/></svg>';
     const USERS_MODE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5"/></svg>';
@@ -269,6 +270,7 @@
         results: [],
         lastToken: 0,
         detailCache: new Map(),
+        offerCache: new Map(),
         searchPlan: null,
         settings: getDefaultSettings(),
         anchorPosition: null,
@@ -2901,12 +2903,157 @@
                 amount,
                 offerLabel,
                 offerUrl,
+                offerTitle: '',
                 count,
                 status,
                 createdAt
             });
         }
         return items;
+    };
+
+    const parseOfferTitleFromDocument = (doc) => {
+        const selectors = [
+            '.box .box-header .box-title',
+            '.box .box-title',
+            '.content-header h1',
+            'h1',
+            'title'
+        ];
+        for (const selector of selectors) {
+            const node = doc.querySelector(selector);
+            if (node) {
+                const text = collapseSpaces(node.textContent || '');
+                if (text) {
+                    return text;
+                }
+            }
+        }
+        return '';
+    };
+
+    const ensureOfferTitle = async (order) => {
+        const url = order?.offerUrl;
+        if (!url) {
+            return '';
+        }
+        const cached = state.offerCache.get(url);
+        if (cached) {
+            if (cached.status === 'ready') {
+                order.offerTitle = cached.title;
+                order.offerLabel = cached.title || order.offerLabel;
+                return cached.title;
+            }
+            if (cached.status === 'pending' && cached.promise) {
+                return cached.promise;
+            }
+        }
+        const promise = (async () => {
+            try {
+                const doc = await fetchDocument(url);
+                const title = collapseSpaces(parseOfferTitleFromDocument(doc)) || '';
+                state.offerCache.set(url, { status: 'ready', title });
+                order.offerTitle = title;
+                order.offerLabel = title || order.offerLabel;
+                return title;
+            } catch (error) {
+                state.offerCache.set(url, { status: 'error', error });
+                throw error;
+            }
+        })();
+        state.offerCache.set(url, { status: 'pending', promise });
+        return promise;
+    };
+
+    const updateOrderCardOfferTitle = (orderId, title) => {
+        const normalizedTitle = collapseSpaces(title || '');
+        const stored = state.results.find((item) => item && item.id === orderId);
+        const fallback = stored ? collapseSpaces(stored.offerTitle || stored.offerLabel || '') : '';
+        const displayTitle = normalizedTitle || fallback || 'Заказ';
+        if (!state.resultsContainer) {
+            if (stored) {
+                stored.offerTitle = displayTitle;
+                stored.offerLabel = displayTitle;
+            }
+            return;
+        }
+        const card = state.resultsContainer.querySelector(`.ggsel-order-card[data-order-id="${orderId}"]`);
+        if (card) {
+            const titleEl = card.querySelector('.ggsel-order-card-title');
+            if (titleEl) {
+                titleEl.textContent = displayTitle;
+            }
+            const productChipValue = card.querySelector('.ggsel-order-chip[data-field-key="product"] .ggsel-order-chip-value');
+            if (productChipValue) {
+                productChipValue.textContent = displayTitle;
+            }
+            const orderData = card.__orderData;
+            if (orderData) {
+                orderData.offerTitle = displayTitle;
+                orderData.offerLabel = displayTitle;
+            }
+        }
+        if (stored) {
+            stored.offerTitle = displayTitle;
+            stored.offerLabel = displayTitle;
+        }
+        requestAnimationFrame(() => updateAnchorOrientation());
+    };
+
+    const prefetchOrderOffers = async (orders) => {
+        if (!Array.isArray(orders) || !orders.length) {
+            return;
+        }
+        const queue = orders.filter((order) => {
+            if (!order || !order.offerUrl) {
+                return false;
+            }
+            const cached = state.offerCache.get(order.offerUrl);
+            if (!cached) {
+                return true;
+            }
+            if (cached.status === 'ready') {
+                if (cached.title && order.offerTitle !== cached.title) {
+                    order.offerTitle = cached.title;
+                    order.offerLabel = cached.title || order.offerLabel;
+                    updateOrderCardOfferTitle(order.id, cached.title);
+                }
+                return false;
+            }
+            return cached.status === 'error';
+        });
+        if (!queue.length) {
+            return;
+        }
+        let index = 0;
+        const workerCount = Math.min(OFFER_PREFETCH_CONCURRENCY, queue.length);
+        const workers = Array.from({ length: workerCount }, () => (async () => {
+            while (true) {
+                const currentIndex = index;
+                index += 1;
+                if (currentIndex >= queue.length) {
+                    break;
+                }
+                const current = queue[currentIndex];
+                if (!current) {
+                    continue;
+                }
+                try {
+                    const title = await ensureOfferTitle(current);
+                    if (title) {
+                        const stored = state.results.find((item) => item && item.id === current.id && item.orderUrl === current.orderUrl);
+                        if (stored) {
+                            stored.offerTitle = title;
+                            stored.offerLabel = title || stored.offerLabel;
+                        }
+                        updateOrderCardOfferTitle(current.id, title);
+                    }
+                } catch (error) {
+                    console.warn('Не удалось загрузить название товара заказа', current?.id, error);
+                }
+            }
+        })());
+        await Promise.all(workers);
     };
 
     const hasNextPage = (doc) => {
@@ -3153,22 +3300,32 @@
                 }
                 const field = document.createElement('span');
                 field.className = 'ggsel-user-card-field';
-                const labelEl = document.createElement('span');
-                labelEl.className = 'ggsel-user-card-field-label';
-                labelEl.textContent = label;
+                if (key) {
+                    field.dataset.fieldKey = key;
+                }
+                const labelText = typeof label === 'string' ? collapseSpaces(label) : '';
                 const valueEl = document.createElement('span');
                 valueEl.className = 'ggsel-user-card-field-value';
                 valueEl.textContent = normalized;
-                field.title = `${label}: ${normalized}`;
-                field.appendChild(labelEl);
-                field.appendChild(valueEl);
+                if (labelText) {
+                    const labelEl = document.createElement('span');
+                    labelEl.className = 'ggsel-user-card-field-label';
+                    labelEl.textContent = labelText;
+                    field.title = `${labelText}: ${normalized}`;
+                    field.appendChild(labelEl);
+                    field.appendChild(valueEl);
+                } else {
+                    field.classList.add('value-only');
+                    field.title = normalized;
+                    field.appendChild(valueEl);
+                }
                 chips.appendChild(field);
                 hasChips = true;
             });
         };
 
         appendFields([
-            { key: 'email', label: 'Почта', value: user.email },
+            { key: 'email', label: '', value: user.email },
             { key: 'balance', label: 'Баланс', value: user.balance }
         ]);
         appendFields([
@@ -3280,7 +3437,13 @@
 
         const title = document.createElement('div');
         title.className = 'ggsel-order-card-title';
-        title.textContent = collapseSpaces(order.offerLabel) || 'Заказ';
+        if (order.offerUrl) {
+            const cachedOffer = state.offerCache.get(order.offerUrl);
+            if (cachedOffer && cachedOffer.status === 'ready') {
+                order.offerTitle = cachedOffer.title;
+            }
+        }
+        title.textContent = collapseSpaces(order.offerTitle || order.offerLabel) || 'Заказ';
         titleGroup.appendChild(title);
 
         const badgePriority = [
@@ -3327,6 +3490,9 @@
                 }
                 const chip = document.createElement(url ? 'a' : 'span');
                 chip.className = 'ggsel-order-chip';
+                if (key) {
+                    chip.dataset.fieldKey = key;
+                }
                 if (url) {
                     chip.href = url;
                     chip.target = '_blank';
@@ -3362,7 +3528,7 @@
             { key: 'payment', label: 'Платёж', value: order.paymentSystem }
         ]);
         appendChipGroup([
-            { key: 'product', label: 'Товар', value: order.offerLabel, url: order.offerUrl }
+            { key: 'product', label: 'Товар', value: order.offerTitle || order.offerLabel, url: order.offerUrl }
         ]);
 
         const infoRow = document.createElement('div');
@@ -4107,6 +4273,8 @@
                 }
                 if (mode === MODE_USERS) {
                     await prefetchUserDetails(append ? items : state.results);
+                } else if (mode === MODE_ORDERS) {
+                    await prefetchOrderOffers(append ? items : state.results);
                 }
                 if (token !== state.lastToken) {
                     return;
@@ -4162,6 +4330,11 @@
 
             if (aggregated.length) {
                 updateResults(aggregated, false);
+                if (mode === MODE_USERS) {
+                    await prefetchUserDetails(aggregated);
+                } else if (mode === MODE_ORDERS) {
+                    await prefetchOrderOffers(aggregated);
+                }
             } else if (!errors.length) {
                 const placeholder = document.createElement('div');
                 placeholder.className = 'ggsel-user-explorer-placeholder';
