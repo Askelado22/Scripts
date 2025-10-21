@@ -76,6 +76,89 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
   const chatCache = new Map();
   const productCache = new Map();
 
+  let confirmModalInstance = null;
+
+  function ensureConfirmModal() {
+    if (confirmModalInstance) return confirmModalInstance;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'vui-modalOverlay';
+    overlay.setAttribute('role', 'presentation');
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = `
+      <div class="vui-modal" role="dialog" aria-modal="true">
+        <div class="vui-modalText" data-confirm-text></div>
+        <div class="vui-modalButtons">
+          <button type="button" class="vui-btn vui-btn--ghost" data-confirm-cancel>Отмена</button>
+          <button type="button" class="vui-btn vui-btn--primary" data-confirm-accept>Продолжить</button>
+        </div>
+      </div>
+    `;
+
+    const appendOverlay = () => {
+      if (!overlay.isConnected) document.body.appendChild(overlay);
+    };
+    if (document.body) appendOverlay();
+    else document.addEventListener('DOMContentLoaded', appendOverlay, { once: true });
+
+    const textEl = overlay.querySelector('[data-confirm-text]');
+    const cancelBtn = overlay.querySelector('[data-confirm-cancel]');
+    const acceptBtn = overlay.querySelector('[data-confirm-accept]');
+    let confirmHandler = null;
+    let previousActive = null;
+
+    const close = () => {
+      overlay.classList.remove('is-visible');
+      overlay.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('vui-modalOpen');
+      const toFocus = previousActive;
+      previousActive = null;
+      confirmHandler = null;
+      if (toFocus && typeof toFocus.focus === 'function') {
+        try { toFocus.focus(); } catch {}
+      }
+    };
+
+    const open = ({ message, confirmLabel, onConfirm }) => {
+      textEl.textContent = message || '';
+      acceptBtn.textContent = confirmLabel || 'Продолжить';
+      previousActive = document.activeElement;
+      confirmHandler = typeof onConfirm === 'function' ? onConfirm : null;
+      overlay.classList.add('is-visible');
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('vui-modalOpen');
+      requestAnimationFrame(() => {
+        acceptBtn.focus();
+      });
+    };
+
+    cancelBtn.addEventListener('click', () => {
+      close();
+    });
+
+    acceptBtn.addEventListener('click', () => {
+      const handler = confirmHandler;
+      close();
+      if (handler) handler();
+    });
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        close();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && overlay.classList.contains('is-visible')) {
+        event.preventDefault();
+        close();
+      }
+    });
+
+    confirmModalInstance = { open, close };
+    return confirmModalInstance;
+  }
+
   function findH(selector, text) {
     return Array.from(document.querySelectorAll(selector))
       .find(h => norm(h.textContent).toLowerCase().includes(text.toLowerCase()));
@@ -492,6 +575,12 @@ body{color-scheme:dark;}
 .vui-btn--alert:hover{background:rgba(248,81,73,.28);}
 .vui-btn--ghost{background:transparent;}
 .vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
+body.vui-modalOpen{overflow:hidden;}
+.vui-modalOverlay{position:fixed;inset:0;background:rgba(8,10,15,.76);display:flex;align-items:center;justify-content:center;padding:24px;z-index:99999;opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.vui-modalOverlay.is-visible{opacity:1;pointer-events:auto;}
+.vui-modal{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:14px;box-shadow:0 24px 50px rgba(0,0,0,.45);padding:20px;max-width:360px;width:100%;display:flex;flex-direction:column;gap:18px;}
+.vui-modalText{font-size:14px;line-height:1.5;color:var(--vui-text);}
+.vui-modalButtons{display:flex;justify-content:flex-end;gap:10px;}
 .vui-layoutSide{min-width:280px;}
 .vui-card,.vui-mini{border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card);color:var(--vui-text);}
 .vui-card__head,.vui-mini__head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px dashed #222;}
@@ -1195,9 +1284,31 @@ body{color-scheme:dark;}
       link.addEventListener('click', (event) => {
         const message = link.getAttribute('data-confirm-message');
         if (!message) return;
-        if (!window.confirm(message)) {
-          event.preventDefault();
-        }
+        event.preventDefault();
+        const modal = ensureConfirmModal();
+        const confirmLabel = link.getAttribute('data-confirm-label') || norm(link.textContent) || 'Продолжить';
+        modal.open({
+          message,
+          confirmLabel,
+          onConfirm: () => {
+            const attrValue = message;
+            link.removeAttribute('data-confirm-message');
+            setTimeout(() => {
+              if (link.isConnected && attrValue) {
+                link.setAttribute('data-confirm-message', attrValue);
+              }
+            }, 0);
+            if (typeof link.click === 'function') {
+              link.click();
+            } else {
+              const href = link.getAttribute('href');
+              if (href) {
+                const target = link.getAttribute('target') || '_self';
+                window.open(href, target);
+              }
+            }
+          },
+        });
       });
     });
 
