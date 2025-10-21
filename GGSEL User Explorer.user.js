@@ -27,6 +27,9 @@
     const HEADSET_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a5 5 0 0 0-5 5v1h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a6 6 0 1 1 12 0v6a2.5 2.5 0 0 1-2.5 2.5H9.366a1 1 0 0 1-.866.5h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 .866.5H11.5A1.5 1.5 0 0 0 13 12h-1a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h1V6a5 5 0 0 0-5-5"/></svg>';
     const USERS_MODE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5"/></svg>';
     const ORDERS_MODE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M14.5 3a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5zm-13-1A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2z"/><path d="M7 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m-1.496-.854a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708l.146.147 1.146-1.147a.5.5 0 0 1 .708 0M7 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m-1.496-.854a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708l.146.147 1.146-1.147a.5.5 0 0 1 .708 0"/></svg>';
+    const HISTORY_KEY = 'ggsel-user-explorer:history';
+    const HISTORY_LIMIT = 5;
+
     const DEFAULT_SHORTCUT = Object.freeze({
         ctrl: true,
         alt: false,
@@ -35,10 +38,39 @@
         code: 'KeyF'
     });
 
-    const DEFAULT_SETTINGS = Object.freeze({
-        extraActions: false,
-        shortcut: DEFAULT_SHORTCUT
+    const DEFAULT_USER_FIELDS = Object.freeze({
+        email: true,
+        balance: true,
+        ggselId: true,
+        withdrawals: true
     });
+
+    const DEFAULT_ORDER_FIELDS = Object.freeze({
+        status: true,
+        amount: true,
+        count: true,
+        buyer: true,
+        created: true,
+        payment: true,
+        product: true
+    });
+
+    const USER_FIELD_OPTION_DEFS = [
+        { key: 'email', label: 'Почта', description: 'Показывать email пользователя в карточке.' },
+        { key: 'balance', label: 'Баланс', description: 'Отображать баланс пользователя.' },
+        { key: 'ggselId', label: 'GGSEL ID', description: 'Показывать идентификатор продавца GGSEL.' },
+        { key: 'withdrawals', label: 'Вывод', description: 'Отмечать доступность вывода средств.' }
+    ];
+
+    const ORDER_FIELD_OPTION_DEFS = [
+        { key: 'status', label: 'Статус', description: 'Отображать статус заказа.' },
+        { key: 'amount', label: 'Сумма', description: 'Показывать сумму заказа.' },
+        { key: 'count', label: 'Кол-во', description: 'Показывать количество товаров в заказе.' },
+        { key: 'buyer', label: 'Покупатель', description: 'Отображать покупателя и ссылку на профиль.' },
+        { key: 'created', label: 'Создан', description: 'Показывать дату и время создания заказа.' },
+        { key: 'payment', label: 'Платёж', description: 'Отображать выбранную платёжную систему.' },
+        { key: 'product', label: 'Товар', description: 'Показывать название и ссылку на товар.' }
+    ];
     const EXCLUDED_ACTION_LABELS = new Set(['Назад к списку']);
     const OPTIONAL_ACTION_LABELS = new Set([
         'Отключить все товары от GGSel',
@@ -178,6 +210,30 @@
         code: typeof shortcut?.code === 'string' && shortcut.code ? shortcut.code : DEFAULT_SHORTCUT.code
     });
 
+    const normalizeUserFieldSettings = (value) => {
+        const base = { ...DEFAULT_USER_FIELDS };
+        if (value && typeof value === 'object') {
+            Object.keys(base).forEach((key) => {
+                if (Object.prototype.hasOwnProperty.call(value, key)) {
+                    base[key] = Boolean(value[key]);
+                }
+            });
+        }
+        return base;
+    };
+
+    const normalizeOrderFieldSettings = (value) => {
+        const base = { ...DEFAULT_ORDER_FIELDS };
+        if (value && typeof value === 'object') {
+            Object.keys(base).forEach((key) => {
+                if (Object.prototype.hasOwnProperty.call(value, key)) {
+                    base[key] = Boolean(value[key]);
+                }
+            });
+        }
+        return base;
+    };
+
     const isModifierCode = (code = '') => /^(?:Control|Shift|Alt|Meta)/i.test(code);
 
     const normalizeShortcut = (value) => {
@@ -197,7 +253,9 @@
 
     const getDefaultSettings = () => ({
         extraActions: false,
-        shortcut: cloneShortcut(DEFAULT_SHORTCUT)
+        shortcut: cloneShortcut(DEFAULT_SHORTCUT),
+        userFields: normalizeUserFieldSettings(),
+        orderFields: normalizeOrderFieldSettings()
     });
 
     const state = {
@@ -244,6 +302,10 @@
         searchControl: null,
         searchRow: null,
         resultsWrapper: null,
+        historyPopover: null,
+        historyList: null,
+        historyVisible: false,
+        queryHistory: [],
         lastPanelHeight: FAB_SIZE
     };
 
@@ -649,7 +711,9 @@
             if (parsed && typeof parsed === 'object') {
                 state.settings = {
                     extraActions: Boolean(parsed.extraActions),
-                    shortcut: normalizeShortcut(parsed.shortcut)
+                    shortcut: normalizeShortcut(parsed.shortcut),
+                    userFields: normalizeUserFieldSettings(parsed.userFields),
+                    orderFields: normalizeOrderFieldSettings(parsed.orderFields)
                 };
             }
         } catch (error) {
@@ -662,11 +726,116 @@
         try {
             localStorage.setItem(SETTINGS_KEY, JSON.stringify({
                 extraActions: Boolean(state.settings?.extraActions),
-                shortcut: normalizeShortcut(state.settings?.shortcut)
+                shortcut: normalizeShortcut(state.settings?.shortcut),
+                userFields: normalizeUserFieldSettings(state.settings?.userFields),
+                orderFields: normalizeOrderFieldSettings(state.settings?.orderFields)
             }));
         } catch (error) {
             console.warn('Не удалось сохранить настройки GGSEL User Explorer', error);
         }
+    };
+
+    const loadQueryHistory = () => {
+        state.queryHistory = [];
+        try {
+            const raw = localStorage.getItem(HISTORY_KEY);
+            if (!raw) {
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                const items = parsed
+                    .map((item) => collapseSpaces(typeof item === 'string' ? item : ''))
+                    .filter(Boolean);
+                state.queryHistory = items.slice(0, HISTORY_LIMIT);
+            }
+        } catch (error) {
+            console.warn('Не удалось загрузить историю запросов GGSEL User Explorer', error);
+            state.queryHistory = [];
+        }
+    };
+
+    const saveQueryHistory = () => {
+        try {
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(state.queryHistory || []));
+        } catch (error) {
+            console.warn('Не удалось сохранить историю запросов GGSEL User Explorer', error);
+        }
+    };
+
+    const rememberQuery = (query) => {
+        const normalized = collapseSpaces(query || '');
+        if (!normalized) {
+            return;
+        }
+        const history = Array.isArray(state.queryHistory) ? [...state.queryHistory] : [];
+        const existingIndex = history.findIndex((item) => item === normalized);
+        if (existingIndex !== -1) {
+            history.splice(existingIndex, 1);
+        }
+        history.unshift(normalized);
+        state.queryHistory = history.slice(0, HISTORY_LIMIT);
+        saveQueryHistory();
+        if (state.historyVisible) {
+            renderHistoryPopover();
+        }
+    };
+
+    const renderHistoryPopover = () => {
+        if (!state.historyList) {
+            return;
+        }
+        const history = Array.isArray(state.queryHistory) ? state.queryHistory : [];
+        state.historyList.innerHTML = '';
+        if (!history.length) {
+            const empty = document.createElement('div');
+            empty.className = 'ggsel-user-history-empty';
+            empty.textContent = 'Нет недавних запросов';
+            state.historyList.appendChild(empty);
+            return;
+        }
+        history.slice(0, HISTORY_LIMIT).forEach((item) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'ggsel-user-history-item';
+            button.textContent = item;
+            button.title = item;
+            button.addEventListener('click', () => {
+                if (!state.input) return;
+                state.input.value = item;
+                try {
+                    state.input.focus({ preventScroll: true });
+                } catch (error) {
+                    state.input.focus();
+                }
+                hideHistoryPopover();
+                onQueryChange(item);
+                onQueryChange.flush?.();
+            });
+            state.historyList.appendChild(button);
+        });
+    };
+
+    const showHistoryPopover = () => {
+        if (!state.historyPopover) {
+            return;
+        }
+        renderHistoryPopover();
+        state.historyPopover.hidden = false;
+        state.historyPopover.classList.add('visible');
+        state.historyVisible = true;
+    };
+
+    const hideHistoryPopover = () => {
+        if (!state.historyPopover) {
+            return;
+        }
+        if (state.historyPopover.hidden) {
+            return;
+        }
+        state.historyPopover.hidden = true;
+        state.historyPopover.classList.remove('visible');
+        state.historyVisible = false;
     };
 
     const centerWindowElement = (element) => {
@@ -922,6 +1091,78 @@
             label.appendChild(textWrap);
             options.appendChild(label);
 
+            const fieldsContainer = document.createElement('div');
+            fieldsContainer.className = 'ggsel-user-window__field-groups';
+
+            const fieldControls = { userFields: {}, orderFields: {} };
+
+            const buildFieldsGroup = (groupKey, headingText, defs) => {
+                const group = document.createElement('div');
+                group.className = 'ggsel-user-window__fields-group';
+
+                const heading = document.createElement('h4');
+                heading.className = 'ggsel-user-window__fields-title';
+                heading.textContent = headingText;
+                group.appendChild(heading);
+
+                const list = document.createElement('div');
+                list.className = 'ggsel-user-window__fields-list';
+
+                defs.forEach((optionDef) => {
+                    const row = document.createElement('label');
+                    row.className = 'ggsel-user-window__toggle';
+
+                    const fieldCheckbox = document.createElement('input');
+                    fieldCheckbox.type = 'checkbox';
+                    fieldCheckbox.dataset.group = groupKey;
+                    fieldCheckbox.dataset.key = optionDef.key;
+
+                    const text = document.createElement('div');
+                    text.className = 'ggsel-user-window__toggle-text';
+
+                    const rowTitle = document.createElement('span');
+                    rowTitle.className = 'ggsel-user-window__option-title';
+                    rowTitle.textContent = optionDef.label;
+
+                    const rowDesc = document.createElement('span');
+                    rowDesc.className = 'ggsel-user-window__option-desc ggsel-user-window__toggle-desc';
+                    rowDesc.textContent = optionDef.description || '';
+
+                    text.appendChild(rowTitle);
+                    if (optionDef.description) {
+                        text.appendChild(rowDesc);
+                    }
+
+                    row.appendChild(fieldCheckbox);
+                    row.appendChild(text);
+
+                    fieldCheckbox.addEventListener('change', () => {
+                        if (!state.settings[groupKey]) {
+                            state.settings[groupKey] = groupKey === 'userFields'
+                                ? normalizeUserFieldSettings()
+                                : normalizeOrderFieldSettings();
+                        }
+                        state.settings[groupKey] = {
+                            ...state.settings[groupKey],
+                            [optionDef.key]: fieldCheckbox.checked
+                        };
+                        saveSettings();
+                        rerenderCurrentResults();
+                    });
+
+                    list.appendChild(row);
+                    fieldControls[groupKey][optionDef.key] = fieldCheckbox;
+                });
+
+                group.appendChild(list);
+                fieldsContainer.appendChild(group);
+            };
+
+            buildFieldsGroup('userFields', 'Пользователи', USER_FIELD_OPTION_DEFS);
+            buildFieldsGroup('orderFields', 'Заказы', ORDER_FIELD_OPTION_DEFS);
+
+            options.appendChild(fieldsContainer);
+
             const shortcutWrap = document.createElement('div');
             shortcutWrap.className = 'ggsel-user-window__shortcut';
 
@@ -986,11 +1227,32 @@
             });
 
             win.initialized = true;
-            win.controls = { checkbox, shortcutDisplay, shortcutAssign: assignBtn, shortcutReset: resetBtn };
+            win.controls = {
+                checkbox,
+                shortcutDisplay,
+                shortcutAssign: assignBtn,
+                shortcutReset: resetBtn,
+                fieldCheckboxes: fieldControls
+            };
         }
 
         if (win.controls?.checkbox) {
             win.controls.checkbox.checked = Boolean(state.settings.extraActions);
+        }
+
+        if (win.controls?.fieldCheckboxes) {
+            const userSettings = normalizeUserFieldSettings(state.settings.userFields);
+            const orderSettings = normalizeOrderFieldSettings(state.settings.orderFields);
+            Object.entries(win.controls.fieldCheckboxes.userFields || {}).forEach(([key, el]) => {
+                if (el) {
+                    el.checked = Boolean(userSettings[key]);
+                }
+            });
+            Object.entries(win.controls.fieldCheckboxes.orderFields || {}).forEach(([key, el]) => {
+                if (el) {
+                    el.checked = Boolean(orderSettings[key]);
+                }
+            });
         }
 
         refreshShortcutDisplay();
@@ -1162,6 +1424,7 @@
                 opacity: 0;
                 transform: scaleX(0.9);
                 pointer-events: none;
+                position: relative;
             }
             .ggsel-user-explorer-anchor.expand-left .ggsel-user-explorer-search-control {
                 transform-origin: right center;
@@ -1253,6 +1516,58 @@
             .ggsel-user-explorer-search-input:focus {
                 border-color: #6f89ff;
                 box-shadow: 0 0 0 3px rgba(111, 137, 255, 0.25);
+            }
+            .ggsel-user-history-popover {
+                position: absolute;
+                top: calc(100% + 6px);
+                left: 0;
+                right: 0;
+                border-radius: 14px;
+                border: 1px solid #2f2f2f;
+                background: rgba(16, 16, 16, 0.94);
+                box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+                padding: 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                max-height: 220px;
+                overflow-y: auto;
+                z-index: 5;
+            }
+            .ggsel-user-history-popover[hidden] {
+                display: none !important;
+            }
+            .ggsel-user-history-list {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .ggsel-user-history-item {
+                border: 1px solid #2f2f2f;
+                border-radius: 12px;
+                background: #181818;
+                color: #eaeaea;
+                font-size: 13px;
+                padding: 6px 10px;
+                text-align: left;
+                cursor: pointer;
+                transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .ggsel-user-history-item:hover,
+            .ggsel-user-history-item:focus-visible {
+                outline: none;
+                border-color: #6f89ff;
+                color: #9fb7ff;
+                background: rgba(111, 137, 255, 0.18);
+            }
+            .ggsel-user-history-empty {
+                font-size: 12px;
+                color: #a5a5a5;
+                text-align: center;
+                padding: 4px 0;
             }
             .ggsel-user-explorer-results {
                 display: flex;
@@ -1362,6 +1677,33 @@
                 gap: 10px;
                 margin-top: 6px;
             }
+            .ggsel-user-window__field-groups {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .ggsel-user-window__fields-group {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                background: #121212;
+                border: 1px solid #2f2f2f;
+                border-radius: 10px;
+                padding: 10px 12px;
+            }
+            .ggsel-user-window__fields-title {
+                margin: 0;
+                font-size: 12px;
+                font-weight: 600;
+                color: #8ab4ff;
+                letter-spacing: 0.35px;
+                text-transform: uppercase;
+            }
+            .ggsel-user-window__fields-list {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
             .ggsel-user-window__option {
                 display: flex;
                 align-items: center;
@@ -1388,6 +1730,24 @@
             }
             .ggsel-user-window__option-desc {
                 font-size: 11px;
+                color: #a8a8a8;
+            }
+            .ggsel-user-window__toggle {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .ggsel-user-window__toggle input[type="checkbox"] {
+                width: 18px;
+                height: 18px;
+                accent-color: #8ab4ff;
+            }
+            .ggsel-user-window__toggle-text {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            .ggsel-user-window__toggle-desc {
                 color: #a8a8a8;
             }
             .ggsel-user-window__shortcut {
@@ -1538,6 +1898,12 @@
                 gap: 8px;
                 flex-shrink: 0;
             }
+            .ggsel-user-card-footer {
+                margin-top: 6px;
+                display: flex;
+                justify-content: flex-end;
+                width: 100%;
+            }
             .ggsel-user-card-id {
                 font-size: 14px;
                 font-weight: 600;
@@ -1546,12 +1912,9 @@
             .ggsel-user-card-locale {
                 font-size: 12px;
                 font-weight: 600;
-                padding: 3px 10px;
-                border-radius: 999px;
-                border: 1px solid rgba(138, 180, 255, 0.35);
-                background: rgba(138, 180, 255, 0.12);
-                color: #d3e2ff;
-                letter-spacing: 0.2px;
+                color: #9fb7ff;
+                letter-spacing: 0.3px;
+                text-transform: uppercase;
             }
             .ggsel-user-card-locale[hidden] {
                 display: none !important;
@@ -1733,6 +2096,16 @@
                 flex-direction: column;
                 gap: 8px;
                 padding: 0 18px 16px 18px;
+            }
+            .ggsel-order-card-footer {
+                display: flex;
+                justify-content: flex-end;
+                padding-top: 4px;
+            }
+            .ggsel-order-card-created {
+                font-size: 12px;
+                color: #a3abc8;
+                letter-spacing: 0.25px;
             }
             .ggsel-order-chip-row {
                 display: flex;
@@ -2340,6 +2713,8 @@
             console.warn('[GGSEL User Explorer] Не удалось сохранить режим', error);
         }
 
+        hideHistoryPopover();
+
         const config = getModeConfig(normalized);
         if (state.button) {
             state.button.title = config.buttonTitle;
@@ -2697,6 +3072,7 @@
         card.dataset.userId = user.id;
         card.__userData = user;
         const matchTags = ensureMatchTags(user);
+        const userFieldSettings = normalizeUserFieldSettings(state.settings.userFields);
 
         const header = document.createElement('div');
         header.className = 'ggsel-user-card-header';
@@ -2742,7 +3118,12 @@
         const createInfoLine = (fields) => {
             const line = document.createElement('div');
             line.className = 'ggsel-user-card-line';
-            fields.forEach(({ label, value }) => {
+            fields.forEach(({ key, label, value }) => {
+                if (key && Object.prototype.hasOwnProperty.call(userFieldSettings, key)) {
+                    if (!userFieldSettings[key]) {
+                        return;
+                    }
+                }
                 const raw = value;
                 const normalized = raw === null || raw === undefined ? '' : collapseSpaces(String(raw));
                 if (!normalized) {
@@ -2765,13 +3146,13 @@
         };
 
         const primaryLine = createInfoLine([
-            { label: 'Почта', value: user.email },
-            { label: 'Баланс', value: user.balance }
+            { key: 'email', label: 'Почта', value: user.email },
+            { key: 'balance', label: 'Баланс', value: user.balance }
         ]);
 
         const secondaryLine = createInfoLine([
-            { label: 'GGSEL ID', value: user.ggselId },
-            { label: 'Вывод', value: user.withdrawals }
+            { key: 'ggselId', label: 'GGSEL ID', value: user.ggselId },
+            { key: 'withdrawals', label: 'Вывод', value: user.withdrawals }
         ]);
 
         meta.appendChild(titleRow);
@@ -2787,12 +3168,6 @@
         const idMeta = document.createElement('div');
         idMeta.className = 'ggsel-user-card-id-meta';
         idMeta.appendChild(idTag);
-        if (user.localeDisplay) {
-            const localeTag = document.createElement('div');
-            localeTag.className = 'ggsel-user-card-locale';
-            localeTag.textContent = user.localeDisplay;
-            idMeta.appendChild(localeTag);
-        }
         titleRow.appendChild(idMeta);
 
         const body = document.createElement('div');
@@ -2800,6 +3175,18 @@
 
         card.appendChild(header);
         card.appendChild(body);
+
+        const footer = document.createElement('div');
+        footer.className = 'ggsel-user-card-footer';
+        if (user.localeDisplay) {
+            const localeTag = document.createElement('div');
+            localeTag.className = 'ggsel-user-card-locale';
+            localeTag.textContent = user.localeDisplay;
+            footer.appendChild(localeTag);
+        }
+        if (footer.childElementCount) {
+            meta.appendChild(footer);
+        }
 
         if (user.isSeller || matchTags.has('seller')) {
             card.classList.add('seller-card');
@@ -2862,6 +3249,7 @@
         card.dataset.orderId = order.id;
         card.__orderData = order;
         const matchTags = ensureMatchTags(order);
+        const orderFieldSettings = normalizeOrderFieldSettings(state.settings.orderFields);
 
         const header = document.createElement('div');
         header.className = 'ggsel-order-card-header';
@@ -2873,13 +3261,6 @@
         title.className = 'ggsel-order-card-title';
         title.textContent = collapseSpaces(order.offerLabel) || 'Заказ';
         titleGroup.appendChild(title);
-
-        if (order.paymentSystem) {
-            const subtitle = document.createElement('div');
-            subtitle.className = 'ggsel-order-card-subtitle';
-            subtitle.textContent = order.paymentSystem;
-            titleGroup.appendChild(subtitle);
-        }
 
         const badgePriority = [
             ['order-id', 'Совпадение ID заказа'],
@@ -2911,7 +3292,12 @@
         const createChipRow = (fields) => {
             const row = document.createElement('div');
             row.className = 'ggsel-order-chip-row';
-            fields.forEach(({ label, value, url }) => {
+            fields.forEach(({ key, label, value, url }) => {
+                if (key && Object.prototype.hasOwnProperty.call(orderFieldSettings, key)) {
+                    if (!orderFieldSettings[key]) {
+                        return;
+                    }
+                }
                 const normalized = collapseSpaces(value || '');
                 if (!normalized) {
                     return;
@@ -2946,20 +3332,32 @@
         };
 
         createChipRow([
-            { label: 'Статус', value: order.status },
-            { label: 'Сумма', value: order.amount },
-            { label: 'Кол-во', value: order.count }
+            { key: 'status', label: 'Статус', value: order.status },
+            { key: 'amount', label: 'Сумма', value: order.amount },
+            { key: 'count', label: 'Кол-во', value: order.count }
         ]);
 
         createChipRow([
-            { label: 'Покупатель', value: order.userId, url: order.userUrl },
-            { label: 'Создан', value: order.createdAt },
-            { label: 'Платёж', value: order.paymentSystem }
+            { key: 'buyer', label: 'Покупатель', value: order.userId, url: order.userUrl },
+            { key: 'payment', label: 'Платёж', value: order.paymentSystem }
         ]);
 
         createChipRow([
-            { label: 'Товар', value: order.offerLabel, url: order.offerUrl }
+            { key: 'product', label: 'Товар', value: order.offerLabel, url: order.offerUrl }
         ]);
+
+        if (orderFieldSettings.created) {
+            const createdText = collapseSpaces(order.createdAt || '');
+            if (createdText) {
+                const footer = document.createElement('div');
+                footer.className = 'ggsel-order-card-footer';
+                const createdEl = document.createElement('div');
+                createdEl.className = 'ggsel-order-card-created';
+                createdEl.textContent = createdText;
+                footer.appendChild(createdEl);
+                content.appendChild(footer);
+            }
+        }
 
         const openOrder = () => {
             if (order.orderUrl) {
@@ -3570,6 +3968,20 @@
         updateResultsVisibility();
     };
 
+    const rerenderCurrentResults = () => {
+        if (state.loading || !state.resultsContainer) {
+            return;
+        }
+        const items = Array.isArray(state.results) ? state.results : [];
+        const previousScroll = state.resultsContainer.scrollTop;
+        updateResults(items, false);
+        requestAnimationFrame(() => {
+            if (state.resultsContainer) {
+                state.resultsContainer.scrollTop = previousScroll;
+            }
+        });
+    };
+
     const updateResultsVisibility = () => {
         if (!state.resultsWrapper) return;
         const hasContent = Boolean(state.resultsContainer && state.resultsContainer.childElementCount > 0);
@@ -3658,6 +4070,9 @@
                 state.hasMore = hasNextPage(doc);
                 state.results = append ? state.results.concat(items) : items;
                 if (!append) {
+                    rememberQuery(state.query);
+                }
+                if (!append) {
                     updateResults(state.results, false);
                 } else {
                     updateResults(items, true);
@@ -3714,6 +4129,7 @@
             }
 
             state.results = aggregated;
+            rememberQuery(state.query);
             state.resultsContainer.innerHTML = '';
 
             if (aggregated.length) {
@@ -3820,6 +4236,7 @@
         localStorage.setItem(PANEL_STATE_KEY, '0');
         collapseSearchControl();
         updateSearchControlValueState();
+        hideHistoryPopover();
         closeContextMenu();
         closeAllWindows();
         requestAnimationFrame(() => {
@@ -3898,6 +4315,7 @@
     const init = () => {
         injectStyles();
         loadSettings();
+        loadQueryHistory();
 
         const anchor = document.createElement('div');
         anchor.className = 'ggsel-user-explorer-anchor collapsed expand-right expand-down';
@@ -3937,6 +4355,7 @@
         input.type = 'search';
         input.className = 'ggsel-user-explorer-search-input';
         input.addEventListener('input', (event) => {
+            hideHistoryPopover();
             updateSearchControlValueState();
             onQueryChange(event.target.value);
         });
@@ -3947,8 +4366,23 @@
             }
         });
         input.addEventListener('contextmenu', openInputContextMenu);
+        input.addEventListener('dblclick', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            showHistoryPopover();
+        });
 
         searchControl.appendChild(input);
+
+        const historyPopover = document.createElement('div');
+        historyPopover.className = 'ggsel-user-history-popover';
+        historyPopover.hidden = true;
+
+        const historyList = document.createElement('div');
+        historyList.className = 'ggsel-user-history-list';
+        historyPopover.appendChild(historyList);
+
+        searchControl.appendChild(historyPopover);
         searchRow.appendChild(searchControl);
 
         const modeButton = document.createElement('button');
@@ -4002,6 +4436,8 @@
         state.searchControl = searchControl;
         state.searchRow = searchRow;
         state.resultsWrapper = resultsWrapper;
+        state.historyPopover = historyPopover;
+        state.historyList = historyList;
         enablePanelTopDragging(panel);
         const initialConfig = getModeConfig(state.mode);
         if (button) {
@@ -4052,6 +4488,19 @@
         updateResultsVisibility();
 
         document.addEventListener('keydown', handleGlobalShortcut, true);
+        document.addEventListener('pointerdown', (event) => {
+            if (!state.historyVisible) return;
+            const target = event.target instanceof Element ? event.target : null;
+            if (target) {
+                if (state.historyPopover && state.historyPopover.contains(target)) {
+                    return;
+                }
+                if (state.input && state.input.contains(target)) {
+                    return;
+                }
+            }
+            hideHistoryPopover();
+        });
         document.addEventListener('pointerdown', (event) => {
             if (!state.open || !state.panel || !state.button || !state.anchor) return;
             if (state.anchor.contains(event.target)) return;
@@ -4110,6 +4559,11 @@
 
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
+                if (state.historyVisible) {
+                    event.preventDefault();
+                    hideHistoryPopover();
+                    return;
+                }
                 const openWin = getOpenWindow();
                 if (openWin) {
                     event.preventDefault();
