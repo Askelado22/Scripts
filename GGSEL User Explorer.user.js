@@ -2929,6 +2929,26 @@
                 }
             }
         }
+        const rows = doc.querySelectorAll('tr');
+        for (const row of rows) {
+            const header = row.querySelector('th');
+            if (!header) {
+                continue;
+            }
+            const headerText = collapseSpaces(header.textContent || '');
+            if (!headerText) {
+                continue;
+            }
+            if (/^Название$/i.test(headerText)) {
+                const valueCell = row.querySelector('td');
+                if (valueCell) {
+                    const valueText = collapseSpaces(valueCell.textContent || '');
+                    if (valueText) {
+                        return valueText;
+                    }
+                }
+            }
+        }
         return '';
     };
 
