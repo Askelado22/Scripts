@@ -1899,14 +1899,20 @@
                 gap: 8px;
                 flex-shrink: 0;
             }
+            .ggsel-user-card-info {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 12px;
+                width: 100%;
+            }
             .ggsel-user-card-footer {
-                margin-top: 6px;
                 display: flex;
                 align-items: center;
                 justify-content: flex-end;
                 gap: 8px;
-                align-self: flex-end;
-                margin-left: auto;
+                flex-shrink: 0;
+                min-width: max-content;
             }
             .ggsel-user-card-id {
                 font-size: 14px;
@@ -2101,12 +2107,19 @@
                 gap: 8px;
                 padding: 0 18px 16px 18px;
             }
+            .ggsel-order-card-info {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 12px;
+                width: 100%;
+            }
             .ggsel-order-card-footer {
                 display: flex;
+                align-items: center;
                 justify-content: flex-end;
-                padding-top: 4px;
-                align-self: flex-end;
-                margin-left: auto;
+                flex-shrink: 0;
+                min-width: max-content;
             }
             .ggsel-order-card-created {
                 font-size: 12px;
@@ -3164,9 +3177,9 @@
         ]);
 
         meta.appendChild(titleRow);
-        if (hasChips) {
-            meta.appendChild(chips);
-        }
+        const infoRow = document.createElement('div');
+        infoRow.className = 'ggsel-user-card-info';
+        infoRow.appendChild(chips);
 
         header.appendChild(meta);
 
@@ -3190,7 +3203,10 @@
             footer.appendChild(localeTag);
         }
         if (footer.childElementCount) {
-            meta.appendChild(footer);
+            infoRow.appendChild(footer);
+        }
+        if (hasChips || footer.childElementCount) {
+            meta.appendChild(infoRow);
         }
 
         if (user.isSeller || matchTags.has('seller')) {
@@ -3349,21 +3365,26 @@
             { key: 'product', label: 'Товар', value: order.offerLabel, url: order.offerUrl }
         ]);
 
-        if (hasChips) {
-            content.appendChild(chipRow);
-        }
+        const infoRow = document.createElement('div');
+        infoRow.className = 'ggsel-order-card-info';
+        infoRow.appendChild(chipRow);
 
+        let footer = null;
         if (orderFieldSettings.created) {
             const createdText = collapseSpaces(order.createdAt || '');
             if (createdText) {
-                const footer = document.createElement('div');
+                footer = document.createElement('div');
                 footer.className = 'ggsel-order-card-footer';
                 const createdEl = document.createElement('div');
                 createdEl.className = 'ggsel-order-card-created';
                 createdEl.textContent = createdText;
                 footer.appendChild(createdEl);
-                content.appendChild(footer);
+                infoRow.appendChild(footer);
             }
+        }
+
+        if (hasChips || (footer && footer.childElementCount)) {
+            content.appendChild(infoRow);
         }
 
         const openOrder = () => {
