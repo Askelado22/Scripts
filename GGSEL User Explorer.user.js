@@ -2913,22 +2913,6 @@
     };
 
     const parseOfferTitleFromDocument = (doc) => {
-        const selectors = [
-            '.box .box-header .box-title',
-            '.box .box-title',
-            '.content-header h1',
-            'h1',
-            'title'
-        ];
-        for (const selector of selectors) {
-            const node = doc.querySelector(selector);
-            if (node) {
-                const text = collapseSpaces(node.textContent || '');
-                if (text) {
-                    return text;
-                }
-            }
-        }
         const rows = doc.querySelectorAll('tr');
         for (const row of rows) {
             const header = row.querySelector('th');
@@ -2946,6 +2930,22 @@
                     if (valueText) {
                         return valueText;
                     }
+                }
+            }
+        }
+        const selectors = [
+            '.box .box-header .box-title',
+            '.box .box-title',
+            '.content-header h1',
+            'h1',
+            'title'
+        ];
+        for (const selector of selectors) {
+            const node = doc.querySelector(selector);
+            if (node) {
+                const text = collapseSpaces(node.textContent || '');
+                if (text) {
+                    return text;
                 }
             }
         }
