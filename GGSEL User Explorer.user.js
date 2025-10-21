@@ -1904,9 +1904,10 @@
             .ggsel-user-card-info {
                 display: flex;
                 align-items: flex-start;
-                justify-content: space-between;
-                gap: 12px;
+                justify-content: flex-start;
+                gap: 10px;
                 width: 100%;
+                flex-wrap: wrap;
             }
             .ggsel-user-card-footer {
                 display: flex;
@@ -1914,7 +1915,9 @@
                 justify-content: flex-end;
                 gap: 8px;
                 flex-shrink: 0;
-                min-width: max-content;
+                margin-left: auto;
+                align-self: flex-end;
+                min-width: 0;
             }
             .ggsel-user-card-id {
                 font-size: 14px;
@@ -1927,6 +1930,7 @@
                 color: #9fb7ff;
                 letter-spacing: 0.3px;
                 text-transform: uppercase;
+                white-space: nowrap;
             }
             .ggsel-user-card-locale[hidden] {
                 display: none !important;
@@ -1962,6 +1966,8 @@
                 gap: 6px;
                 align-items: center;
                 width: 100%;
+                flex: 1 1 auto;
+                min-width: 0;
             }
             .ggsel-user-card-field {
                 display: inline-flex;
@@ -2064,6 +2070,7 @@
                 flex-direction: column;
                 gap: 4px;
                 min-width: 0;
+                align-items: flex-start;
             }
             .ggsel-order-card-title {
                 font-size: 14px;
@@ -2096,6 +2103,7 @@
                 letter-spacing: 0.35px;
                 text-transform: uppercase;
                 max-width: 100%;
+                align-self: flex-start;
             }
             .ggsel-order-card-id {
                 font-size: 13px;
@@ -2112,27 +2120,33 @@
             .ggsel-order-card-info {
                 display: flex;
                 align-items: flex-start;
-                justify-content: space-between;
-                gap: 12px;
+                justify-content: flex-start;
+                gap: 10px;
                 width: 100%;
+                flex-wrap: wrap;
             }
             .ggsel-order-card-footer {
                 display: flex;
                 align-items: center;
                 justify-content: flex-end;
                 flex-shrink: 0;
-                min-width: max-content;
+                margin-left: auto;
+                align-self: flex-end;
+                min-width: 0;
             }
             .ggsel-order-card-created {
                 font-size: 12px;
                 color: #a3abc8;
                 letter-spacing: 0.25px;
+                white-space: nowrap;
             }
             .ggsel-order-chip-row {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 6px;
                 align-items: center;
+                flex: 1 1 auto;
+                min-width: 0;
             }
             .ggsel-order-chip {
                 display: inline-flex;
@@ -2147,6 +2161,50 @@
                 font-size: 12.5px;
                 transition: border-color 0.2s ease, color 0.2s ease;
                 max-width: 100%;
+            }
+            .ggsel-order-chip.status-default {
+                border-color: #2a2a2a;
+                background: #181818;
+            }
+            .ggsel-order-chip.status-paid {
+                border-color: rgba(102, 225, 173, 0.45);
+                background: rgba(102, 225, 173, 0.18);
+            }
+            .ggsel-order-chip.status-unpaid {
+                border-color: rgba(255, 210, 102, 0.45);
+                background: rgba(255, 210, 102, 0.18);
+            }
+            .ggsel-order-chip.status-processing {
+                border-color: rgba(138, 180, 255, 0.45);
+                background: rgba(138, 180, 255, 0.16);
+            }
+            .ggsel-order-chip.status-cancelled {
+                border-color: rgba(255, 138, 138, 0.45);
+                background: rgba(255, 138, 138, 0.18);
+            }
+            .ggsel-order-chip.status-refund {
+                border-color: rgba(195, 170, 255, 0.45);
+                background: rgba(195, 170, 255, 0.18);
+            }
+            .ggsel-order-chip.status-paid .ggsel-order-chip-label,
+            .ggsel-order-chip.status-paid .ggsel-order-chip-value {
+                color: #7dedc6;
+            }
+            .ggsel-order-chip.status-unpaid .ggsel-order-chip-label,
+            .ggsel-order-chip.status-unpaid .ggsel-order-chip-value {
+                color: #ffd166;
+            }
+            .ggsel-order-chip.status-processing .ggsel-order-chip-label,
+            .ggsel-order-chip.status-processing .ggsel-order-chip-value {
+                color: #9fc0ff;
+            }
+            .ggsel-order-chip.status-cancelled .ggsel-order-chip-label,
+            .ggsel-order-chip.status-cancelled .ggsel-order-chip-value {
+                color: #ff9a9a;
+            }
+            .ggsel-order-chip.status-refund .ggsel-order-chip-label,
+            .ggsel-order-chip.status-refund .ggsel-order-chip-value {
+                color: #d5c3ff;
             }
             .ggsel-order-chip:hover,
             .ggsel-order-chip:focus-visible {
@@ -2686,6 +2744,29 @@
             }
         }
         return item;
+    };
+
+    const getOrderStatusClass = (status) => {
+        const text = collapseSpaces(status || '').toLowerCase();
+        if (!text) {
+            return 'status-default';
+        }
+        if (/(не\s*оплач|unpaid|no payment|without payment)/i.test(text)) {
+            return 'status-unpaid';
+        }
+        if (/(оплачен|paid|complete|completed|успешн)/i.test(text)) {
+            return 'status-paid';
+        }
+        if (/(процес|process|pending|ожида|ждет|waiting|hold|в работе)/i.test(text)) {
+            return 'status-processing';
+        }
+        if (/(chargeback|refund|возврат|refun|возмещ|dispute)/i.test(text)) {
+            return 'status-refund';
+        }
+        if (/(cancel|отмен|reject|declin|denied|архив|archived)/i.test(text)) {
+            return 'status-cancelled';
+        }
+        return 'status-default';
     };
 
     const renderResultCard = (item, mode = state.mode || MODE_USERS) => (
@@ -3513,6 +3594,12 @@
                 if (key) {
                     chip.dataset.fieldKey = key;
                 }
+                if (key === 'status') {
+                    const statusClass = getOrderStatusClass(normalized);
+                    if (statusClass) {
+                        chip.classList.add(statusClass);
+                    }
+                }
                 if (url) {
                     chip.href = url;
                     chip.target = '_blank';
@@ -4294,7 +4381,12 @@
                 if (mode === MODE_USERS) {
                     await prefetchUserDetails(append ? items : state.results);
                 } else if (mode === MODE_ORDERS) {
-                    await prefetchOrderOffers(append ? items : state.results);
+                    const target = append ? items : state.results;
+                    if (target.length) {
+                        prefetchOrderOffers(target).catch((error) => {
+                            console.warn('[GGSEL User Explorer] Не удалось предзагрузить товары заказов', error);
+                        });
+                    }
                 }
                 if (token !== state.lastToken) {
                     return;
@@ -4309,22 +4401,45 @@
 
             state.page = 1;
             state.hasMore = false;
+
+            const queryResults = await Promise.all(
+                plan.queries.map((queryDef, index) => (async () => {
+                    try {
+                        const url = buildUrlWithParams(queryDef.params, 1, mode);
+                        const doc = await fetchDocument(url);
+                        if (token !== state.lastToken) {
+                            return { index, queryDef, items: [], error: null, cancelled: true };
+                        }
+                        const rawItems = parseResultsFromDocument(doc, mode);
+                        const items = rawItems.map((raw) => {
+                            const item = { ...raw };
+                            addMatchTagToItem(item, queryDef.highlight || null);
+                            normalizeMatchMetadata(item, mode);
+                            return item;
+                        });
+                        return { index, queryDef, items, error: null, cancelled: false };
+                    } catch (error) {
+                        return { index, queryDef, items: [], error, cancelled: false };
+                    }
+                })())
+            );
+
+            if (token !== state.lastToken || queryResults.some((result) => result.cancelled)) {
+                return;
+            }
+
             const aggregated = [];
             const seen = new Map();
             const errors = [];
 
-            for (const queryDef of plan.queries) {
-                try {
-                    const url = buildUrlWithParams(queryDef.params, 1, mode);
-                    const doc = await fetchDocument(url);
-                    if (token !== state.lastToken) {
+            queryResults
+                .sort((a, b) => a.index - b.index)
+                .forEach(({ queryDef, items, error }) => {
+                    if (error) {
+                        errors.push({ query: queryDef, error });
                         return;
                     }
-                    const rawItems = parseResultsFromDocument(doc, mode);
-                    rawItems.forEach((raw) => {
-                        const item = { ...raw };
-                        addMatchTagToItem(item, queryDef.highlight || null);
-                        normalizeMatchMetadata(item, mode);
+                    items.forEach((item) => {
                         const key = item.id || item.orderUrl || `${queryDef.key}:${aggregated.length}`;
                         const existing = seen.get(key);
                         if (!existing) {
@@ -4335,10 +4450,7 @@
                             normalizeMatchMetadata(existing, mode);
                         }
                     });
-                } catch (error) {
-                    errors.push({ query: queryDef, error });
-                }
-            }
+                });
 
             if (token !== state.lastToken) {
                 return;
@@ -4353,7 +4465,9 @@
                 if (mode === MODE_USERS) {
                     await prefetchUserDetails(aggregated);
                 } else if (mode === MODE_ORDERS) {
-                    await prefetchOrderOffers(aggregated);
+                    prefetchOrderOffers(aggregated).catch((error) => {
+                        console.warn('[GGSEL User Explorer] Не удалось предзагрузить товары заказов', error);
+                    });
                 }
             } else if (!errors.length) {
                 const placeholder = document.createElement('div');
@@ -4375,10 +4489,6 @@
 
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
-
-            if (mode === MODE_USERS && aggregated.length) {
-                await prefetchUserDetails(aggregated);
-            }
         } catch (error) {
             state.resultsContainer.innerHTML = '';
             const errorEl = document.createElement('div');
