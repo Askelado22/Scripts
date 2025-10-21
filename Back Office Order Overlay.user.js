@@ -77,6 +77,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
   const productCache = new Map();
 
   let confirmModalInstance = null;
+  let imageLightboxInstance = null;
 
   function ensureConfirmModal() {
     if (confirmModalInstance) return confirmModalInstance;
@@ -96,7 +97,10 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     `;
 
     const appendOverlay = () => {
-      if (!overlay.isConnected) document.body.appendChild(overlay);
+      if (overlay.isConnected) return;
+      if (document.body) {
+        document.body.appendChild(overlay);
+      }
     };
     if (document.body) appendOverlay();
     else document.addEventListener('DOMContentLoaded', appendOverlay, { once: true });
@@ -365,6 +369,15 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       const timestamp = timeParts.join(' ');
       const status = norm(statusEl?.textContent || '');
       const text = norm(messageEl?.querySelector('p')?.textContent || '');
+      const attachments = Array.from(messageEl?.querySelectorAll('img.img-thumbnail') || [])
+        .map(img => {
+          const src = img.getAttribute('src') || '';
+          return {
+            src: src ? new URL(src, url).href : '',
+            alt: norm(img.getAttribute('alt') || ''),
+          };
+        })
+        .filter(att => att.src);
 
       return {
         author,
@@ -372,6 +385,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
         timestamp,
         status,
         text,
+        attachments,
       };
     });
 
@@ -576,6 +590,7 @@ body{color-scheme:dark;}
 .vui-btn--ghost{background:transparent;}
 .vui-btn--ghost:hover,.vui-btn.is-open{background:#1f2024;}
 body.vui-modalOpen{overflow:hidden;}
+body.vui-lightboxOpen{overflow:hidden;}
 .vui-modalOverlay{position:fixed;inset:0;background:rgba(8,10,15,.76);display:flex;align-items:center;justify-content:center;padding:24px;z-index:99999;opacity:0;pointer-events:none;transition:opacity .2s ease;}
 .vui-modalOverlay.is-visible{opacity:1;pointer-events:auto;}
 .vui-modal{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:14px;box-shadow:0 24px 50px rgba(0,0,0,.45);padding:20px;max-width:360px;width:100%;display:flex;flex-direction:column;gap:18px;}
@@ -635,6 +650,11 @@ body.vui-modalOpen{overflow:hidden;}
 .vui-chatMeta{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--vui-muted);gap:2px;}
 .vui-chatStatus{font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vui-muted);}
 .vui-chatText{margin-top:6px;color:var(--vui-text);white-space:pre-wrap;word-break:break-word;}
+.vui-chatAttachments{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;}
+.vui-attachmentThumb{border:1px solid #1f2023;border-radius:10px;background:#101114;padding:0;overflow:hidden;cursor:pointer;transition:border-color .2s ease,transform .2s ease;}
+.vui-attachmentThumb:hover{border-color:var(--vui-accent);transform:translateY(-1px);}
+.vui-attachmentThumb:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
+.vui-attachmentThumb img{display:block;width:120px;height:120px;object-fit:cover;}
 .vui-productDescription{margin-top:12px;border:1px dashed #1f2023;border-radius:10px;background:rgba(255,255,255,.02);font-size:13px;color:var(--vui-text);}
 .vui-desc{margin:0;display:flex;flex-direction:column;}
 .vui-descToggle{appearance:none;border:none;background:none;color:inherit;text-align:left;display:flex;flex-direction:row;align-items:center;gap:12px;font-weight:600;padding:12px 14px;cursor:pointer;transition:color .2s ease;}
@@ -661,6 +681,13 @@ body.vui-modalOpen{overflow:hidden;}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody{max-height:7.2em;overflow:hidden;position:relative;}
 .vui-desc[data-collapsible="true"][data-expanded="false"] .vui-descBody::after{content:'';position:absolute;left:0;right:0;bottom:0;height:48px;background:linear-gradient(0deg,var(--vui-card) 0%,rgba(17,18,20,0) 70%);pointer-events:none;}
 .vui-badge.ip.vui-isCopied,.vui-orderNumber.vui-isCopied{box-shadow:0 0 0 0 rgba(76,155,255,.4);}
+.vui-lightboxOverlay{position:fixed;inset:0;background:rgba(8,10,15,.86);display:flex;align-items:center;justify-content:center;padding:24px;z-index:100000;opacity:0;pointer-events:none;transition:opacity .2s ease;}
+.vui-lightboxOverlay.is-visible{opacity:1;pointer-events:auto;}
+.vui-lightbox{position:relative;max-width:90vw;max-height:90vh;display:flex;align-items:center;justify-content:center;}
+.vui-lightboxImage{max-width:90vw;max-height:90vh;border-radius:12px;box-shadow:0 20px 45px rgba(0,0,0,.5);}
+.vui-lightboxClose{position:absolute;top:-16px;right:-16px;width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:rgba(12,14,20,.92);color:var(--vui-text);cursor:pointer;font-size:20px;line-height:1;display:grid;place-items:center;}
+.vui-lightboxClose:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
+.vui-lightboxClose:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 @keyframes vuiCopyPulse{0%{box-shadow:0 0 0 0 rgba(76,155,255,.5);background:rgba(76,155,255,.2);}100%{box-shadow:0 0 0 36px rgba(76,155,255,0);background:transparent;}}
 .vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
@@ -811,6 +838,12 @@ body.vui-modalOpen{overflow:hidden;}
       const timestamp = msg.timestamp ? `<div>${esc(msg.timestamp)}</div>` : '';
       const isSeller = sellerSet.size ? sellerSet.has(normalizeName(msg.author)) : false;
       const msgClass = isSeller ? 'vui-chatMsg vui-chatMsg--seller' : 'vui-chatMsg';
+      const attachments = Array.isArray(msg.attachments) && msg.attachments.length
+        ? `<div class="vui-chatAttachments">${msg.attachments.map((att, idx) => {
+            const label = att.alt || `Изображение ${idx + 1}`;
+            return `<button type="button" class="vui-attachmentThumb" data-chat-image="${esc(att.src)}" data-chat-alt="${esc(att.alt || '')}" aria-label="${esc(label)}"><img src="${esc(att.src)}" alt="${esc(att.alt || '')}"></button>`;
+          }).join('')}</div>`
+        : '';
       return `
         <div class="${msgClass}">
           ${avatar}
@@ -820,6 +853,7 @@ body.vui-modalOpen{overflow:hidden;}
               <div class="vui-chatMeta">${timestamp}${status}</div>
             </div>
             <div class="vui-chatText">${esc(msg.text)}</div>
+            ${attachments}
           </div>
         </div>
       `;
@@ -842,10 +876,94 @@ body.vui-modalOpen{overflow:hidden;}
     fetchChatData(data.actions.chat)
       .then(chat => {
         panel.innerHTML = renderChatContent(chat, context);
+        bindChatMedia(panel);
       })
       .catch(() => {
         panel.innerHTML = renderChatContent({ error: true });
       });
+  }
+
+  function ensureImageLightbox() {
+    if (imageLightboxInstance) return imageLightboxInstance;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'vui-lightboxOverlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = `
+      <div class="vui-lightbox" role="dialog" aria-modal="true">
+        <button type="button" class="vui-lightboxClose" aria-label="Закрыть изображение">×</button>
+        <img class="vui-lightboxImage" alt="" />
+      </div>
+    `;
+
+    const appendOverlay = () => {
+      if (overlay.isConnected) return;
+      if (document.body) {
+        document.body.appendChild(overlay);
+      }
+    };
+    if (document.body) appendOverlay();
+    else document.addEventListener('DOMContentLoaded', appendOverlay, { once: true });
+
+    const closeBtn = overlay.querySelector('.vui-lightboxClose');
+    const imageEl = overlay.querySelector('.vui-lightboxImage');
+
+    const close = () => {
+      overlay.classList.remove('is-visible');
+      overlay.setAttribute('aria-hidden', 'true');
+      imageEl.removeAttribute('src');
+      imageEl.removeAttribute('alt');
+      document.body.classList.remove('vui-lightboxOpen');
+    };
+
+    const open = ({ src, alt }) => {
+      if (!src) return;
+      appendOverlay();
+      imageEl.setAttribute('src', src);
+      if (alt) imageEl.setAttribute('alt', alt);
+      else imageEl.removeAttribute('alt');
+      overlay.classList.add('is-visible');
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('vui-lightboxOpen');
+      try {
+        closeBtn.focus({ preventScroll: true });
+      } catch (e) {
+        try { closeBtn.focus(); } catch {}
+      }
+    };
+
+    closeBtn.addEventListener('click', () => {
+      close();
+    });
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) {
+        close();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && overlay.classList.contains('is-visible')) {
+        event.preventDefault();
+        close();
+      }
+    });
+
+    imageLightboxInstance = { open, close, overlay };
+    return imageLightboxInstance;
+  }
+
+  function bindChatMedia(container) {
+    if (!container) return;
+    container.querySelectorAll('[data-chat-image]').forEach(btn => {
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        const src = btn.getAttribute('data-chat-image');
+        if (!src) return;
+        const lightbox = ensureImageLightbox();
+        lightbox.open({ src, alt: btn.getAttribute('data-chat-alt') || '' });
+      });
+    });
   }
 
   function renderProductDescription(productData) {
