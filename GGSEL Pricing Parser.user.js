@@ -42,6 +42,59 @@
    ******************************************************************/
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  const LOG_PREFIX = '[GGSEL Parser]';
+  const pendingLogEntries = [];
+
+  function formatLogArg(arg) {
+    if (typeof arg === 'string') return arg;
+    if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+    if (arg instanceof Error) return arg.message;
+    try {
+      return JSON.stringify(arg);
+    } catch (e) {
+      return String(arg);
+    }
+  }
+
+  function appendLogToPanel(entry) {
+    if (!ui?.log) {
+      pendingLogEntries.push(entry);
+      while (pendingLogEntries.length > 300) pendingLogEntries.shift();
+      return;
+    }
+    const row = document.createElement('div');
+    row.className = `ggsel-log-line ggsel-log-${entry.level}`;
+    row.textContent = `[${entry.time}] ${entry.message}`;
+    ui.log.appendChild(row);
+    while (ui.log.children.length > 300) ui.log.removeChild(ui.log.firstChild);
+    ui.log.scrollTop = ui.log.scrollHeight;
+  }
+
+  function pushLog(level, args) {
+    const message = args.map(formatLogArg).join(' ');
+    const entry = {
+      level,
+      time: new Date().toLocaleTimeString(),
+      message
+    };
+    appendLogToPanel(entry);
+  }
+
+  const log = {
+    info: (...args) => {
+      console.info(LOG_PREFIX, ...args);
+      pushLog('info', args);
+    },
+    warn: (...args) => {
+      console.warn(LOG_PREFIX, ...args);
+      pushLog('warn', args);
+    },
+    error: (...args) => {
+      console.error(LOG_PREFIX, ...args);
+      pushLog('error', args);
+    }
+  };
+
   // Сохраняем в TM-хранилище
   function saveState() {
     try { GM_setValue(STORE_KEY, JSON.stringify(state)); } catch (e) { console.error(e); }
@@ -77,6 +130,16 @@
       await sleep(100);
     }
     return null;
+  }
+
+  async function waitForPricingPageReady(timeout = 45000) {
+    log.info('Ожидаем загрузку формы цены и параметров.');
+    const started = Date.now();
+    const costInput = await waitForSelector('#offerCost', timeout);
+    if (!costInput) return { costInput: null, parametersRoot: null };
+    const remaining = Math.max(0, timeout - (Date.now() - started));
+    const parametersRoot = await waitFor(() => document.querySelector('.style_OffersPayCostParameters__Zd4uX'), remaining) || null;
+    return { costInput, parametersRoot };
   }
 
   // Универсальный кликер с небольшим ожиданием
@@ -157,6 +220,22 @@
       .ggsel-small { font-size: 12px; color: #aaa; margin-top: 6px; line-height: 1.4; }
       .ggsel-kv { display:flex; justify-content: space-between; font-size:12px; color:#ccc; }
       .ggsel-muted { color:#8f8f8f; }
+      .ggsel-log {
+        margin-top: 12px;
+        max-height: 200px;
+        overflow-y: auto;
+        background: #0b0b0b;
+        border: 1px solid #2a2a2a;
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .ggsel-log-line { margin-bottom: 4px; }
+      .ggsel-log-line:last-child { margin-bottom: 0; }
+      .ggsel-log-info { color: #9bc1ff; }
+      .ggsel-log-warn { color: #f3d97c; }
+      .ggsel-log-error { color: #ff8c8c; }
     `);
 
     const panel = document.createElement('div');
@@ -181,6 +260,7 @@
           <div class="ggsel-kv"><span>Обработано:</span><span id="ggsel-done" class="ggsel-muted">0</span></div>
           <div class="ggsel-kv"><span>Текущий ID:</span><span id="ggsel-current" class="ggsel-muted">—</span></div>
         </div>
+        <div class="ggsel-log" id="ggsel-log"></div>
       </div>
     `;
     document.body.appendChild(panel);
@@ -196,8 +276,14 @@
       bar: panel.querySelector('#ggsel-bar'),
       total: panel.querySelector('#ggsel-total'),
       done: panel.querySelector('#ggsel-done'),
-      current: panel.querySelector('#ggsel-current')
+      current: panel.querySelector('#ggsel-current'),
+      log: panel.querySelector('#ggsel-log')
     };
+
+    if (pendingLogEntries.length) {
+      const backlog = pendingLogEntries.splice(0, pendingLogEntries.length);
+      backlog.forEach(entry => appendLogToPanel(entry));
+    }
 
     ui.start.addEventListener('click', onStart);
     ui.pause.addEventListener('click', onPause);
@@ -225,6 +311,7 @@
       alert('Вставьте ID товаров.');
       return;
     }
+    log.info('Старт обработки списка ID:', ids);
     state.ids = ids;
     state.currentIdIndex = 0;
     state.currentParamIndex = 0;
@@ -236,6 +323,7 @@
   }
 
   function onPause() {
+    log.info('Скрипт приостановлен пользователем.');
     state.running = false;
     saveState();
     updateUi();
@@ -251,6 +339,7 @@
       state.ids = ids;
       state.currentIdIndex = state.currentIdIndex || 0;
     }
+    log.info('Продолжаем обработку.');
     state.running = true;
     saveState();
     updateUi();
@@ -259,6 +348,7 @@
 
   function onReset() {
     if (!confirm('Сбросить прогресс и результаты?')) return;
+    log.info('Сбрасываем состояние скрипта.');
     state = {
       ids: [],
       currentIdIndex: 0,
@@ -283,26 +373,40 @@
   // Возобновление сразу после загрузки страницы (если шли в процессе)
   async function autoResumeIfNeeded() {
     buildUi();
+    if (isServerErrorPage()) {
+      log.warn('Обнаружена страница ошибки 500. Скрипт остановлен до обновления страницы.');
+      state.running = false;
+      saveState();
+      updateUi();
+      return;
+    }
     if (!state.ids.length) return;           // нет задач
     if (!state.running) return;              // не в режиме запуска
     await resumeFlow();
   }
 
   async function resumeFlow() {
+    log.info('Возобновление обработки.');
     // Если URL не на текущем ID — перейдём
     await navigateToCurrent();
     // И дождёмся окончания
     await runForCurrentPage();
   }
 
+  function isServerErrorPage() {
+    return /https:\/\/seller\.ggsel\.net\/500/.test(location.href);
+  }
+
   async function navigateToCurrent() {
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) {
       // Всё готово — можно автоматически экспортировать (по желанию)
+      log.info('Обработка завершена, новых ID нет.');
       updateUi();
       return;
     }
     const target = `https://seller.ggsel.net/offers/edit/${offerId}/pricing`;
+    log.info('Переходим к офферу:', offerId);
     state.lastUrl = target;
     saveState();
     if (location.href !== target) {
@@ -315,24 +419,35 @@
 
   /**
    * Главная процедура обработки текущей страницы/товара
-   */
+  */
   async function runForCurrentPage() {
     await pausePoint();
 
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) return; // всё сделано
 
+    if (isServerErrorPage()) {
+      log.warn('Детектирована страница 500 во время обработки. Останавливаем выполнение.');
+      state.running = false;
+      saveState();
+      updateUi();
+      return;
+    }
+
+    log.info(`Начинаем обработку оффера ${offerId}.`);
+
     // 1) Ждём стандартную цену
-    const costInput = await waitForSelector('#offerCost', 25000);
+    const { costInput, parametersRoot } = await waitForPricingPageReady(45000);
     if (!costInput) {
-      console.warn('Не нашли #offerCost — возможно, страница ещё не прогрузилась.');
+      log.warn('Не нашли #offerCost — возможно, страница ещё не прогрузилась.');
       return; // просто оставим страницу – можно нажать «Продолжить»
     }
     const basePrice = readNumberInput(costInput);
     if (basePrice == null) {
-      console.warn('Не удалось прочитать стандартную цену.');
+      log.warn('Не удалось прочитать стандартную цену.');
       return;
     }
+    log.info('Стандартная цена:', basePrice);
 
     // 2) Название товара — берём последний элемент хлебных крошек
     await pausePoint();
@@ -340,16 +455,45 @@
       const nodes = Array.from(document.querySelectorAll('.ant-breadcrumb-link'));
       return nodes.length ? nodes[nodes.length - 1].textContent.trim() : null;
     }, 15000) || '';
+    log.info('Название товара:', productName || '(не найдено)');
 
     // 3) Список параметров (ul > li)
     await pausePoint();
+    log.info('Ищем блоки параметров.');
     const ul = await waitFor(() => {
+      const scope = parametersRoot || document;
       // классы у ul динамические, ищем по сигнатуре
-      return document.querySelector('ul[class*="style_list__"]');
+      return scope.querySelector('ul[class*="style_list__"]');
     }, 20000);
 
     if (!ul) {
-      console.warn('Не нашли список параметров.');
+      log.warn('Не нашли список параметров. Сохраняем только стандартную цену.');
+      state.results.push({
+        offerId,
+        productName,
+        block: '',
+        variantName: '',
+        modifierText: '',
+        finalPrice: Math.round(basePrice * 100) / 100
+      });
+      saveState();
+      await completeCurrentOffer();
+      return;
+    }
+
+    const editButtons = ul.querySelectorAll('[aria-label="edit"]');
+    if (!editButtons.length) {
+      log.warn('В блоке параметров нет доступных вариантов. Сохраняем только стандартную цену.');
+      state.results.push({
+        offerId,
+        productName,
+        block: '',
+        variantName: '',
+        modifierText: '',
+        finalPrice: Math.round(basePrice * 100) / 100
+      });
+      saveState();
+      await completeCurrentOffer();
       return;
     }
 
@@ -364,11 +508,12 @@
 
       // подпись/название блока параметров (в строке слева)
       const blockLabel = (li.querySelector('span.ant-typography')?.textContent || '').trim();
+      log.info(`Обрабатываем блок: ${blockLabel || '(без названия)'}`);
 
       // кнопка «карандаш»
       const editBtn = li.querySelector('[aria-label="edit"]');
       if (!editBtn) {
-        console.log('Нет кнопки редактирования у блока:', blockLabel);
+        log.warn('Нет кнопки редактирования у блока:', blockLabel);
         continue;
       }
 
@@ -378,7 +523,7 @@
       // дождаться модалки
       const modal = await waitForSelector('.ant-modal-content', 15000);
       if (!modal) {
-        console.warn('Модальное окно не открылось.');
+        log.warn('Модальное окно не открылось.');
         continue;
       }
 
@@ -432,6 +577,12 @@
 
         if (!isValidSign || !hasNumber || !isRub) {
           // такие варианты пропускаем
+          log.warn('Вариант пропущен из-за некорректных данных:', {
+            variantName,
+            signText,
+            modVal,
+            currency
+          });
           continue;
         }
 
@@ -453,6 +604,7 @@
 
       // сохраняем: сначала «По умолчанию», затем остальные
       state.results.push(...defaultFirst, ...others);
+      log.info(`Сохранено вариантов: ${defaultFirst.length + others.length} (включая "По умолчанию": ${defaultFirst.length}).`);
       saveState();
 
       // закрыть модалку
@@ -462,6 +614,10 @@
     }
 
     // блок параметров для этого оффера пройден — сбрасываем указатель параметров
+    await completeCurrentOffer();
+  }
+
+  async function completeCurrentOffer() {
     state.currentParamIndex = 0;
 
     // переходим к следующему ID
@@ -471,6 +627,7 @@
 
     // если всё выполнено — можно экспортировать, иначе — открыть след. товар
     if (state.currentIdIndex >= state.ids.length) {
+      log.info('Все офферы обработаны. Скрипт остановлен.');
       state.running = false;
       saveState();
       updateUi();
@@ -478,6 +635,7 @@
       // exportToXlsx(state.results);
       return;
     } else {
+      log.info('Переходим к следующему офферу.');
       // переходим к следующему товару
       await navigateToCurrent();
     }
@@ -488,12 +646,13 @@
    ******************************************************************/
   function exportToXlsx(rows) {
     // формируем таблицу в нужной структуре
-    const header = ['Название товара', 'Блок параметров', 'Параметр', 'Модификатор', 'Итоговая цена'];
-    const data = rows.map(r => [r.productName, r.block, r.variantName, r.modifierText, r.finalPrice]);
+    const header = ['ID товара', 'Название товара', 'Блок параметров', 'Параметр', 'Модификатор', 'Итоговая цена'];
+    const data = rows.map(r => [r.offerId, r.productName, r.block, r.variantName, r.modifierText, r.finalPrice]);
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
     // немного ширины колонок
     ws['!cols'] = [
+      { wch: 16 }, // ID товара
       { wch: 50 }, // Название товара
       { wch: 20 }, // Блок параметров
       { wch: 20 }, // Параметр
