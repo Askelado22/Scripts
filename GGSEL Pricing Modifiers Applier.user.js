@@ -58,18 +58,31 @@
   }
   async function waitFor(pred,{timeout=3e4,interval=120}={}){ const t0=Date.now(); while(Date.now()-t0<timeout){ if(pred()) return true; await sleep(interval); } throw new Error('waitFor timeout'); }
   function dispatchInput(el,val){ const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value'); d?.set?.call(el,val); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }
-  function realClick(el){
+  async function realClick(el,{delay=35}={}){
     if(!el) return;
-    const opts={bubbles:true,cancelable:true,view:window};
-    if(typeof PointerEvent!=='undefined'){
-      try{ el.dispatchEvent(new PointerEvent('pointerdown',opts)); }catch{}
+    const doc=el.ownerDocument || document;
+    const win=doc.defaultView || (typeof unsafeWindow!=='undefined'?unsafeWindow:window);
+    const pointerCtor=typeof win.PointerEvent==='function'?win.PointerEvent:null;
+    const mouseCtor=typeof win.MouseEvent==='function'?win.MouseEvent:MouseEvent;
+    const opts={bubbles:true,cancelable:true,composed:true,view:win};
+    const dispatch=(Ctor,type)=>{
+      if(!Ctor) return;
+      try{ el.dispatchEvent(new Ctor(type,opts)); }catch(err){ console.debug('[vibe-mod] realClick',type,'failed',err); }
+    };
+    if(typeof el.focus==='function'){
+      try{ el.focus({preventScroll:true}); }catch{}
     }
-    el.dispatchEvent(new MouseEvent('mousedown',opts));
-    el.dispatchEvent(new MouseEvent('mouseup',opts));
-    if(typeof PointerEvent!=='undefined'){
-      try{ el.dispatchEvent(new PointerEvent('pointerup',opts)); }catch{}
-    }
-    el.dispatchEvent(new MouseEvent('click',opts));
+    if(pointerCtor){ dispatch(pointerCtor,'pointerover'); dispatch(pointerCtor,'pointerenter'); }
+    dispatch(mouseCtor,'mouseover'); dispatch(mouseCtor,'mouseenter');
+    if(pointerCtor){ dispatch(pointerCtor,'pointerdown'); }
+    dispatch(mouseCtor,'mousedown');
+    if(delay) await sleep(delay);
+    if(pointerCtor){ dispatch(pointerCtor,'pointerup'); }
+    dispatch(mouseCtor,'mouseup');
+    if(delay) await sleep(delay);
+    dispatch(mouseCtor,'click');
+    if(pointerCtor){ dispatch(pointerCtor,'pointerleave'); dispatch(pointerCtor,'pointerout'); }
+    dispatch(mouseCtor,'mouseleave'); dispatch(mouseCtor,'mouseout');
   }
   function parseOfferIdFromLocation(){ const m=location.pathname.match(/\/offers\/edit\/([^\/]+)\/pricing/); return m?m[1]:null; }
 
@@ -268,10 +281,12 @@
   function findDropdownOption(dd,text){ let opt=Array.from(dd.querySelectorAll('.ant-select-item-option')).find(o=>(o.innerText||'').trim()===text); if(!opt){ const c=Array.from(dd.querySelectorAll('.ant-select-item-option-content')).find(n=>(n.innerText||'').trim()===text); if(c) opt=c.closest('.ant-select-item-option'); } return opt; }
   async function antSelectChoose(selectEl,optionText){
     const selBtn=selectEl.querySelector('.ant-select-selector'); if(!selBtn) throw new Error('antSelect: .ant-select-selector не найден');
-    realClick(selBtn);
+    await realClick(selBtn);
+    await sleep(60);
     const dd=await waitForDropdownWithOption(optionText); const opt=findDropdownOption(dd,optionText);
     if(!opt) throw new Error(`Опция "${optionText}" не найдена`);
-    realClick(opt);
+    await realClick(opt);
+    await sleep(60);
     await waitFor(()=>!isVisible(dd)||!document.body.contains(dd),{timeout:8000});
   }
 
