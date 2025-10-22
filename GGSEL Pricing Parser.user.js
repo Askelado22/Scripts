@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.2.0
+// @version      1.2.1
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
@@ -280,7 +280,7 @@
   }
 
   const OFFER_STATUS_SOURCES = ['active', 'paused', 'draft'];
-  const OFFER_LIST_PAGE_SIZE = 1000;
+  const OFFER_LIST_PAGE_SIZE = 100;
   const OFFER_CATALOG_TTL = 3 * 60 * 1000; // 3 минуты
 
   function createOfferCatalogCache() {
@@ -403,12 +403,37 @@
   }
 
   async function fetchOffersByStatus(status, rowsPerPage) {
-    const payload = await fetchOfferListPage({ status, page: 1, rows: rowsPerPage });
-    const data = Array.isArray(payload?.data) ? payload.data : [];
-    if (!data.length) {
-      log.warn(`Список офферов для статуса "${status}" пуст.`);
+    const aggregated = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const currentPage = page;
+      const payload = await fetchOfferListPage({ status, page: currentPage, rows: rowsPerPage });
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      if (!data.length) {
+        log.warn(`Список офферов для статуса "${status}" на странице ${currentPage} пуст.`);
+      }
+      aggregated.push(...data);
+      const meta = payload?.meta || {};
+      const metaTotalPages = Number(
+        meta.total_pages ?? meta.last_page ?? meta.page_count ?? meta.pages ?? payload?.total_pages
+      );
+      const perPage = Number(meta.per_page ?? meta.rows ?? payload?.per_page ?? rowsPerPage) || rowsPerPage;
+      const totalItems = Number(meta.total ?? meta.total_count ?? meta.count ?? payload?.total ?? payload?.total_count);
+      if (Number.isFinite(metaTotalPages) && metaTotalPages > 0) {
+        totalPages = Math.max(totalPages, metaTotalPages);
+      } else if (Number.isFinite(totalItems) && totalItems >= 0) {
+        const inferredPages = Math.max(1, Math.ceil(totalItems / Math.max(1, perPage)));
+        totalPages = Math.max(totalPages, inferredPages);
+      }
+      log.info(`Каталог офферов: статус "${status}", страница ${currentPage} из ${totalPages}, элементов за сессию: ${aggregated.length}.`);
+      page = currentPage + 1;
+    } while (page <= totalPages);
+    if (!aggregated.length) {
+      log.warn(`Полный список офферов для статуса "${status}" пуст.`);
     }
-    return data;
+    log.info(`Каталог офферов: статус "${status}" загружен полностью. Всего позиций: ${aggregated.length}.`);
+    return aggregated;
   }
 
   async function ensureOfferCatalog(forceRefresh = false) {
