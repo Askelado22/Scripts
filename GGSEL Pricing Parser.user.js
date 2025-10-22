@@ -245,6 +245,29 @@
     return `${collapsed.slice(0, limit)}…`;
   }
 
+  function extractOfferTitle(data) {
+    if (!data || typeof data !== 'object') return '';
+    const candidates = [
+      data.title_ru,
+      data.title,
+      data.title_en,
+      data.catalogTitle,
+      data.productName,
+      data.product_title,
+      data.name,
+      data?.product?.title_ru,
+      data?.product?.title,
+      data?.product?.name
+    ];
+    for (const value of candidates) {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+    return '';
+  }
+
   function summarizeOfferPayload(payload) {
     const data = payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
       ? payload.data
@@ -252,7 +275,7 @@
     if (!data || typeof data !== 'object') {
       return { payloadType: typeof payload };
     }
-    const name = data.title_ru || data.title_en || '';
+    const name = extractOfferTitle(data);
     const optionsCount = Array.isArray(data.options) ? data.options.length : 0;
     return {
       id: data.id ?? null,
@@ -326,6 +349,10 @@
 
     const primaryId = offerIdVariants[0];
     const enriched = Object.assign({}, offer);
+    const catalogTitle = extractOfferTitle(enriched);
+    if (catalogTitle) {
+      enriched.catalogTitle = catalogTitle;
+    }
     if (statusTag) {
       enriched.catalogStatus = statusTag;
     }
@@ -733,11 +760,12 @@
 
   function pushBasePriceRow(inputId, offerId, productId, productName, basePrice) {
     const finalPrice = Math.round(basePrice * 100) / 100;
+    const normalizedName = typeof productName === 'string' ? productName.trim() : '';
     state.results.push({
       inputId,
       offerId,
       productId,
-      productName,
+      productName: normalizedName,
       block: '',
       variantName: '',
       modifierText: '',
@@ -1178,7 +1206,7 @@
     }
 
     const productId = offerData.ggsel_id ?? offerId;
-    const productName = (offerData.title_ru || offerData.title_en || '').trim();
+    const productName = extractOfferTitle(offerData) || extractOfferTitle(offer) || '';
     const basePrice = toNumber(offerData.price);
 
     if (productId != null) {
