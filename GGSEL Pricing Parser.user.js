@@ -42,6 +42,13 @@
    ******************************************************************/
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  const LOG_PREFIX = '[GGSEL Parser]';
+  const log = {
+    info: (...args) => console.info(LOG_PREFIX, ...args),
+    warn: (...args) => console.warn(LOG_PREFIX, ...args),
+    error: (...args) => console.error(LOG_PREFIX, ...args)
+  };
+
   // Сохраняем в TM-хранилище
   function saveState() {
     try { GM_setValue(STORE_KEY, JSON.stringify(state)); } catch (e) { console.error(e); }
@@ -225,6 +232,7 @@
       alert('Вставьте ID товаров.');
       return;
     }
+    log.info('Старт обработки списка ID:', ids);
     state.ids = ids;
     state.currentIdIndex = 0;
     state.currentParamIndex = 0;
@@ -236,6 +244,7 @@
   }
 
   function onPause() {
+    log.info('Скрипт приостановлен пользователем.');
     state.running = false;
     saveState();
     updateUi();
@@ -251,6 +260,7 @@
       state.ids = ids;
       state.currentIdIndex = state.currentIdIndex || 0;
     }
+    log.info('Продолжаем обработку.');
     state.running = true;
     saveState();
     updateUi();
@@ -259,6 +269,7 @@
 
   function onReset() {
     if (!confirm('Сбросить прогресс и результаты?')) return;
+    log.info('Сбрасываем состояние скрипта.');
     state = {
       ids: [],
       currentIdIndex: 0,
@@ -283,26 +294,40 @@
   // Возобновление сразу после загрузки страницы (если шли в процессе)
   async function autoResumeIfNeeded() {
     buildUi();
+    if (isServerErrorPage()) {
+      log.warn('Обнаружена страница ошибки 500. Скрипт остановлен до обновления страницы.');
+      state.running = false;
+      saveState();
+      updateUi();
+      return;
+    }
     if (!state.ids.length) return;           // нет задач
     if (!state.running) return;              // не в режиме запуска
     await resumeFlow();
   }
 
   async function resumeFlow() {
+    log.info('Возобновление обработки.');
     // Если URL не на текущем ID — перейдём
     await navigateToCurrent();
     // И дождёмся окончания
     await runForCurrentPage();
   }
 
+  function isServerErrorPage() {
+    return /https:\/\/seller\.ggsel\.net\/500/.test(location.href);
+  }
+
   async function navigateToCurrent() {
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) {
       // Всё готово — можно автоматически экспортировать (по желанию)
+      log.info('Обработка завершена, новых ID нет.');
       updateUi();
       return;
     }
     const target = `https://seller.ggsel.net/offers/edit/${offerId}/pricing`;
+    log.info('Переходим к офферу:', offerId);
     state.lastUrl = target;
     saveState();
     if (location.href !== target) {
@@ -315,24 +340,36 @@
 
   /**
    * Главная процедура обработки текущей страницы/товара
-   */
+  */
   async function runForCurrentPage() {
     await pausePoint();
 
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) return; // всё сделано
 
+    if (isServerErrorPage()) {
+      log.warn('Детектирована страница 500 во время обработки. Останавливаем выполнение.');
+      state.running = false;
+      saveState();
+      updateUi();
+      return;
+    }
+
+    log.info(`Начинаем обработку оффера ${offerId}.`);
+
     // 1) Ждём стандартную цену
+    log.info('Ожидаем поле стандартной цены.');
     const costInput = await waitForSelector('#offerCost', 25000);
     if (!costInput) {
-      console.warn('Не нашли #offerCost — возможно, страница ещё не прогрузилась.');
+      log.warn('Не нашли #offerCost — возможно, страница ещё не прогрузилась.');
       return; // просто оставим страницу – можно нажать «Продолжить»
     }
     const basePrice = readNumberInput(costInput);
     if (basePrice == null) {
-      console.warn('Не удалось прочитать стандартную цену.');
+      log.warn('Не удалось прочитать стандартную цену.');
       return;
     }
+    log.info('Стандартная цена:', basePrice);
 
     // 2) Название товара — берём последний элемент хлебных крошек
     await pausePoint();
@@ -340,16 +377,28 @@
       const nodes = Array.from(document.querySelectorAll('.ant-breadcrumb-link'));
       return nodes.length ? nodes[nodes.length - 1].textContent.trim() : null;
     }, 15000) || '';
+    log.info('Название товара:', productName || '(не найдено)');
 
     // 3) Список параметров (ul > li)
     await pausePoint();
+    log.info('Ищем блоки параметров.');
     const ul = await waitFor(() => {
       // классы у ul динамические, ищем по сигнатуре
       return document.querySelector('ul[class*="style_list__"]');
     }, 20000);
 
     if (!ul) {
-      console.warn('Не нашли список параметров.');
+      log.warn('Не нашли список параметров. Сохраняем только стандартную цену.');
+      state.results.push({
+        offerId,
+        productName,
+        block: '',
+        variantName: '',
+        modifierText: '',
+        finalPrice: Math.round(basePrice * 100) / 100
+      });
+      saveState();
+      await completeCurrentOffer();
       return;
     }
 
@@ -364,11 +413,12 @@
 
       // подпись/название блока параметров (в строке слева)
       const blockLabel = (li.querySelector('span.ant-typography')?.textContent || '').trim();
+      log.info(`Обрабатываем блок: ${blockLabel || '(без названия)'}`);
 
       // кнопка «карандаш»
       const editBtn = li.querySelector('[aria-label="edit"]');
       if (!editBtn) {
-        console.log('Нет кнопки редактирования у блока:', blockLabel);
+        log.warn('Нет кнопки редактирования у блока:', blockLabel);
         continue;
       }
 
@@ -378,7 +428,7 @@
       // дождаться модалки
       const modal = await waitForSelector('.ant-modal-content', 15000);
       if (!modal) {
-        console.warn('Модальное окно не открылось.');
+        log.warn('Модальное окно не открылось.');
         continue;
       }
 
@@ -432,6 +482,12 @@
 
         if (!isValidSign || !hasNumber || !isRub) {
           // такие варианты пропускаем
+          log.warn('Вариант пропущен из-за некорректных данных:', {
+            variantName,
+            signText,
+            modVal,
+            currency
+          });
           continue;
         }
 
@@ -453,6 +509,7 @@
 
       // сохраняем: сначала «По умолчанию», затем остальные
       state.results.push(...defaultFirst, ...others);
+      log.info(`Сохранено вариантов: ${defaultFirst.length + others.length} (включая "По умолчанию": ${defaultFirst.length}).`);
       saveState();
 
       // закрыть модалку
@@ -462,6 +519,10 @@
     }
 
     // блок параметров для этого оффера пройден — сбрасываем указатель параметров
+    await completeCurrentOffer();
+  }
+
+  async function completeCurrentOffer() {
     state.currentParamIndex = 0;
 
     // переходим к следующему ID
@@ -471,6 +532,7 @@
 
     // если всё выполнено — можно экспортировать, иначе — открыть след. товар
     if (state.currentIdIndex >= state.ids.length) {
+      log.info('Все офферы обработаны. Скрипт остановлен.');
       state.running = false;
       saveState();
       updateUi();
@@ -478,6 +540,7 @@
       // exportToXlsx(state.results);
       return;
     } else {
+      log.info('Переходим к следующему офферу.');
       // переходим к следующему товару
       await navigateToCurrent();
     }
