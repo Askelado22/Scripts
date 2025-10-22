@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.1.1
+// @version      1.1.2
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
@@ -138,6 +138,99 @@
     return `${sign} ${formatNumber(absVal)}`;
   }
 
+  const SENSITIVE_HEADER_PATTERNS = [/token/i, /authorization/i, /cookie/i, /cf_clearance/i, /qrator/i, /refresh/i];
+
+  function maskSensitiveValue(key, value) {
+    if (value == null) return value;
+    const stringValue = String(value);
+    if (!stringValue) return stringValue;
+    if (SENSITIVE_HEADER_PATTERNS.some(pattern => pattern.test(key)) || SENSITIVE_HEADER_PATTERNS.some(pattern => pattern.test(stringValue))) {
+      if (stringValue.length <= 8) return '***';
+      return `${stringValue.slice(0, 4)}…${stringValue.slice(-4)}`;
+    }
+    return stringValue;
+  }
+
+  function sanitizeHeadersForLog(headers) {
+    const result = {};
+    if (!headers || typeof headers !== 'object') return result;
+    for (const [key, value] of Object.entries(headers)) {
+      result[key] = maskSensitiveValue(key, value);
+    }
+    return result;
+  }
+
+  function uniqueLanguages(list) {
+    const seen = new Set();
+    const result = [];
+    for (const lang of list) {
+      if (!lang || typeof lang !== 'string') continue;
+      if (seen.has(lang)) continue;
+      seen.add(lang);
+      result.push(lang);
+    }
+    return result;
+  }
+
+  function getPreferredLanguages() {
+    const langs = [];
+    if (Array.isArray(navigator.languages) && navigator.languages.length) {
+      langs.push(...navigator.languages);
+    }
+    if (typeof navigator.language === 'string' && navigator.language) {
+      langs.push(navigator.language);
+    }
+    if (!langs.length) {
+      langs.push('ru-RU');
+    }
+    return uniqueLanguages(langs);
+  }
+
+  function buildAcceptLanguageValue(langs) {
+    const limited = langs.slice(0, 5);
+    return limited
+      .map((lang, index) => {
+        if (index === 0) return lang;
+        const weight = Math.max(0.1, (1 - index * 0.2)).toFixed(1);
+        return `${lang};q=${weight}`;
+      })
+      .join(', ');
+  }
+
+  function shortenForLog(value, limit = 160) {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (trimmed.length <= limit) return trimmed;
+    return `${trimmed.slice(0, limit)}…`;
+  }
+
+  function previewBodyForLog(value, limit = 800) {
+    if (typeof value !== 'string') return '';
+    const collapsed = value.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    if (!collapsed) return '';
+    if (collapsed.length <= limit) return collapsed;
+    return `${collapsed.slice(0, limit)}…`;
+  }
+
+  function summarizeOfferPayload(payload) {
+    const data = payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
+      ? payload.data
+      : payload;
+    if (!data || typeof data !== 'object') {
+      return { payloadType: typeof payload };
+    }
+    const name = data.title_ru || data.title_en || '';
+    const optionsCount = Array.isArray(data.options) ? data.options.length : 0;
+    return {
+      id: data.id ?? null,
+      ggsel_id: data.ggsel_id ?? null,
+      title_preview: shortenForLog(name, 120),
+      price: data.price ?? null,
+      options: optionsCount
+    };
+  }
+
   function readCookie(name) {
     const cookieMatch = document.cookie?.match(new RegExp(`(?:^|; )${name.replace(/[.$?*|{}()\[\]\\\/\+^]/g, '\\$&')}=([^;]*)`));
     return cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
@@ -213,8 +306,10 @@
       }
     }
 
-    const cookieToken = readCookie('access_token') || readCookie('auth_token');
-    if (cookieToken) {
+    const cookieCandidates = ['access_token', 'ACCESS_TOKEN', 'auth_token', 'AUTH_TOKEN'];
+    for (const cookieName of cookieCandidates) {
+      const cookieToken = readCookie(cookieName);
+      if (!cookieToken) continue;
       return /^Bearer\s+/i.test(cookieToken) ? cookieToken : `Bearer ${cookieToken}`;
     }
 
@@ -226,6 +321,14 @@
       'Accept': 'application/json, text/plain, */*',
       'X-Requested-With': 'XMLHttpRequest'
     };
+    const preferredLanguages = getPreferredLanguages();
+    if (preferredLanguages.length) {
+      headers['Accept-Language'] = buildAcceptLanguageValue(preferredLanguages);
+      const primaryLocale = preferredLanguages[0].split('-')[0];
+      if (primaryLocale) {
+        headers['locale'] = primaryLocale.toLowerCase();
+      }
+    }
     const csrf = resolveCsrfToken();
     if (csrf) {
       headers['X-CSRF-Token'] = csrf;
@@ -240,23 +343,58 @@
 
   async function fetchOfferDetails(offerId) {
     const url = `https://seller.ggsel.net/api/v1/offers/${offerId}`;
-    log.info('Запрашиваем данные оффера через API:', url);
+    const requestHeaders = buildAuthHeaders();
+    log.info('Запрашиваем данные оффера через API:', JSON.stringify({
+      method: 'GET',
+      url,
+      headers: sanitizeHeadersForLog(requestHeaders)
+    }));
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
+    const startedAt = performance.now();
     try {
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include',
         signal: controller.signal,
-        headers: buildAuthHeaders()
+        headers: requestHeaders
       });
+      const duration = Math.round(performance.now() - startedAt);
+      const responseHeaders = {};
+      try {
+        response.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+      } catch (e) {
+        // игнорируем невозможность прочитать заголовки
+      }
+      log.info('Ответ API оффера:', JSON.stringify({
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        durationMs: duration,
+        headers: sanitizeHeadersForLog(responseHeaders)
+      }));
       if (!response.ok) {
+        let bodyPreview = '';
+        try {
+          bodyPreview = previewBodyForLog(await response.clone().text());
+        } catch (e) {
+          bodyPreview = '';
+        }
+        if (bodyPreview) {
+          log.warn('Тело ответа с ошибкой:', bodyPreview);
+        }
         const error = new Error(`HTTP ${response.status}`);
         error.status = response.status;
         error.statusText = response.statusText;
+        if (bodyPreview) {
+          error.body = bodyPreview;
+        }
         throw error;
       }
       const payload = await response.json();
+      log.info('Краткая сводка данных оффера:', JSON.stringify(summarizeOfferPayload(payload)));
       if (payload && typeof payload === 'object' && 'data' in payload) {
         const inner = payload.data;
         if (inner && typeof inner === 'object') {
