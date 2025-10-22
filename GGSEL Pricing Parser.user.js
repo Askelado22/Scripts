@@ -481,9 +481,9 @@
       return;
     }
 
-    const editButtons = ul.querySelectorAll('[aria-label="edit"]');
-    if (!editButtons.length) {
-      log.warn('В блоке параметров нет доступных вариантов. Сохраняем только стандартную цену.');
+    const items = Array.from(ul.querySelectorAll('li'));
+    if (!items.length) {
+      log.warn('Список параметров пуст. Сохраняем только стандартную цену.');
       state.results.push({
         offerId,
         productName,
@@ -497,14 +497,55 @@
       return;
     }
 
-    const items = Array.from(ul.querySelectorAll('li'));
+    const radioItems = items.filter(li => /радио кнопки/i.test((li.textContent || '').toLowerCase()));
+    if (!radioItems.length) {
+      log.warn('Нет блоков параметров типа «Радио кнопки». Сохраняем только стандартную цену.');
+      state.results.push({
+        offerId,
+        productName,
+        block: '',
+        variantName: '',
+        modifierText: '',
+        finalPrice: Math.round(basePrice * 100) / 100
+      });
+      saveState();
+      await completeCurrentOffer();
+      return;
+    }
+
+    const itemsWithEdit = radioItems.filter(li => li.querySelector('[aria-label="edit"]'));
+    if (!itemsWithEdit.length) {
+      log.warn('Блоки «Радио кнопки» не содержат кнопок редактирования. Сохраняем только стандартную цену.');
+      state.results.push({
+        offerId,
+        productName,
+        block: '',
+        variantName: '',
+        modifierText: '',
+        finalPrice: Math.round(basePrice * 100) / 100
+      });
+      saveState();
+      await completeCurrentOffer();
+      return;
+    }
+
+    if (radioItems.length < items.length) {
+      log.info(`Пропускаем ${items.length - radioItems.length} блок(ов) без типа «Радио кнопки».`);
+    }
+    log.info(`К обработке доступно блоков «Радио кнопки»: ${itemsWithEdit.length}.`);
+
+    if (state.currentParamIndex >= itemsWithEdit.length) {
+      state.currentParamIndex = 0;
+      saveState();
+    }
+
     // Продолжим с индекса, сохранённого в state.currentParamIndex
-    for (let i = state.currentParamIndex; i < items.length; i++) {
+    for (let i = state.currentParamIndex; i < itemsWithEdit.length; i++) {
       await pausePoint();
       state.currentParamIndex = i;
       saveState();
 
-      const li = items[i];
+      const li = itemsWithEdit[i];
 
       // подпись/название блока параметров (в строке слева)
       const blockLabel = (li.querySelector('span.ant-typography')?.textContent || '').trim();
@@ -649,13 +690,45 @@
     const header = ['ID товара', 'Название товара', 'Блок параметров', 'Параметр', 'Модификатор', 'Итоговая цена'];
     const data = rows.map(r => [r.offerId, r.productName, r.block, r.variantName, r.modifierText, r.finalPrice]);
 
+    // подготовим объединения ячеек и очистим дублирующиеся значения для красоты
+    const merges = [];
+    let startIndex = 0;
+    while (startIndex < rows.length) {
+      const current = rows[startIndex];
+      let endIndex = startIndex + 1;
+      while (
+        endIndex < rows.length &&
+        rows[endIndex].offerId === current.offerId &&
+        rows[endIndex].productName === current.productName &&
+        rows[endIndex].block === current.block
+      ) {
+        endIndex++;
+      }
+
+      const span = endIndex - startIndex;
+      if (span > 1) {
+        const startRow = startIndex + 1; // +1 из-за заголовка
+        const endRow = startRow + span - 1;
+        for (const col of [0, 1, 2]) {
+          merges.push({ s: { r: startRow, c: col }, e: { r: endRow, c: col } });
+          for (let r = startIndex + 1; r < endIndex; r++) {
+            data[r][col] = '';
+          }
+        }
+      }
+
+      startIndex = endIndex;
+    }
+
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+    if (merges.length) ws['!merges'] = merges;
+
     // немного ширины колонок
     ws['!cols'] = [
       { wch: 16 }, // ID товара
       { wch: 50 }, // Название товара
-      { wch: 20 }, // Блок параметров
-      { wch: 20 }, // Параметр
+      { wch: 24 }, // Блок параметров
+      { wch: 22 }, // Параметр
       { wch: 14 }, // Модификатор
       { wch: 16 }  // Итоговая цена
     ];
