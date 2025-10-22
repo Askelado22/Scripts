@@ -265,10 +265,25 @@
 
   function summarizeOfferListPayload(payload) {
     const data = Array.isArray(payload?.data) ? payload.data : [];
-    const meta = payload?.meta || {};
-    const total = Number(meta.total ?? data.length) || data.length;
-    const currentPage = Number(meta.current_page ?? meta.page ?? 1) || 1;
-    const lastPage = Number(meta.last_page ?? meta.total_pages ?? currentPage) || currentPage;
+    const meta = payload?.meta || payload?.pagination || {};
+    const total = Number(
+      meta.total ??
+      meta.total_count ??
+      meta.count ??
+      payload?.total ??
+      payload?.total_count ??
+      data.length
+    ) || data.length;
+    const currentPage = Number(meta.current_page ?? meta.page ?? payload?.page ?? 1) || 1;
+    const lastPage = Number(
+      meta.last_page ??
+      meta.total_pages ??
+      meta.page_count ??
+      meta.pages ??
+      payload?.last_page ??
+      payload?.total_pages ??
+      currentPage
+    ) || currentPage;
     const status = payload?.status || meta.status || null;
     return {
       status,
@@ -414,19 +429,46 @@
         log.warn(`Список офферов для статуса "${status}" на странице ${currentPage} пуст.`);
       }
       aggregated.push(...data);
-      const meta = payload?.meta || {};
+      const meta = payload?.meta || payload?.pagination || {};
       const metaTotalPages = Number(
-        meta.total_pages ?? meta.last_page ?? meta.page_count ?? meta.pages ?? payload?.total_pages
+        meta.total_pages ??
+        meta.last_page ??
+        meta.page_count ??
+        meta.pages ??
+        payload?.meta?.total_pages ??
+        payload?.pagination?.total_pages ??
+        payload?.total_pages
       );
-      const perPage = Number(meta.per_page ?? meta.rows ?? payload?.per_page ?? rowsPerPage) || rowsPerPage;
-      const totalItems = Number(meta.total ?? meta.total_count ?? meta.count ?? payload?.total ?? payload?.total_count);
+      const perPage = Number(
+        meta.per_page ??
+        meta.rows ??
+        meta.limit ??
+        payload?.per_page ??
+        payload?.rows ??
+        rowsPerPage
+      ) || rowsPerPage;
+      const totalItems = Number(
+        meta.total ??
+        meta.total_count ??
+        meta.count ??
+        payload?.total ??
+        payload?.total_count
+      );
       if (Number.isFinite(metaTotalPages) && metaTotalPages > 0) {
         totalPages = Math.max(totalPages, metaTotalPages);
       } else if (Number.isFinite(totalItems) && totalItems >= 0) {
         const inferredPages = Math.max(1, Math.ceil(totalItems / Math.max(1, perPage)));
         totalPages = Math.max(totalPages, inferredPages);
       }
-      log.info(`Каталог офферов: статус "${status}", страница ${currentPage} из ${totalPages}, элементов за сессию: ${aggregated.length}.`);
+      const pageInfo = {
+        status,
+        page: currentPage,
+        totalPages,
+        received: data.length,
+        aggregated: aggregated.length
+      };
+      if (Number.isFinite(totalItems)) pageInfo.totalItems = totalItems;
+      log.info('Каталог офферов: прогресс страницы', JSON.stringify(pageInfo));
       page = currentPage + 1;
     } while (page <= totalPages);
     if (!aggregated.length) {
