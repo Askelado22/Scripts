@@ -287,6 +287,7 @@
     return {
       byOfferId: new Map(),
       keyToOfferId: new Map(),
+      ggselIdToOfferId: new Map(),
       fetchedStatuses: new Set(),
       lastFetchedAt: 0,
       loaded: false
@@ -323,6 +324,11 @@
 
     for (const idVariant of offerIdVariants) {
       offerCatalog.keyToOfferId.set(idVariant, primaryId);
+    }
+
+    const ggselIdNormalized = normalizeIdKey(offer.ggsel_id);
+    if (ggselIdNormalized) {
+      offerCatalog.ggselIdToOfferId.set(ggselIdNormalized, primaryId);
     }
 
     registerKey(offer.ggsel_id);
@@ -397,34 +403,12 @@
   }
 
   async function fetchOffersByStatus(status, rowsPerPage) {
-    const aggregated = [];
-    let page = 1;
-    while (true) {
-      const payload = await fetchOfferListPage({ status, page, rows: rowsPerPage });
-      const data = Array.isArray(payload?.data) ? payload.data : [];
-      if (!data.length) {
-        break;
-      }
-      aggregated.push(...data);
-      const meta = payload?.meta || {};
-      const currentPage = Number(meta.current_page ?? meta.page ?? page) || page;
-      const lastPage = Number(meta.last_page ?? meta.total_pages ?? meta.pages ?? currentPage) || currentPage;
-      const hasMore = (data.length >= rowsPerPage) && currentPage < lastPage;
-      if (!hasMore) {
-        if (data.length >= rowsPerPage && currentPage === lastPage && Number(meta.total ?? 0) > aggregated.length) {
-          page += 1;
-          if (page > 100) break;
-          continue;
-        }
-        break;
-      }
-      page += 1;
-      if (page > 100) {
-        log.warn('Достигнут предел пагинации при загрузке списка офферов. Останавливаемся на странице', page - 1);
-        break;
-      }
+    const payload = await fetchOfferListPage({ status, page: 1, rows: rowsPerPage });
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    if (!data.length) {
+      log.warn(`Список офферов для статуса "${status}" пуст.`);
     }
-    return aggregated;
+    return data;
   }
 
   async function ensureOfferCatalog(forceRefresh = false) {
@@ -441,6 +425,7 @@
       }
       offerCatalog.byOfferId.clear();
       offerCatalog.keyToOfferId.clear();
+      offerCatalog.ggselIdToOfferId.clear();
       offerCatalog.fetchedStatuses.clear();
       let totalCount = 0;
       for (const status of OFFER_STATUS_SOURCES) {
@@ -466,6 +451,17 @@
   }
 
   function findOfferInCatalogByKey(key) {
+    const normalizedKey = normalizeIdKey(key);
+    if (normalizedKey) {
+      const ggselMatchId = offerCatalog.ggselIdToOfferId.get(normalizedKey);
+      if (ggselMatchId) {
+        const ggselOffer = offerCatalog.byOfferId.get(ggselMatchId);
+        if (ggselOffer) {
+          return { offerId: ggselMatchId, offer: ggselOffer, matchedKey: normalizedKey, matchedBy: 'ggsel_id' };
+        }
+      }
+    }
+
     const variants = collectKeyVariants(key);
     for (const variant of variants) {
       if (!variant) continue;
@@ -1034,8 +1030,12 @@
       return;
     }
 
-    const { offerId, offer, matchedKey } = resolution;
-    log.info(`Найден внутренний оффер ${offerId} (совпадение по ключу: ${matchedKey}).`);
+    const { offerId, offer, matchedKey, matchedBy } = resolution;
+    if (matchedBy === 'ggsel_id') {
+      log.info(`Найден внутренний оффер ${offerId} по ggsel_id ${matchedKey}.`);
+    } else {
+      log.info(`Найден внутренний оффер ${offerId} (совпадение по ключу: ${matchedKey}).`);
+    }
     if (offer?.catalogStatus) {
       log.info('Каталожный статус оффера:', offer.catalogStatus);
     }
