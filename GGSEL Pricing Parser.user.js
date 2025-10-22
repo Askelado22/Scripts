@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.1.2
+// @version      1.2.0
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
@@ -138,6 +138,38 @@
     return `${sign} ${formatNumber(absVal)}`;
   }
 
+  function normalizeIdKey(value) {
+    if (value == null) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    return str;
+  }
+
+  function collectKeyVariants(value) {
+    const variants = [];
+    const normalized = normalizeIdKey(value);
+    if (!normalized) return variants;
+    variants.push(normalized);
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) {
+      const numericStr = String(numeric);
+      if (!variants.includes(numericStr)) variants.push(numericStr);
+    }
+    return variants;
+  }
+
+  function extractProductIdFromUrl(url) {
+    if (typeof url !== 'string') return null;
+    const match = url.match(/product\/(\d+)/i);
+    return match ? match[1] : null;
+  }
+
+  function getResultRowKey(row) {
+    if (!row || typeof row !== 'object') return null;
+    const idCandidate = row.inputId ?? row.offerId ?? null;
+    return normalizeIdKey(idCandidate);
+  }
+
   const SENSITIVE_HEADER_PATTERNS = [/token/i, /authorization/i, /cookie/i, /cf_clearance/i, /qrator/i, /refresh/i];
 
   function maskSensitiveValue(key, value) {
@@ -229,6 +261,235 @@
       price: data.price ?? null,
       options: optionsCount
     };
+  }
+
+  function summarizeOfferListPayload(payload) {
+    const data = Array.isArray(payload?.data) ? payload.data : [];
+    const meta = payload?.meta || {};
+    const total = Number(meta.total ?? data.length) || data.length;
+    const currentPage = Number(meta.current_page ?? meta.page ?? 1) || 1;
+    const lastPage = Number(meta.last_page ?? meta.total_pages ?? currentPage) || currentPage;
+    const status = payload?.status || meta.status || null;
+    return {
+      status,
+      count: data.length,
+      total,
+      page: currentPage,
+      lastPage
+    };
+  }
+
+  const OFFER_STATUS_SOURCES = ['active', 'paused', 'draft'];
+  const OFFER_LIST_PAGE_SIZE = 1000;
+  const OFFER_CATALOG_TTL = 3 * 60 * 1000; // 3 минуты
+
+  function createOfferCatalogCache() {
+    return {
+      byOfferId: new Map(),
+      keyToOfferId: new Map(),
+      fetchedStatuses: new Set(),
+      lastFetchedAt: 0,
+      loaded: false
+    };
+  }
+
+  let offerCatalog = createOfferCatalogCache();
+  let offerCatalogLoading = null;
+  let catalogNeedsReload = true;
+
+  function resetOfferCatalogCache() {
+    offerCatalog = createOfferCatalogCache();
+    offerCatalogLoading = null;
+    catalogNeedsReload = true;
+  }
+
+  function registerOfferInCatalog(offer, statusTag) {
+    if (!offer || typeof offer !== 'object') return;
+    const offerIdVariants = collectKeyVariants(offer.id);
+    if (!offerIdVariants.length) return;
+
+    const primaryId = offerIdVariants[0];
+    const enriched = Object.assign({}, offer);
+    if (statusTag) {
+      enriched.catalogStatus = statusTag;
+    }
+    offerCatalog.byOfferId.set(primaryId, enriched);
+
+    const registerKey = (value) => {
+      for (const variant of collectKeyVariants(value)) {
+        offerCatalog.keyToOfferId.set(variant, primaryId);
+      }
+    };
+
+    for (const idVariant of offerIdVariants) {
+      offerCatalog.keyToOfferId.set(idVariant, primaryId);
+    }
+
+    registerKey(offer.ggsel_id);
+    registerKey(offer.ggsel_digi_catalog);
+    registerKey(offer.ggsel_product_id);
+    registerKey(offer.ggsel_product_url);
+    const fromUrl = extractProductIdFromUrl(offer.ggsel_product_url);
+    if (fromUrl) registerKey(fromUrl);
+  }
+
+  async function fetchOfferListPage({ status, page = 1, rows = OFFER_LIST_PAGE_SIZE }) {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('rows', String(rows));
+    if (status) params.set('status', status);
+    params.set('autoselling', '');
+    const url = `https://seller.ggsel.net/api/v1/offers?${params.toString()}`;
+    const requestHeaders = buildAuthHeaders();
+    log.info('Запрашиваем список офферов через API:', JSON.stringify({
+      method: 'GET',
+      url,
+      headers: sanitizeHeadersForLog(requestHeaders)
+    }));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const startedAt = performance.now();
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        signal: controller.signal,
+        headers: requestHeaders
+      });
+      const duration = Math.round(performance.now() - startedAt);
+      const responseHeaders = {};
+      try {
+        response.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+      } catch (e) {
+        // ignore header parsing errors
+      }
+      log.info('Ответ API списка офферов:', JSON.stringify({
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        durationMs: duration,
+        headers: sanitizeHeadersForLog(responseHeaders)
+      }));
+      if (!response.ok) {
+        let bodyPreview = '';
+        try {
+          bodyPreview = previewBodyForLog(await response.clone().text());
+        } catch (e) {
+          bodyPreview = '';
+        }
+        if (bodyPreview) {
+          log.warn('Тело ответа списка с ошибкой:', bodyPreview);
+        }
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.statusText = response.statusText;
+        if (bodyPreview) error.body = bodyPreview;
+        throw error;
+      }
+      const payload = await response.json();
+      log.info('Краткая сводка списка офферов:', JSON.stringify(summarizeOfferListPayload(payload)));
+      return payload;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function fetchOffersByStatus(status, rowsPerPage) {
+    const aggregated = [];
+    let page = 1;
+    while (true) {
+      const payload = await fetchOfferListPage({ status, page, rows: rowsPerPage });
+      const data = Array.isArray(payload?.data) ? payload.data : [];
+      if (!data.length) {
+        break;
+      }
+      aggregated.push(...data);
+      const meta = payload?.meta || {};
+      const currentPage = Number(meta.current_page ?? meta.page ?? page) || page;
+      const lastPage = Number(meta.last_page ?? meta.total_pages ?? meta.pages ?? currentPage) || currentPage;
+      const hasMore = (data.length >= rowsPerPage) && currentPage < lastPage;
+      if (!hasMore) {
+        if (data.length >= rowsPerPage && currentPage === lastPage && Number(meta.total ?? 0) > aggregated.length) {
+          page += 1;
+          if (page > 100) break;
+          continue;
+        }
+        break;
+      }
+      page += 1;
+      if (page > 100) {
+        log.warn('Достигнут предел пагинации при загрузке списка офферов. Останавливаемся на странице', page - 1);
+        break;
+      }
+    }
+    return aggregated;
+  }
+
+  async function ensureOfferCatalog(forceRefresh = false) {
+    const now = Date.now();
+    if (!forceRefresh && offerCatalog.loaded && (now - offerCatalog.lastFetchedAt) < OFFER_CATALOG_TTL) {
+      return offerCatalog;
+    }
+    if (offerCatalogLoading) {
+      return offerCatalogLoading;
+    }
+    offerCatalogLoading = (async () => {
+      if (forceRefresh) {
+        offerCatalog = createOfferCatalogCache();
+      }
+      offerCatalog.byOfferId.clear();
+      offerCatalog.keyToOfferId.clear();
+      offerCatalog.fetchedStatuses.clear();
+      let totalCount = 0;
+      for (const status of OFFER_STATUS_SOURCES) {
+        try {
+          const list = await fetchOffersByStatus(status, OFFER_LIST_PAGE_SIZE);
+          list.forEach(item => registerOfferInCatalog(item, status));
+          offerCatalog.fetchedStatuses.add(status);
+          totalCount += list.length;
+          log.info(`Загружено офферов для статуса "${status}": ${list.length}.`);
+        } catch (error) {
+          log.error(`Не удалось загрузить офферы со статусом "${status}":`, error?.message || error);
+          throw error;
+        }
+      }
+      offerCatalog.lastFetchedAt = Date.now();
+      offerCatalog.loaded = true;
+      log.info(`Каталог офферов обновлён. Всего записей: ${totalCount}.`);
+      return offerCatalog;
+    })().finally(() => {
+      offerCatalogLoading = null;
+    });
+    return offerCatalogLoading;
+  }
+
+  function findOfferInCatalogByKey(key) {
+    const variants = collectKeyVariants(key);
+    for (const variant of variants) {
+      if (!variant) continue;
+      const offerId = offerCatalog.keyToOfferId.get(variant);
+      if (!offerId) continue;
+      const offer = offerCatalog.byOfferId.get(offerId);
+      if (offer) {
+        return { offerId, offer, matchedKey: variant };
+      }
+    }
+    return null;
+  }
+
+  async function resolveOfferForInputId(inputId) {
+    if (!normalizeIdKey(inputId)) return null;
+    await ensureOfferCatalog(false);
+    let resolution = findOfferInCatalogByKey(inputId);
+    if (resolution) {
+      return resolution;
+    }
+    log.warn('Не нашли ID в текущем каталоге. Обновляем список офферов.');
+    await ensureOfferCatalog(true);
+    resolution = findOfferInCatalogByKey(inputId);
+    return resolution;
   }
 
   function readCookie(name) {
@@ -407,9 +668,10 @@
     }
   }
 
-  function pushBasePriceRow(offerId, productId, productName, basePrice) {
+  function pushBasePriceRow(inputId, offerId, productId, productName, basePrice) {
     const finalPrice = Math.round(basePrice * 100) / 100;
     state.results.push({
+      inputId,
       offerId,
       productId,
       productName,
@@ -566,6 +828,7 @@
       return;
     }
     log.info('Старт обработки списка ID:', ids);
+    resetOfferCatalogCache();
     state.ids = ids;
     state.currentIdIndex = 0;
     state.currentParamIndex = 0;
@@ -599,6 +862,7 @@
       state.currentIdIndex = state.currentIdIndex || 0;
     }
     log.info('Продолжаем обработку.');
+    catalogNeedsReload = true;
     if (state.pausedDueToError) {
       const redoPreview = state.ids.slice(state.currentIdIndex, Math.min(state.ids.length, state.currentIdIndex + 4));
       if (redoPreview.length) {
@@ -619,6 +883,7 @@
     state = Object.assign({}, DEFAULT_STATE);
     saveState();
     if (ui) ui.ids.value = '';
+    resetOfferCatalogCache();
     updateUi();
   }
 
@@ -657,6 +922,22 @@
         updateUi();
         return;
       }
+      try {
+        if (catalogNeedsReload) {
+          log.info('Обновляем каталог офферов по статусам.');
+          await ensureOfferCatalog(true);
+          catalogNeedsReload = false;
+        } else {
+          await ensureOfferCatalog(false);
+        }
+      } catch (error) {
+        log.error('Не удалось подготовить каталог офферов:', error?.message || error);
+        state.running = false;
+        state.pausedDueToError = true;
+        saveState();
+        updateUi();
+        return;
+      }
       while (state.running && state.currentIdIndex < state.ids.length) {
         await runForCurrentPage();
       }
@@ -690,7 +971,8 @@
       const redoIds = new Set(state.ids.slice(redoStart, redoEndExclusive));
 
       if (redoIds.size) {
-        state.results = state.results.filter(row => !redoIds.has(row.offerId));
+        const normalizedRedoIds = new Set(Array.from(redoIds).map(normalizeIdKey).filter(Boolean));
+        state.results = state.results.filter(row => !normalizedRedoIds.has(getResultRowKey(row)));
       }
 
       const stoppedIdx = Math.min(state.currentIdIndex, state.ids.length - 1);
@@ -715,14 +997,15 @@
    * Главная процедура обработки текущей страницы/товара
   */
   async function runForCurrentPage() {
-    const offerId = state.ids[state.currentIdIndex];
-    if (!offerId) return; // всё сделано
+    const inputId = state.ids[state.currentIdIndex];
+    if (!inputId) return; // всё сделано
 
-    log.info('Переходим к офферу:', offerId);
+    const normalizedInputId = normalizeIdKey(inputId);
+    log.info('Переходим к ID товара:', inputId);
 
     await pausePoint();
 
-    state.lastStoppedId = offerId;
+    state.lastStoppedId = inputId;
     saveState();
 
     if (isServerErrorPage()) {
@@ -730,34 +1013,13 @@
       return;
     }
 
-    log.info(`Начинаем обработку оффера ${offerId}.`);
+    log.info(`Начинаем обработку ID ${inputId}.`);
 
-    let offerData;
+    let resolution;
     try {
-      offerData = await fetchOfferDetails(offerId);
+      resolution = await resolveOfferForInputId(inputId);
     } catch (error) {
-      if (error?.name === 'AbortError') {
-        log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
-        state.running = false;
-        state.pausedDueToError = true;
-        saveState();
-        updateUi();
-        return;
-      }
-
-      if (typeof error?.status === 'number' && error.status >= 500) {
-        pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
-        return;
-      }
-
-      if (error?.status === 404) {
-        log.warn(`Оффер ${offerId} не найден (HTTP 404). Пропускаем и переходим к следующему.`);
-        await completeCurrentOffer();
-        return;
-      }
-
-      const message = `Не удалось получить данные оффера: ${error?.message || error}`;
-      log.error(message);
+      log.error('Ошибка при сопоставлении ID товара с оффером:', error?.message || error);
       state.running = false;
       state.pausedDueToError = true;
       saveState();
@@ -765,13 +1027,87 @@
       return;
     }
 
+    if (!resolution) {
+      log.warn(`Не удалось найти оффер для ID ${inputId}. Пропускаем.`);
+      state.results = state.results.filter(row => getResultRowKey(row) !== normalizedInputId);
+      await completeCurrentOffer();
+      return;
+    }
+
+    const { offerId, offer, matchedKey } = resolution;
+    log.info(`Найден внутренний оффер ${offerId} (совпадение по ключу: ${matchedKey}).`);
+    if (offer?.catalogStatus) {
+      log.info('Каталожный статус оффера:', offer.catalogStatus);
+    }
+
+    let offerData = offer;
+    let fetchedDetails = false;
+
     if (!offerData || typeof offerData !== 'object') {
-      log.error('API вернуло некорректный ответ. Ожидался объект.');
+      log.warn('Запись оффера из каталога пуста. Пробуем запросить детали напрямую.');
+      try {
+        offerData = await fetchOfferDetails(offerId);
+        fetchedDetails = true;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
+        } else if (typeof error?.status === 'number' && error.status >= 500) {
+          pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
+        } else if (error?.status === 404) {
+          log.warn(`Оффер ${offerId} не найден (HTTP 404). Пропускаем и переходим к следующему.`);
+          state.results = state.results.filter(row => getResultRowKey(row) !== normalizedInputId);
+          await completeCurrentOffer();
+        } else {
+          const message = `Не удалось получить данные оффера: ${error?.message || error}`;
+          log.error(message);
+          state.running = false;
+          state.pausedDueToError = true;
+          saveState();
+          updateUi();
+        }
+        return;
+      }
+    }
+
+    if (!Array.isArray(offerData?.options) || !offerData.options.length) {
+      log.info('В каталоге нет блоков опций. Дополнительно запрашиваем детали оффера.');
+      try {
+        offerData = await fetchOfferDetails(offerId);
+        fetchedDetails = true;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
+        } else if (typeof error?.status === 'number' && error.status >= 500) {
+          pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
+        } else if (error?.status === 404) {
+          log.warn(`Оффер ${offerId} не найден при запросе деталей (HTTP 404). Пропускаем.`);
+          state.results = state.results.filter(row => getResultRowKey(row) !== normalizedInputId);
+          await completeCurrentOffer();
+        } else {
+          const message = `Не удалось получить данные оффера: ${error?.message || error}`;
+          log.error(message);
+          state.running = false;
+          state.pausedDueToError = true;
+          saveState();
+          updateUi();
+        }
+        return;
+      }
+    }
+
+    if (!offerData || typeof offerData !== 'object') {
+      log.error('Не удалось подготовить данные оффера. Ожидался объект с полями товара.');
       state.running = false;
       state.pausedDueToError = true;
       saveState();
       updateUi();
       return;
+    }
+
+    if (fetchedDetails) {
+      log.info('Используем данные детального запроса оффера.');
+    } else {
+      log.info('Используем данные, полученные из общего списка офферов.');
     }
 
     const productId = offerData.ggsel_id ?? offerId;
@@ -784,7 +1120,7 @@
     log.info('Название товара:', productName || '(не найдено)');
 
     if (basePrice == null) {
-      log.error('Не удалось прочитать стандартную цену из API. Останавливаем выполнение.');
+      log.error('Не удалось прочитать стандартную цену из данных оффера. Останавливаем выполнение.');
       state.running = false;
       state.pausedDueToError = true;
       saveState();
@@ -793,7 +1129,7 @@
     }
     log.info('Стандартная цена:', basePrice);
 
-    state.results = state.results.filter(row => row.offerId !== offerId);
+    state.results = state.results.filter(row => getResultRowKey(row) !== normalizedInputId);
     state.currentParamIndex = 0;
     saveState();
 
@@ -845,6 +1181,7 @@
         const finalPrice = Math.round((basePrice + delta) * 100) / 100;
 
         const row = {
+          inputId,
           offerId,
           productId,
           productName,
@@ -870,7 +1207,7 @@
 
     if (!hasVariantRows) {
       log.info('Не найдено подходящих вариантов. Сохраняем только стандартную цену.');
-      pushBasePriceRow(offerId, productId, productName, basePrice);
+      pushBasePriceRow(inputId, offerId, productId, productName, basePrice);
       saveState();
     }
 
