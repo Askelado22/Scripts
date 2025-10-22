@@ -58,6 +58,19 @@
   }
   async function waitFor(pred,{timeout=3e4,interval=120}={}){ const t0=Date.now(); while(Date.now()-t0<timeout){ if(pred()) return true; await sleep(interval); } throw new Error('waitFor timeout'); }
   function dispatchInput(el,val){ const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value'); d?.set?.call(el,val); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }
+  function realClick(el){
+    if(!el) return;
+    const opts={bubbles:true,cancelable:true,view:window};
+    if(typeof PointerEvent!=='undefined'){
+      try{ el.dispatchEvent(new PointerEvent('pointerdown',opts)); }catch{}
+    }
+    el.dispatchEvent(new MouseEvent('mousedown',opts));
+    el.dispatchEvent(new MouseEvent('mouseup',opts));
+    if(typeof PointerEvent!=='undefined'){
+      try{ el.dispatchEvent(new PointerEvent('pointerup',opts)); }catch{}
+    }
+    el.dispatchEvent(new MouseEvent('click',opts));
+  }
   function parseOfferIdFromLocation(){ const m=location.pathname.match(/\/offers\/edit\/([^\/]+)\/pricing/); return m?m[1]:null; }
 
   /********************* 2) Разбор XLSX (учёт объединённых) *********************/
@@ -255,7 +268,10 @@
   function findDropdownOption(dd,text){ let opt=Array.from(dd.querySelectorAll('.ant-select-item-option')).find(o=>(o.innerText||'').trim()===text); if(!opt){ const c=Array.from(dd.querySelectorAll('.ant-select-item-option-content')).find(n=>(n.innerText||'').trim()===text); if(c) opt=c.closest('.ant-select-item-option'); } return opt; }
   async function antSelectChoose(selectEl,optionText){
     const selBtn=selectEl.querySelector('.ant-select-selector'); if(!selBtn) throw new Error('antSelect: .ant-select-selector не найден');
-    selBtn.click(); const dd=await waitForDropdownWithOption(optionText); const opt=findDropdownOption(dd,optionText); if(!opt) throw new Error(`Опция "${optionText}" не найдена`); opt.click();
+    realClick(selBtn);
+    const dd=await waitForDropdownWithOption(optionText); const opt=findDropdownOption(dd,optionText);
+    if(!opt) throw new Error(`Опция "${optionText}" не найдена`);
+    realClick(opt);
     await waitFor(()=>!isVisible(dd)||!document.body.contains(dd),{timeout:8000});
   }
 
@@ -272,6 +288,13 @@
       const nameInput=art.querySelector('.field-lang._visible input[type="text"]');
       const varName=(nameInput?.value||'').trim();
       if(!varName) continue;
+      const defaultLabel=Array.from(art.querySelectorAll('label.ant-checkbox-wrapper')).find(l=>(l.textContent||'').trim()==='По умолчанию');
+      const isDefault=defaultLabel?.querySelector('input[type="checkbox"]')?.checked;
+      if(isDefault){
+        log(`«${varName}»: пропуск (вариант по умолчанию)`,'vibe-muted');
+        continue;
+      }
+
       const rows=needByName.get(varName);
       if(!rows?.length) continue;
       const {sign,value}=rows[rows.length-1];
