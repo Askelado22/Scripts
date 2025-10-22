@@ -139,6 +139,106 @@
     return `${sign} ${formatNumber(absVal)}`;
   }
 
+  function readCookie(name) {
+    const cookieMatch = document.cookie?.match(new RegExp(`(?:^|; )${name.replace(/[.$?*|{}()\[\]\\\/\+^]/g, '\\$&')}=([^;]*)`));
+    return cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+  }
+
+  function resolveCsrfToken() {
+    const fromMeta = document.querySelector('meta[name="csrf-token"], meta[name="csrf_token"]');
+    if (fromMeta?.content) return fromMeta.content;
+
+    const nuxtToken = window.__NUXT__?.config?.csrfToken || window.__NUXT__?.state?.csrfToken;
+    if (nuxtToken) return nuxtToken;
+
+    const cookieToken = readCookie('XSRF-TOKEN') || readCookie('csrf-token');
+    if (cookieToken) return cookieToken;
+
+    return null;
+  }
+
+  function tryParseJson(value) {
+    if (typeof value !== 'string') return null;
+    try {
+      return JSON.parse(value);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function resolveAuthToken() {
+    const storages = [];
+    if (typeof window !== 'undefined') {
+      if (window.localStorage) storages.push(window.localStorage);
+      if (window.sessionStorage) storages.push(window.sessionStorage);
+    }
+    const candidateKeys = [
+      'auth._token.local',
+      'auth_token',
+      'access_token',
+      'auth.accessToken',
+      'ggsel_access_token',
+      'seller_access_token',
+      'token',
+      'user-token'
+    ];
+
+    for (const storage of storages) {
+      for (const key of candidateKeys) {
+        let raw = null;
+        try {
+          raw = storage.getItem(key);
+        } catch (e) {
+          raw = null;
+        }
+        if (!raw) continue;
+
+        const parsed = tryParseJson(raw);
+        if (typeof parsed === 'string') {
+          raw = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          if (typeof parsed.token === 'string') {
+            raw = parsed.token;
+          } else if (typeof parsed.accessToken === 'string') {
+            raw = parsed.accessToken;
+          }
+        }
+
+        if (typeof raw !== 'string') continue;
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+        if (/^Bearer\s+/i.test(trimmed)) {
+          return trimmed;
+        }
+        return `Bearer ${trimmed}`;
+      }
+    }
+
+    const cookieToken = readCookie('access_token') || readCookie('auth_token');
+    if (cookieToken) {
+      return /^Bearer\s+/i.test(cookieToken) ? cookieToken : `Bearer ${cookieToken}`;
+    }
+
+    return null;
+  }
+
+  function buildAuthHeaders() {
+    const headers = {
+      'Accept': 'application/json, text/plain, */*',
+      'X-Requested-With': 'XMLHttpRequest'
+    };
+    const csrf = resolveCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+      headers['X-XSRF-TOKEN'] = csrf;
+    }
+    const bearer = resolveAuthToken();
+    if (bearer) {
+      headers['Authorization'] = bearer;
+    }
+    return headers;
+  }
+
   async function fetchOfferDetails(offerId) {
     const url = `https://seller.ggsel.net/api/v1/offers/${offerId}`;
     log.info('Запрашиваем данные оффера через API:', url);
@@ -149,12 +249,13 @@
         method: 'GET',
         credentials: 'include',
         signal: controller.signal,
-        headers: {
-          'Accept': 'application/json'
-        }
+        headers: buildAuthHeaders()
       });
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.statusText = response.statusText;
+        throw error;
       }
       const payload = await response.json();
       if (payload && typeof payload === 'object' && 'data' in payload) {
@@ -338,7 +439,7 @@
     state.pausedDueToError = false;
     saveState();
     updateUi();
-    await navigateToCurrent();
+    await resumeFlow();
   }
 
   function onPause() {
@@ -404,12 +505,30 @@
     await resumeFlow();
   }
 
+  let activeRunner = null;
+
   async function resumeFlow() {
-    log.info('Возобновление обработки.');
-    // Если URL не на текущем ID — перейдём
-    await navigateToCurrent();
-    // И дождёмся окончания
-    await runForCurrentPage();
+    if (activeRunner) {
+      return activeRunner;
+    }
+    activeRunner = (async () => {
+      log.info('Возобновление обработки.');
+      if (!state.ids.length) {
+        log.warn('Список ID пуст. Нечего обрабатывать.');
+        state.running = false;
+        saveState();
+        updateUi();
+        return;
+      }
+      while (state.running && state.currentIdIndex < state.ids.length) {
+        navigateToCurrent();
+        await runForCurrentPage();
+      }
+      log.info('Текущий цикл обработки завершён.');
+    })().finally(() => {
+      activeRunner = null;
+    });
+    return activeRunner;
   }
 
   function isServerErrorPage() {
@@ -456,24 +575,16 @@
     updateUi();
   }
 
-  async function navigateToCurrent() {
+  function navigateToCurrent() {
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) {
-      // Всё готово — можно автоматически экспортировать (по желанию)
       log.info('Обработка завершена, новых ID нет.');
       updateUi();
       return;
     }
-    const target = `https://seller.ggsel.net/offers/edit/${offerId}/pricing`;
-    log.info('Переходим к офферу:', offerId);
-    state.lastUrl = target;
+    log.info('Готовимся обработать оффер:', offerId);
+    state.lastUrl = location.href;
     saveState();
-    if (location.href !== target) {
-      location.href = target;
-      // дальше управление продолжится из autoResumeIfNeeded()
-      return new Promise(() => {}); // прерываем текущий поток
-    }
-    return;
   }
 
   /**
@@ -499,9 +610,27 @@
     try {
       offerData = await fetchOfferDetails(offerId);
     } catch (error) {
-      const message = error?.name === 'AbortError'
-        ? 'Истек таймаут ожидания ответа API.'
-        : `Не удалось получить данные оффера: ${error?.message || error}`;
+      if (error?.name === 'AbortError') {
+        log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
+        state.running = false;
+        state.pausedDueToError = true;
+        saveState();
+        updateUi();
+        return;
+      }
+
+      if (typeof error?.status === 'number' && error.status >= 500) {
+        pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
+        return;
+      }
+
+      if (error?.status === 404) {
+        log.warn(`Оффер ${offerId} не найден (HTTP 404). Пропускаем и переходим к следующему.`);
+        await completeCurrentOffer();
+        return;
+      }
+
+      const message = `Не удалось получить данные оффера: ${error?.message || error}`;
       log.error(message);
       state.running = false;
       state.pausedDueToError = true;
@@ -646,8 +775,7 @@
       return;
     } else {
       log.info('Переходим к следующему офферу.');
-      // переходим к следующему товару
-      await navigateToCurrent();
+      navigateToCurrent();
     }
   }
 
