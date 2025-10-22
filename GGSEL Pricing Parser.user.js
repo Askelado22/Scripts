@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.1.0
+// @version      1.1.1
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
@@ -26,7 +26,6 @@
     currentParamIndex: 0,
     running: false,
     results: [],
-    lastUrl: '',
     lastProcessedId: null,
     lastStoppedId: null,
     pausedDueToError: false
@@ -521,7 +520,6 @@
         return;
       }
       while (state.running && state.currentIdIndex < state.ids.length) {
-        navigateToCurrent();
         await runForCurrentPage();
       }
       log.info('Текущий цикл обработки завершён.');
@@ -575,26 +573,16 @@
     updateUi();
   }
 
-  function navigateToCurrent() {
-    const offerId = state.ids[state.currentIdIndex];
-    if (!offerId) {
-      log.info('Обработка завершена, новых ID нет.');
-      updateUi();
-      return;
-    }
-    log.info('Готовимся обработать оффер:', offerId);
-    state.lastUrl = location.href;
-    saveState();
-  }
-
   /**
    * Главная процедура обработки текущей страницы/товара
   */
   async function runForCurrentPage() {
-    await pausePoint();
-
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) return; // всё сделано
+
+    log.info('Переходим к офферу:', offerId);
+
+    await pausePoint();
 
     state.lastStoppedId = offerId;
     saveState();
@@ -773,9 +761,6 @@
       // автоэкспорт по желанию:
       // exportToXlsx(state.results);
       return;
-    } else {
-      log.info('Переходим к следующему офферу.');
-      navigateToCurrent();
     }
   }
 
