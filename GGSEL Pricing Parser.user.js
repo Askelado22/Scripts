@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.0.0
+// @version      1.1.0
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
-// @match        https://seller.ggsel.net/offers/edit/*/pricing
+// @match        https://seller.ggsel.net/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
@@ -20,22 +20,22 @@
    ******************************************************************/
   const STORE_KEY = 'ggsel_pricing_parser_state_v1';
 
-  /** @type {{
-   *   ids: string[],
-   *   currentIdIndex: number,
-   *   currentParamIndex: number,
-   *   running: boolean,
-   *   results: Array<{offerId: string, productName: string, block: string, variantName: string, modifierText: string, finalPrice: number}>,
-   *   lastUrl: string
-   * } | null} */
-  let state = loadState() || {
+  const DEFAULT_STATE = {
     ids: [],
     currentIdIndex: 0,
     currentParamIndex: 0,
     running: false,
     results: [],
-    lastUrl: ''
+    lastUrl: '',
+    lastProcessedId: null,
+    lastStoppedId: null,
+    pausedDueToError: false
   };
+
+  /** @type {typeof DEFAULT_STATE} */
+  let state = Object.assign({}, DEFAULT_STATE, loadState() || {});
+  if (!Array.isArray(state.ids)) state.ids = [];
+  if (!Array.isArray(state.results)) state.results = [];
 
   /******************************************************************
    * УТИЛИТЫ
@@ -271,6 +271,8 @@
           <div class="ggsel-kv"><span>Всего ID:</span><span id="ggsel-total" class="ggsel-muted">0</span></div>
           <div class="ggsel-kv"><span>Обработано:</span><span id="ggsel-done" class="ggsel-muted">0</span></div>
           <div class="ggsel-kv"><span>Текущий ID:</span><span id="ggsel-current" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>Последний завершённый:</span><span id="ggsel-last-done" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>Остановились на:</span><span id="ggsel-last-stop" class="ggsel-muted">—</span></div>
         </div>
         <div class="ggsel-log" id="ggsel-log"></div>
       </div>
@@ -289,6 +291,8 @@
       total: panel.querySelector('#ggsel-total'),
       done: panel.querySelector('#ggsel-done'),
       current: panel.querySelector('#ggsel-current'),
+      lastDone: panel.querySelector('#ggsel-last-done'),
+      lastStop: panel.querySelector('#ggsel-last-stop'),
       log: panel.querySelector('#ggsel-log')
     };
 
@@ -315,6 +319,8 @@
     ui.total.textContent = String(state.ids?.length || 0);
     ui.done.textContent = String(state.currentIdIndex || 0);
     ui.current.textContent = state.ids?.[state.currentIdIndex] || '—';
+    ui.lastDone.textContent = state.lastProcessedId || '—';
+    ui.lastStop.textContent = state.lastStoppedId || '—';
   }
 
   async function onStart() {
@@ -329,6 +335,9 @@
     state.currentParamIndex = 0;
     state.results = [];
     state.running = true;
+    state.lastProcessedId = null;
+    state.lastStoppedId = ids[0] || null;
+    state.pausedDueToError = false;
     saveState();
     updateUi();
     await navigateToCurrent();
@@ -337,6 +346,8 @@
   function onPause() {
     log.info('Скрипт приостановлен пользователем.');
     state.running = false;
+    state.lastStoppedId = state.ids[state.currentIdIndex] || null;
+    state.pausedDueToError = false;
     saveState();
     updateUi();
   }
@@ -352,7 +363,15 @@
       state.currentIdIndex = state.currentIdIndex || 0;
     }
     log.info('Продолжаем обработку.');
+    if (state.pausedDueToError) {
+      const redoPreview = state.ids.slice(state.currentIdIndex, Math.min(state.ids.length, state.currentIdIndex + 4));
+      if (redoPreview.length) {
+        log.info('Повторно проверим ID:', redoPreview.join(', '));
+      }
+    }
     state.running = true;
+    state.pausedDueToError = false;
+    state.lastStoppedId = state.ids[state.currentIdIndex] || null;
     saveState();
     updateUi();
     await resumeFlow();
@@ -361,14 +380,7 @@
   function onReset() {
     if (!confirm('Сбросить прогресс и результаты?')) return;
     log.info('Сбрасываем состояние скрипта.');
-    state = {
-      ids: [],
-      currentIdIndex: 0,
-      currentParamIndex: 0,
-      running: false,
-      results: [],
-      lastUrl: ''
-    };
+    state = Object.assign({}, DEFAULT_STATE);
     saveState();
     if (ui) ui.ids.value = '';
     updateUi();
@@ -386,10 +398,7 @@
   async function autoResumeIfNeeded() {
     buildUi();
     if (isServerErrorPage()) {
-      log.warn('Обнаружена страница ошибки 500. Скрипт остановлен до обновления страницы.');
-      state.running = false;
-      saveState();
-      updateUi();
+      pauseDueToServerError('Обнаружена страница ошибки 500. Скрипт приостановлен до дальнейших действий.');
       return;
     }
     if (!state.ids.length) return;           // нет задач
@@ -407,6 +416,46 @@
 
   function isServerErrorPage() {
     return /https:\/\/seller\.ggsel\.net\/500/.test(location.href);
+  }
+
+  function pauseDueToServerError(reason = 'Детектирована страница ошибки 500. Останавливаем выполнение.') {
+    log.warn(reason);
+
+    if (!state.ids.length) {
+      state.running = false;
+      state.pausedDueToError = true;
+      state.lastStoppedId = null;
+      saveState();
+      updateUi();
+      return;
+    }
+
+    if (!state.pausedDueToError) {
+      const boundedIndex = Math.min(state.currentIdIndex, state.ids.length);
+      const redoStart = Math.max(0, boundedIndex - 3);
+      const redoEndExclusive = state.currentIdIndex < state.ids.length ? state.currentIdIndex + 1 : boundedIndex;
+      const redoIds = new Set(state.ids.slice(redoStart, redoEndExclusive));
+
+      if (redoIds.size) {
+        state.results = state.results.filter(row => !redoIds.has(row.offerId));
+      }
+
+      const stoppedIdx = Math.min(state.currentIdIndex, state.ids.length - 1);
+      state.lastStoppedId = stoppedIdx >= 0 ? state.ids[stoppedIdx] : null;
+      const prevIdx = redoStart - 1;
+      state.lastProcessedId = prevIdx >= 0 ? state.ids[prevIdx] : null;
+      state.currentIdIndex = redoStart;
+      state.currentParamIndex = 0;
+
+      if (redoIds.size) {
+        log.info('После возобновления будут перепроверены ID:', Array.from(redoIds).join(', '));
+      }
+    }
+
+    state.running = false;
+    state.pausedDueToError = true;
+    saveState();
+    updateUi();
   }
 
   async function navigateToCurrent() {
@@ -438,11 +487,11 @@
     const offerId = state.ids[state.currentIdIndex];
     if (!offerId) return; // всё сделано
 
+    state.lastStoppedId = offerId;
+    saveState();
+
     if (isServerErrorPage()) {
-      log.warn('Детектирована страница 500 во время обработки. Останавливаем выполнение.');
-      state.running = false;
-      saveState();
-      updateUi();
+      pauseDueToServerError('Детектирована страница 500 во время обработки. Останавливаем выполнение.');
       return;
     }
 
@@ -632,8 +681,13 @@
   async function completeCurrentOffer() {
     state.currentParamIndex = 0;
 
+    const completedOfferId = state.ids[state.currentIdIndex] || null;
+    state.lastProcessedId = completedOfferId;
+
     // переходим к следующему ID
     state.currentIdIndex++;
+    state.lastStoppedId = state.ids[state.currentIdIndex] || null;
+    state.pausedDueToError = false;
     saveState();
     updateUi();
 
