@@ -110,44 +110,6 @@
     }
   }
 
-  // Ожидание селектора
-  async function waitForSelector(selector, timeout = 20000, root = document) {
-    const started = Date.now();
-    while (Date.now() - started < timeout) {
-      const el = root.querySelector(selector);
-      if (el) return el;
-      await sleep(100);
-    }
-    return null;
-  }
-
-  // Ожидание появление элемента по предикату
-  async function waitFor(predicate, timeout = 20000) {
-    const started = Date.now();
-    while (Date.now() - started < timeout) {
-      const val = predicate();
-      if (val) return val;
-      await sleep(100);
-    }
-    return null;
-  }
-
-  async function waitForPricingPageReady(timeout = 45000) {
-    log.info('Ожидаем загрузку формы цены и параметров.');
-    const started = Date.now();
-    const costInput = await waitForSelector('#offerCost', timeout);
-    if (!costInput) return { costInput: null, parametersRoot: null };
-    const remaining = Math.max(0, timeout - (Date.now() - started));
-    const parametersRoot = await waitFor(() => document.querySelector('.style_OffersPayCostParameters__Zd4uX'), remaining) || null;
-    return { costInput, parametersRoot };
-  }
-
-  // Универсальный кликер с небольшим ожиданием
-  async function click(el) {
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await sleep(200);
-  }
-
   // Нормализация ID-строки
   function normalizeIds(text) {
     return (text || '')
@@ -163,19 +125,55 @@
     return Math.min(100, Math.max(0, state.currentIdIndex * perItem));
   }
 
-  // Безопасное чтение числа из инпута
-  function readNumberInput(input) {
-    if (!input) return null;
-    const v = input.value ?? input.getAttribute('value') ?? input.getAttribute('aria-valuenow');
-    if (v == null) return null;
-    const num = parseFloat(String(v).replace(',', '.'));
+  function toNumber(value) {
+    const num = Number(value);
     return Number.isFinite(num) ? num : null;
   }
 
-  function pushBasePriceRow(offerId, productName, basePrice) {
+  function formatNumber(value) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+
+  function formatModifierText(sign, value) {
+    const absVal = Math.abs(value);
+    return `${sign} ${formatNumber(absVal)}`;
+  }
+
+  async function fetchOfferDetails(offerId) {
+    const url = `https://seller.ggsel.net/api/v1/offers/${offerId}`;
+    log.info('Запрашиваем данные оффера через API:', url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (payload && typeof payload === 'object' && 'data' in payload) {
+        const inner = payload.data;
+        if (inner && typeof inner === 'object') {
+          return inner;
+        }
+      }
+      return payload;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function pushBasePriceRow(offerId, productId, productName, basePrice) {
     const finalPrice = Math.round(basePrice * 100) / 100;
     state.results.push({
       offerId,
+      productId,
       productName,
       block: '',
       variantName: '',
@@ -497,184 +495,130 @@
 
     log.info(`Начинаем обработку оффера ${offerId}.`);
 
-    // 1) Ждём стандартную цену
-    const { costInput, parametersRoot } = await waitForPricingPageReady(45000);
-    if (!costInput) {
-      log.warn('Не нашли #offerCost — возможно, страница ещё не прогрузилась.');
-      return; // просто оставим страницу – можно нажать «Продолжить»
+    let offerData;
+    try {
+      offerData = await fetchOfferDetails(offerId);
+    } catch (error) {
+      const message = error?.name === 'AbortError'
+        ? 'Истек таймаут ожидания ответа API.'
+        : `Не удалось получить данные оффера: ${error?.message || error}`;
+      log.error(message);
+      state.running = false;
+      state.pausedDueToError = true;
+      saveState();
+      updateUi();
+      return;
     }
-    const basePrice = readNumberInput(costInput);
+
+    if (!offerData || typeof offerData !== 'object') {
+      log.error('API вернуло некорректный ответ. Ожидался объект.');
+      state.running = false;
+      state.pausedDueToError = true;
+      saveState();
+      updateUi();
+      return;
+    }
+
+    const productId = offerData.ggsel_id ?? offerId;
+    const productName = (offerData.title_ru || offerData.title_en || '').trim();
+    const basePrice = toNumber(offerData.price);
+
+    if (productId != null) {
+      log.info('GGSEL ID товара:', productId);
+    }
+    log.info('Название товара:', productName || '(не найдено)');
+
     if (basePrice == null) {
-      log.warn('Не удалось прочитать стандартную цену.');
+      log.error('Не удалось прочитать стандартную цену из API. Останавливаем выполнение.');
+      state.running = false;
+      state.pausedDueToError = true;
+      saveState();
+      updateUi();
       return;
     }
     log.info('Стандартная цена:', basePrice);
 
-    // 2) Название товара — берём последний элемент хлебных крошек
-    await pausePoint();
-    const productName = await waitFor(() => {
-      const nodes = Array.from(document.querySelectorAll('.ant-breadcrumb-link'));
-      return nodes.length ? nodes[nodes.length - 1].textContent.trim() : null;
-    }, 15000) || '';
-    log.info('Название товара:', productName || '(не найдено)');
+    state.results = state.results.filter(row => row.offerId !== offerId);
+    state.currentParamIndex = 0;
+    saveState();
 
-    // 3) Список параметров (ul > li)
-    await pausePoint();
-    log.info('Ищем блоки параметров.');
-    const ul = await waitFor(() => {
-      const scope = parametersRoot || document;
-      // классы у ul динамические, ищем по сигнатуре
-      return scope.querySelector('ul[class*="style_list__"]');
-    }, 4000);
+    const options = Array.isArray(offerData.options) ? offerData.options : [];
+    const relevantOptions = options.filter(opt => opt && (opt.kind === 'radio_button' || opt.kind === 'check_box'));
 
-    if (!ul) {
-      log.warn('Не нашли список параметров. Сохраняем только стандартную цену.');
-      pushBasePriceRow(offerId, productName, basePrice);
-      saveState();
-      await completeCurrentOffer();
-      return;
-    }
+    let hasVariantRows = false;
 
-    const editButtons = ul.querySelectorAll('[aria-label="edit"]');
-    if (!editButtons.length) {
-      log.warn('В блоке параметров нет доступных вариантов. Сохраняем только стандартную цену.');
-      pushBasePriceRow(offerId, productName, basePrice);
-      saveState();
-      await completeCurrentOffer();
-      return;
-    }
-
-    const items = Array.from(ul.querySelectorAll('li'));
-    let hasVariantRows = state.results.some(r => r.offerId === offerId && r.modifierText);
-    // Продолжим с индекса, сохранённого в state.currentParamIndex
-    for (let i = state.currentParamIndex; i < items.length; i++) {
+    for (let i = state.currentParamIndex; i < relevantOptions.length; i++) {
       await pausePoint();
       state.currentParamIndex = i;
       saveState();
 
-      const li = items[i];
-
-      // подпись/название блока параметров (в строке слева)
-      const blockLabel = (li.querySelector('span.ant-typography')?.textContent || '').trim();
+      const option = relevantOptions[i];
+      const blockLabel = (option.title_ru || option.title_en || '').trim();
       log.info(`Обрабатываем блок: ${blockLabel || '(без названия)'}`);
 
-      // кнопка «карандаш»
-      const editBtn = li.querySelector('[aria-label="edit"]');
-      if (!editBtn) {
-        log.warn('Нет кнопки редактирования у блока:', blockLabel);
+      const variants = Array.isArray(option.variants) ? option.variants : [];
+      if (!variants.length) {
+        log.warn('В блоке отсутствуют варианты.');
         continue;
       }
 
-      // открыть модалку
-      await click(editBtn);
+      const defaultFirst = [];
+      const others = [];
 
-      // дождаться модалки
-      const modal = await waitForSelector('.ant-modal-content', 15000);
-      if (!modal) {
-        log.warn('Модальное окно не открылось.');
-        continue;
-      }
-
-      // заголовок параметра → поле «Заголовок параметра» (берём RU-вкладку, которая видима)
-      const paramTitleInput = (() => {
-        const labels = Array.from(modal.querySelectorAll('.field-lang._visible label'));
-        const titleLabel = labels.find(l => /Заголовок параметра/i.test(l.textContent || ''));
-        return titleLabel ? titleLabel.previousElementSibling : null; // инпут стоит перед label в текущей вёрстке
-      })();
-
-      const paramTitle = (paramTitleInput && paramTitleInput.value) ? String(paramTitleInput.value).trim() : blockLabel;
-
-      // варианты
-      const variantArticles = Array.from(modal.querySelectorAll('article'));
-      if (!variantArticles.length) {
-        log.warn('В блоке параметров не найдено вариантов с радиокнопками.');
-      }
-      let defaultFirst = [];
-      let others = [];
-
-      for (const art of variantArticles) {
-        // 3.1) флаг «По умолчанию»
-        const defaultCheckbox = art.querySelector('header .ant-checkbox-input');
-        const isDefault = defaultCheckbox ? !!defaultCheckbox.checked : /ant-checkbox-wrapper-checked/.test(art.innerHTML);
-
-        // 3.2) «Название варианта» (видимый RU-инпут)
-        let variantName = '';
-        const vLabels = Array.from(art.querySelectorAll('.field-lang._visible label'));
-        const vLabel = vLabels.find(l => /Название варианта/i.test(l.textContent || ''));
-        if (vLabel && vLabel.previousElementSibling) {
-          variantName = String(vLabel.previousElementSibling.value || '').trim();
-        } else {
-          // запасной вариант — любой text input внутри article
-          const fallback = art.querySelector('input.ant-input[type="text"]');
-          if (fallback) variantName = String(fallback.value || '').trim();
-        }
-
-        // 3.3) знак +/-
-        const signEl = art.querySelector('.ant-select .ant-select-selection-item');
-        const signText = (signEl && signEl.textContent) ? signEl.textContent.trim() : '';
-
-        // 3.4) значение модификатора
-        const numInput = art.querySelector('input.ant-input-number-input');
-        const modVal = readNumberInput(numInput);
-
-        // 3.5) валюта (второй select с «₽») — если найдём и он не ₽, пропускаем
-        const selects = Array.from(art.querySelectorAll('.ant-select .ant-select-selection-item'));
-        const currency = selects.find(s => /₽/.test(s.textContent || ''))?.textContent?.trim() || '₽';
-
-        // фильтр: должен быть корректный знак и число; валюта — ₽
-        const isValidSign = signText === '+' || signText === '-';
-        const hasNumber = Number.isFinite(modVal);
-        const isRub = currency === '₽';
-
-        if (!isValidSign || !hasNumber || !isRub) {
-          // такие варианты пропускаем
-          log.warn('Вариант пропущен из-за некорректных данных:', {
-            variantName,
-            signText,
-            modVal,
-            currency
-          });
+      for (const variant of variants) {
+        await pausePoint();
+        if (variant?.status && variant.status !== 'active') {
           continue;
         }
 
-        const modifierText = `${signText} ${modVal}`;
-        const delta = signText === '+' ? modVal : -modVal;
+        const variantName = (variant.title_ru || variant.title_en || '').trim();
+        if (!variantName) {
+          log.warn('Пропуск варианта без названия.');
+          continue;
+        }
+
+        const modifierRaw = toNumber(variant.price ?? 0);
+        if (modifierRaw == null) {
+          log.warn('Не удалось распознать модификатор для варианта:', variantName);
+          continue;
+        }
+
+        const impact = variant.impact_variant === 'decrease' ? 'decrease' : 'increase';
+        const sign = impact === 'decrease' ? '-' : '+';
+        const modifierText = formatModifierText(sign, modifierRaw);
+        const delta = impact === 'decrease' ? -modifierRaw : modifierRaw;
         const finalPrice = Math.round((basePrice + delta) * 100) / 100;
 
         const row = {
           offerId,
+          productId,
           productName,
-          block: paramTitle || blockLabel,
+          block: blockLabel,
           variantName,
           modifierText,
           finalPrice
         };
 
-        if (isDefault) defaultFirst.push(row); else others.push(row);
+        if (variant.default) defaultFirst.push(row); else others.push(row);
       }
 
-      // сохраняем: сначала «По умолчанию», затем остальные
       const variantsSaved = defaultFirst.length + others.length;
-      state.results.push(...defaultFirst, ...others);
       if (variantsSaved > 0) {
+        state.results.push(...defaultFirst, ...others);
         hasVariantRows = true;
+        log.info(`Сохранено вариантов: ${variantsSaved} ("По умолчанию": ${defaultFirst.length}).`);
+      } else {
+        log.warn('Подходящих вариантов в блоке не найдено.');
       }
-      log.info(`Сохранено вариантов: ${variantsSaved} (включая "По умолчанию": ${defaultFirst.length}).`);
       saveState();
-
-      // закрыть модалку
-      const closeBtn = modal.querySelector('.ant-modal-close');
-      if (closeBtn) await click(closeBtn);
-      await sleep(300);
     }
 
     if (!hasVariantRows) {
-      log.info('Не найдено вариантов с радиокнопками. Сохраняем стандартную цену.');
-      pushBasePriceRow(offerId, productName, basePrice);
+      log.info('Не найдено подходящих вариантов. Сохраняем только стандартную цену.');
+      pushBasePriceRow(offerId, productId, productName, basePrice);
       saveState();
     }
 
-    // блок параметров для этого оффера пройден — сбрасываем указатель параметров
     await completeCurrentOffer();
   }
 
@@ -724,6 +668,7 @@
       if (!offers.has(key)) {
         offers.set(key, {
           offerId: row.offerId,
+          productId: row.productId ?? row.offerId,
           productName: row.productName,
           blocks: new Map()
         });
@@ -749,8 +694,9 @@
         let isFirstBlockRow = true;
 
         entries.forEach(entry => {
+          const idCell = offer.productId ?? offer.offerId;
           dataRows.push([
-            isFirstOfferRow ? entry.offerId : '',
+            isFirstOfferRow ? idCell : '',
             isFirstOfferRow ? entry.productName : '',
             isFirstBlockRow ? blockName : '',
             entry.variantName,
