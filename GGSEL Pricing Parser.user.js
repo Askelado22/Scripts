@@ -172,6 +172,18 @@
     return Number.isFinite(num) ? num : null;
   }
 
+  function pushBasePriceRow(offerId, productName, basePrice) {
+    const finalPrice = Math.round(basePrice * 100) / 100;
+    state.results.push({
+      offerId,
+      productName,
+      block: '',
+      variantName: '',
+      modifierText: '',
+      finalPrice
+    });
+  }
+
   // Пауза: если пользователь нажал «Пауза», ждём возобновления
   async function pausePoint() {
     while (!state.running) {
@@ -464,18 +476,11 @@
       const scope = parametersRoot || document;
       // классы у ul динамические, ищем по сигнатуре
       return scope.querySelector('ul[class*="style_list__"]');
-    }, 20000);
+    }, 4000);
 
     if (!ul) {
       log.warn('Не нашли список параметров. Сохраняем только стандартную цену.');
-      state.results.push({
-        offerId,
-        productName,
-        block: '',
-        variantName: '',
-        modifierText: '',
-        finalPrice: Math.round(basePrice * 100) / 100
-      });
+      pushBasePriceRow(offerId, productName, basePrice);
       saveState();
       await completeCurrentOffer();
       return;
@@ -484,20 +489,14 @@
     const editButtons = ul.querySelectorAll('[aria-label="edit"]');
     if (!editButtons.length) {
       log.warn('В блоке параметров нет доступных вариантов. Сохраняем только стандартную цену.');
-      state.results.push({
-        offerId,
-        productName,
-        block: '',
-        variantName: '',
-        modifierText: '',
-        finalPrice: Math.round(basePrice * 100) / 100
-      });
+      pushBasePriceRow(offerId, productName, basePrice);
       saveState();
       await completeCurrentOffer();
       return;
     }
 
     const items = Array.from(ul.querySelectorAll('li'));
+    let hasVariantRows = state.results.some(r => r.offerId === offerId && r.modifierText);
     // Продолжим с индекса, сохранённого в state.currentParamIndex
     for (let i = state.currentParamIndex; i < items.length; i++) {
       await pausePoint();
@@ -538,6 +537,9 @@
 
       // варианты
       const variantArticles = Array.from(modal.querySelectorAll('article'));
+      if (!variantArticles.length) {
+        log.warn('В блоке параметров не найдено вариантов с радиокнопками.');
+      }
       let defaultFirst = [];
       let others = [];
 
@@ -603,14 +605,24 @@
       }
 
       // сохраняем: сначала «По умолчанию», затем остальные
+      const variantsSaved = defaultFirst.length + others.length;
       state.results.push(...defaultFirst, ...others);
-      log.info(`Сохранено вариантов: ${defaultFirst.length + others.length} (включая "По умолчанию": ${defaultFirst.length}).`);
+      if (variantsSaved > 0) {
+        hasVariantRows = true;
+      }
+      log.info(`Сохранено вариантов: ${variantsSaved} (включая "По умолчанию": ${defaultFirst.length}).`);
       saveState();
 
       // закрыть модалку
       const closeBtn = modal.querySelector('.ant-modal-close');
       if (closeBtn) await click(closeBtn);
       await sleep(300);
+    }
+
+    if (!hasVariantRows) {
+      log.info('Не найдено вариантов с радиокнопками. Сохраняем стандартную цену.');
+      pushBasePriceRow(offerId, productName, basePrice);
+      saveState();
     }
 
     // блок параметров для этого оффера пройден — сбрасываем указатель параметров
@@ -645,25 +657,127 @@
    * ЭКСПОРТ В XLSX
    ******************************************************************/
   function exportToXlsx(rows) {
-    // формируем таблицу в нужной структуре
-    const header = ['ID товара', 'Название товара', 'Блок параметров', 'Параметр', 'Модификатор', 'Итоговая цена'];
-    const data = rows.map(r => [r.offerId, r.productName, r.block, r.variantName, r.modifierText, r.finalPrice]);
+    if (!rows?.length) {
+      log.warn('Нет данных для экспорта.');
+      return;
+    }
 
-    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
-    // немного ширины колонок
+    const header = ['ID товара', 'Название товара', 'Блок параметров', 'Параметр', 'Модификатор', 'Итоговая цена'];
+
+    const offers = new Map();
+    for (const row of rows) {
+      const key = `${row.offerId}||${row.productName}`;
+      if (!offers.has(key)) {
+        offers.set(key, {
+          offerId: row.offerId,
+          productName: row.productName,
+          blocks: new Map()
+        });
+      }
+      const offer = offers.get(key);
+      const blockName = row.block || '';
+      if (!offer.blocks.has(blockName)) {
+        offer.blocks.set(blockName, []);
+      }
+      offer.blocks.get(blockName).push(row);
+    }
+
+    const dataRows = [];
+    const merges = [];
+    let rowIndex = 1; // учитываем строку заголовка
+
+    for (const offer of offers.values()) {
+      const offerRowStart = rowIndex;
+      let isFirstOfferRow = true;
+
+      for (const [blockName, entries] of offer.blocks.entries()) {
+        const blockRowStart = rowIndex;
+        let isFirstBlockRow = true;
+
+        entries.forEach(entry => {
+          dataRows.push([
+            isFirstOfferRow ? entry.offerId : '',
+            isFirstOfferRow ? entry.productName : '',
+            isFirstBlockRow ? blockName : '',
+            entry.variantName,
+            entry.modifierText,
+            entry.finalPrice
+          ]);
+
+          isFirstOfferRow = false;
+          isFirstBlockRow = false;
+          rowIndex++;
+        });
+
+        const blockRowEnd = rowIndex - 1;
+        if (entries.length > 1) {
+          merges.push({ s: { r: blockRowStart, c: 2 }, e: { r: blockRowEnd, c: 2 } });
+        }
+      }
+
+      const offerRowEnd = rowIndex - 1;
+      const offerRowCount = offerRowEnd - offerRowStart + 1;
+      if (offerRowCount > 1) {
+        merges.push({ s: { r: offerRowStart, c: 0 }, e: { r: offerRowEnd, c: 0 } });
+        merges.push({ s: { r: offerRowStart, c: 1 }, e: { r: offerRowEnd, c: 1 } });
+      }
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
     ws['!cols'] = [
-      { wch: 16 }, // ID товара
-      { wch: 50 }, // Название товара
-      { wch: 20 }, // Блок параметров
-      { wch: 20 }, // Параметр
-      { wch: 14 }, // Модификатор
-      { wch: 16 }  // Итоговая цена
+      { wch: 16 },
+      { wch: 60 },
+      { wch: 28 },
+      { wch: 28 },
+      { wch: 18 },
+      { wch: 18 }
     ];
+
+    if (merges.length) {
+      ws['!merges'] = merges;
+    }
+
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const headerStyle = {
+      font: { bold: true, color: { rgb: 'FFFFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FF1F4E79' } },
+      alignment: { horizontal: 'center', vertical: 'center' }
+    };
+    const commonBorder = {
+      style: 'thin',
+      color: { rgb: 'FFD0D7E5' }
+    };
+    const dataStyleBase = {
+      alignment: { vertical: 'center', horizontal: 'left', wrapText: true },
+      border: { top: commonBorder, right: commonBorder, bottom: commonBorder, left: commonBorder }
+    };
+
+    for (let c = 0; c <= range.e.c; c++) {
+      const cellRef = XLSX.utils.encode_cell({ c, r: 0 });
+      const cell = ws[cellRef];
+      if (cell) cell.s = headerStyle;
+    }
+
+    for (let r = 1; r <= range.e.r; r++) {
+      for (let c = 0; c <= range.e.c; c++) {
+        const cellRef = XLSX.utils.encode_cell({ c, r });
+        const cell = ws[cellRef];
+        if (!cell) continue;
+        const style = JSON.parse(JSON.stringify(dataStyleBase));
+        if (c >= 3) {
+          style.alignment.horizontal = 'center';
+        }
+        if (c === 5) {
+          cell.z = '# ##0.00';
+        }
+        cell.s = style;
+      }
+    }
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Прайс');
 
-    const fn = `ggsel_pricing_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const fn = `ggsel_pricing_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(wb, fn);
   }
 
