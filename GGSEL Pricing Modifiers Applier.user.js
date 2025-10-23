@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GGSEL Pricing Modifiers Applier • vibe (blocks & merged cells fixed)
 // @namespace    ggsel.pricing.modifiers
-// @version      1.2.0
-// @description  XLSX: ID товара, Блок параметров, Параметр, Модификатор (+ число). Учитывает объединённые ячейки: протягивание блока и привязка строк без ID к единственному ID в файле. Надёжное сохранение в модалке. Автодогрузка SheetJS.
+// @version      1.3.0
+// @description  XLSX → автоприменение модификаторов по блокам с учётом объединённых ячеек; лог, автосохранение и повтор последних 3 ID после сбоев, прогресс-бар с ETA и скоростью.
 // @author       vibe
 // @match        https://seller.ggsel.net/offers/edit/*/pricing
 // @icon         https://ggsel.net/favicon.ico
@@ -223,6 +223,11 @@
     .vibe-file{color:#d9c18e;font-size:12px;}
     .vibe-badge{font-size:11px;padding:2px 6px;border-radius:8px;border:1px solid #4a3a10;background:#181818;color:#d0b673;}
     .vibe-log{background:#0e0e0e;border:1px dashed #4a3a10;color:#c7b07a;font-size:11px;line-height:1.4;padding:8px;border-radius:10px;max-height:200px;overflow:auto;white-space:pre-wrap;}
+    .vibe-progresswrap{flex-direction:column;align-items:stretch;gap:6px;}
+    .vibe-progressbar{position:relative;height:10px;border-radius:999px;background:#1f1a0d;border:1px solid #4a3a10;overflow:hidden;flex:1;min-width:0;}
+    .vibe-progressbar-fill{height:100%;width:0%;background:linear-gradient(90deg,#f2d68c 0%,#d7b05f 100%);transition:width .3s ease;}
+    .vibe-progress-meta{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#d0b673;}
+    .vibe-progress-meta strong{color:#f7e1a1;font-weight:600;}
     .vibe-muted{opacity:.8}.vibe-ok{color:#9be28a}.vibe-warn{color:#ffd479}.vibe-err{color:#ff8b8b}.vibe-spacer{flex:1}.vibe-small{font-size:11px;}
   `);
   function createPanel(){
@@ -248,8 +253,18 @@
           </div>
           <div class="vibe-row vibe-small vibe-muted">
             Текущий ID: <span id="vibe-curid" class="vibe-badge">—</span>
+            Последний ID: <span id="vibe-lastid" class="vibe-badge">—</span>
             <span class="vibe-spacer"></span>
-            <span id="vibe-progress" class="vibe-badge">0/0</span>
+            Готово: <span id="vibe-progress" class="vibe-badge">0/0</span>
+          </div>
+          <div class="vibe-row vibe-progresswrap">
+            <div class="vibe-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="vibe-progress-fill" class="vibe-progressbar-fill"></div>
+            </div>
+            <div class="vibe-progress-meta">
+              <span>ETA: <strong id="vibe-eta">—</strong></span>
+              <span>Скорость: <strong id="vibe-speed">—</strong></span>
+            </div>
           </div>
           <div id="vibe-log" class="vibe-log"></div>
         </div>
@@ -259,15 +274,27 @@
   const panel=createPanel();
   const $=(s)=>panel.querySelector(s); const logEl=$('#vibe-log');
   function log(msg,cls=''){ const t=new Date().toLocaleTimeString(); const line=document.createElement('div'); line.innerHTML=`<span class="vibe-muted">[${t}]</span> <span class="${cls}">${msg}</span>`; logEl.appendChild(line); logEl.scrollTop=logEl.scrollHeight; console.log('[vibe-mod]', msg); }
-  function setStatus(s){ $('#vibe-status').textContent=s; } function setFileInfo(s){ $('#vibe-fileinfo').textContent=s; }
-  function setProgress(i,t){ $('#vibe-progress').textContent=`${i}/${t}`; } function setCurId(id){ $('#vibe-curid').textContent=id||'—'; }
+  function setStatus(s){ $('#vibe-status').textContent=s; }
+  function setFileInfo(s){ $('#vibe-fileinfo').textContent=s; }
+  function setCurId(id){ $('#vibe-curid').textContent=id||'—'; }
+  function setLastId(id){ $('#vibe-lastid').textContent=id||'—'; }
+  function formatEta(ms){ if(!Number.isFinite(ms) || ms<=0) return '—'; const totalSec=Math.round(ms/1000); const hours=Math.floor(totalSec/3600); const minutes=Math.floor((totalSec%3600)/60); const seconds=totalSec%60; const parts=[]; if(hours) parts.push(`${hours} ч`); if(minutes) parts.push(`${minutes} мин`); if(!hours && (minutes<5)) parts.push(`${seconds} сек`); if(!parts.length) parts.push(`${seconds} сек`); return parts.join(' '); }
+  function updateProgressUI(){ const total=state.orderIds.length||0; const completed=Math.min(state.completedUnique||0,total); const progressEl=$('#vibe-progress'); if(progressEl) progressEl.textContent=`${completed}/${total}`; const fill=$('#vibe-progress-fill'); if(fill){ const percent=total?Math.min(100,(completed/total)*100):0; fill.style.width=`${percent}%`; fill.parentElement?.setAttribute('aria-valuenow', percent.toFixed(1)); }
+    const etaEl=$('#vibe-eta'); const speedEl=$('#vibe-speed'); const now=Date.now(); const elapsed=state.startedAt?Math.max(0, now-state.startedAt):0; const speed=elapsed>0?completed/(elapsed/60000):0; if(speedEl) speedEl.textContent=speed>0?`${speed.toFixed(speed>=10?1:2)} ID/мин`:'—'; if(etaEl){ const remaining=total-completed; if(speed>0 && remaining>0){ const etaMs=remaining/speed*60000; etaEl.textContent=formatEta(etaMs); }else{ etaEl.textContent='—'; } } }
+  let progressTimer=null;
+  function startProgressTicker(){ if(progressTimer) return; progressTimer=setInterval(()=>updateProgressUI(),1000); }
+  function stopProgressTicker(){ if(progressTimer){ clearInterval(progressTimer); progressTimer=null; } }
+  function setProgress(){ updateProgressUI(); }
 
   /********************* 4) Состояние *********************/
-  const state={ byId:new Map(), orderIds:[], idx:0, running:false, stopFlag:false };
-  function saveState(){ const obj={orderIds:state.orderIds, idx:state.idx, running:state.running, data:Object.fromEntries(state.byId)}; localStorage.setItem(LS_KEY, JSON.stringify(obj)); }
-  function loadState(){ const raw=localStorage.getItem(LS_KEY); if(!raw) return false; try{ const o=JSON.parse(raw); state.orderIds=Array.isArray(o.orderIds)?o.orderIds:[]; state.idx=typeof o.idx==='number'?o.idx:0; state.running=!!o.running; state.byId=new Map(Object.entries(o.data||{})); return true; }catch{return false;} }
-  function resetState(keep){ if(!keep) state.byId=new Map(); state.orderIds=keep?state.orderIds:[]; state.idx=0; state.running=false; state.stopFlag=false; saveState(); }
-  const restored=loadState(); if(restored && state.running){ setStatus('resume'); log('Восстановление с предыдущего шага…','vibe-ok'); }
+  const state={ byId:new Map(), orderIds:[], idx:0, running:false, stopFlag:false, startedAt:null, completedUnique:0, resumeBacklog:0, lastProcessedId:null };
+  function saveState(){ const obj={orderIds:state.orderIds, idx:state.idx, running:state.running, data:Object.fromEntries(state.byId), startedAt:state.startedAt, completedUnique:state.completedUnique, resumeBacklog:state.resumeBacklog, lastProcessedId:state.lastProcessedId}; localStorage.setItem(LS_KEY, JSON.stringify(obj)); }
+  function loadState(){ const raw=localStorage.getItem(LS_KEY); if(!raw) return false; try{ const o=JSON.parse(raw); state.orderIds=Array.isArray(o.orderIds)?o.orderIds:[]; state.idx=typeof o.idx==='number' && Number.isFinite(o.idx)?o.idx:0; state.running=!!o.running; state.byId=new Map(Object.entries(o.data||{})); state.startedAt=typeof o.startedAt==='number' && Number.isFinite(o.startedAt)?o.startedAt:null; state.completedUnique=typeof o.completedUnique==='number' && Number.isFinite(o.completedUnique)?o.completedUnique:0; state.resumeBacklog=typeof o.resumeBacklog==='number' && Number.isFinite(o.resumeBacklog)?Math.max(0,o.resumeBacklog|0):0; state.lastProcessedId=typeof o.lastProcessedId==='string'?o.lastProcessedId:null; state.idx=Math.max(0, Math.min(state.idx, state.orderIds.length)); state.completedUnique=Math.max(0, Math.min(state.completedUnique, state.orderIds.length)); state.resumeBacklog=Math.min(state.resumeBacklog, state.idx); return true; }catch{return false;} }
+  function resetState(keep){ if(!keep) state.byId=new Map(); state.orderIds=keep?state.orderIds:[]; state.idx=0; state.running=false; state.stopFlag=false; state.startedAt=null; state.completedUnique=0; state.resumeBacklog=0; state.lastProcessedId=null; stopProgressTicker(); saveState(); updateProgressUI(); setCurId('—'); setLastId('—'); }
+  const restored=loadState();
+  if(restored && state.running){ if(!state.resumeBacklog){ const back=Math.min(3, state.idx); if(back>0){ state.idx-=back; state.resumeBacklog=back; } }
+    state.stopFlag=false; state.startedAt=state.startedAt||Date.now(); saveState(); setStatus('resume'); const info=state.resumeBacklog>0?`повторю последние ${state.resumeBacklog} ID`:'продолжаю с сохранённого места'; log(`Восстановление с предыдущего шага — ${info}`,'vibe-ok'); startProgressTicker(); }
+  if(restored){ setLastId(state.lastProcessedId); setCurId(state.orderIds[state.idx]||'—'); updateProgressUI(); }
 
   /********************* 5) Работа со страницей *********************/
   async function ensureRuTab(){ try{ const settings=await waitForSelector('.style_settingsContainer__zPacN',{timeout:15000}); const ruBtn=settings.querySelector('.ant-tabs [data-node-key="ru"] .ant-tabs-tab-btn'); if(ruBtn){ const tab=ruBtn.closest('.ant-tabs-tab'); const isActive=tab?.querySelector('[aria-selected="true"]'); if(!isActive){ ruBtn.click(); await sleep(300); log('Переключил вкладку RU','vibe-ok'); } } }catch{} }
@@ -396,13 +423,13 @@
 
   async function mainLoop(){
     if(!state.orderIds.length){ log('Нет данных. Сначала «Загрузить XLSX».','vibe-warn'); return; }
-    state.running=true; state.stopFlag=false; saveState(); setStatus('run');
+    state.running=true; state.stopFlag=false; state.startedAt=state.startedAt||Date.now(); startProgressTicker(); saveState(); setStatus('run');
 
     const wantId=state.orderIds[state.idx];
     const curId=parseOfferIdFromLocation();
-    setCurId(wantId||'—'); setProgress(state.idx, state.orderIds.length);
+    setCurId(wantId||'—'); setProgress();
 
-    if(!wantId){ log('Все ID обработаны.','vibe-ok'); setStatus('done'); state.running=false; saveState(); return; }
+    if(!wantId){ log('Все ID обработаны.','vibe-ok'); setStatus('done'); state.running=false; stopProgressTicker(); state.startedAt=null; setProgress(); saveState(); return; }
     if(curId!==wantId){ log(`Навигация к ID ${wantId}…`,'vibe-muted'); await navigateToId(wantId); return; }
 
     try{ await waitForSelector('.style_settingsContainer__zPacN',{timeout:30000}); }catch{ log('Не дождался контейнера настроек. Продолжаю.','vibe-warn'); }
@@ -414,10 +441,14 @@
 
     if(planRows.length) await processAllBlocksForId(planRows);
 
-    state.idx+=1; setProgress(state.idx,state.orderIds.length); saveState();
+    const doneIndex=state.idx;
+    state.completedUnique=Math.max(state.completedUnique, doneIndex+1);
+    state.lastProcessedId=wantId; setLastId(wantId);
+    state.idx+=1; if(state.resumeBacklog>0) state.resumeBacklog-=1;
+    setProgress(); saveState();
 
-    if(state.idx>=state.orderIds.length){ log('Готово. Все ID обработаны.','vibe-ok'); setStatus('done'); state.running=false; saveState(); return; }
-    if(state.stopFlag){ log('Остановлено пользователем.','vibe-warn'); setStatus('stopped'); state.running=false; saveState(); return; }
+    if(state.idx>=state.orderIds.length){ log('Готово. Все ID обработаны.','vibe-ok'); setStatus('done'); state.running=false; stopProgressTicker(); state.startedAt=null; setProgress(); saveState(); return; }
+    if(state.stopFlag){ log('Остановлено пользователем.','vibe-warn'); setStatus('stopped'); state.running=false; stopProgressTicker(); state.startedAt=null; setProgress(); saveState(); return; }
 
     const nextId=state.orderIds[state.idx]; setCurId(nextId); log(`Переход к следующему ID: ${nextId}`,'vibe-muted'); await navigateToId(nextId);
   }
@@ -429,7 +460,7 @@
     try{
       setStatus('parsing'); await loadXLSXIfNeeded();
       const parsed=await parseXlsxToPlan(file,(info)=>setFileInfo(info));
-      state.byId=parsed.byId; state.orderIds=parsed.orderIds; state.idx=0; setProgress(0,state.orderIds.length); saveState();
+      state.byId=parsed.byId; state.orderIds=parsed.orderIds; state.idx=0; state.running=false; state.stopFlag=false; state.startedAt=null; state.completedUnique=0; state.resumeBacklog=0; state.lastProcessedId=null; setCurId('—'); setLastId('—'); setProgress(); saveState();
       log('XLSX загружен и разобран.','vibe-ok'); setStatus('idle');
     }catch(e){ log(`Ошибка разбора XLSX: ${e.message}`,'vibe-err'); setStatus('idle'); }
   });
@@ -437,17 +468,17 @@
   $('#vibe-start').addEventListener('click', ()=>{
     if(!state.orderIds.length){ log('Нет данных. Сначала «Загрузить XLSX».','vibe-warn'); return; }
     if(state.running){ log('Уже запущено.','vibe-warn'); return; }
-    state.running=true; state.stopFlag=false; saveState();
-    mainLoop().catch(e=>{ log(`mainLoop error: ${e.message}`,'vibe-err'); setStatus('idle'); state.running=false; saveState(); });
+    state.stopFlag=false; state.startedAt=Date.now(); if(state.completedUnique<state.idx) state.completedUnique=state.idx; state.resumeBacklog=0; setProgress(); startProgressTicker(); state.running=true; saveState();
+    mainLoop().catch(e=>{ log(`mainLoop error: ${e.message}`,'vibe-err'); setStatus('idle'); state.running=false; stopProgressTicker(); state.startedAt=null; setProgress(); saveState(); });
   });
 
   $('#vibe-stop').addEventListener('click', ()=>{ state.stopFlag=true; saveState(); log('Запрошена остановка…','vibe-warn'); });
-  $('#vibe-reset').addEventListener('click', ()=>{ resetState(false); setCurId('—'); setProgress(0,0); setFileInfo(''); log('Сброшено состояние и данные.','vibe-warn'); setStatus('idle'); });
+  $('#vibe-reset').addEventListener('click', ()=>{ resetState(false); setFileInfo(''); log('Сброшено состояние и данные.','vibe-warn'); setStatus('idle'); });
 
   (async function autoResume(){
     if(state.running && !state.stopFlag){
       await sleep(400);
-      mainLoop().catch(e=>{ log(`autoResume/mainLoop error: ${e.message}`,'vibe-err'); setStatus('idle'); state.running=false; saveState(); });
+      mainLoop().catch(e=>{ log(`autoResume/mainLoop error: ${e.message}`,'vibe-err'); setStatus('idle'); state.running=false; stopProgressTicker(); state.startedAt=null; setProgress(); saveState(); });
     }
   })();
 
