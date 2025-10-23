@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.16
-// @match        https://back-office.staging.ggsel.com/admin/categories*
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: перенесли запросы и матчи на production-домен back-office.ggsel.net.
+// @version      1.2.17
+// @match        https://back-office.ggsel.net/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
-// @connect      back-office.staging.ggsel.com
+// @connect      back-office.ggsel.net
 // ==/UserScript==
 
 (function() {
