@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.2.1
+// @version      1.3.0
 // @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
@@ -28,13 +28,31 @@
     results: [],
     lastProcessedId: null,
     lastStoppedId: null,
-    pausedDueToError: false
+    pausedDueToError: false,
+    startedAt: null,
+    elapsedMs: 0,
+    currentIdStartedAt: null,
+    currentIdElapsedMs: 0,
+    recentDurations: [],
+    rewindOnNextRun: false,
+    lastHeartbeat: null
   };
 
   /** @type {typeof DEFAULT_STATE} */
   let state = Object.assign({}, DEFAULT_STATE, loadState() || {});
   if (!Array.isArray(state.ids)) state.ids = [];
   if (!Array.isArray(state.results)) state.results = [];
+  if (!Array.isArray(state.recentDurations)) state.recentDurations = [];
+  state.recentDurations = state.recentDurations
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value >= 0)
+    .slice(-20);
+  if (!Number.isFinite(state.elapsedMs) || state.elapsedMs < 0) state.elapsedMs = 0;
+  if (!Number.isFinite(state.currentIdElapsedMs) || state.currentIdElapsedMs < 0) state.currentIdElapsedMs = 0;
+  if (typeof state.startedAt !== 'number') state.startedAt = null;
+  if (typeof state.currentIdStartedAt !== 'number') state.currentIdStartedAt = null;
+  if (typeof state.rewindOnNextRun !== 'boolean') state.rewindOnNextRun = false;
+  if (typeof state.lastHeartbeat !== 'number') state.lastHeartbeat = null;
 
   /******************************************************************
    * УТИЛИТЫ
@@ -43,6 +61,104 @@
 
   const LOG_PREFIX = '[GGSEL Parser]';
   const pendingLogEntries = [];
+
+  const MAX_DURATION_SAMPLES = 30;
+
+  function now() {
+    return Date.now();
+  }
+
+  function accumulateRunTiming() {
+    const time = now();
+    if (typeof state.startedAt === 'number') {
+      const delta = Math.max(0, time - state.startedAt);
+      state.elapsedMs += delta;
+      state.startedAt = null;
+    }
+    state.lastHeartbeat = time;
+  }
+
+  function accumulateCurrentIdTiming() {
+    const time = now();
+    if (typeof state.currentIdStartedAt === 'number') {
+      const delta = Math.max(0, time - state.currentIdStartedAt);
+      state.currentIdElapsedMs += delta;
+      state.currentIdStartedAt = null;
+    }
+  }
+
+  function resumeRunTiming() {
+    const time = now();
+    if (typeof state.startedAt !== 'number') {
+      state.startedAt = time;
+    }
+  }
+
+  function resumeCurrentIdTiming() {
+    const time = now();
+    if (typeof state.currentIdStartedAt !== 'number') {
+      state.currentIdStartedAt = time;
+    }
+  }
+
+  function finalizeCurrentIdDuration() {
+    const time = now();
+    let duration = state.currentIdElapsedMs || 0;
+    if (typeof state.currentIdStartedAt === 'number') {
+      duration += Math.max(0, time - state.currentIdStartedAt);
+    }
+    state.currentIdStartedAt = null;
+    state.currentIdElapsedMs = 0;
+    return duration > 0 ? duration : null;
+  }
+
+  function getElapsedMs() {
+    const base = state.elapsedMs || 0;
+    if (typeof state.startedAt === 'number') {
+      return base + Math.max(0, now() - state.startedAt);
+    }
+    return base;
+  }
+
+  function getAverageDurationMs() {
+    if (state.recentDurations.length) {
+      const total = state.recentDurations.reduce((sum, value) => sum + value, 0);
+      return total / state.recentDurations.length;
+    }
+    const done = state.currentIdIndex || 0;
+    if (done <= 0) return 0;
+    return getElapsedMs() / done;
+  }
+
+  function recordDurationSample(duration) {
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    state.recentDurations.push(duration);
+    while (state.recentDurations.length > MAX_DURATION_SAMPLES) {
+      state.recentDurations.shift();
+    }
+  }
+
+  function formatDuration(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    const totalSeconds = Math.round(ms / 1000);
+    const seconds = totalSeconds % 60;
+    const totalMinutes = (totalSeconds - seconds) / 60;
+    const minutes = totalMinutes % 60;
+    const hours = (totalMinutes - minutes) / 60;
+    const parts = [];
+    if (hours > 0) parts.push(String(hours).padStart(2, '0'));
+    parts.push(String(minutes).padStart(2, '0'));
+    parts.push(String(seconds).padStart(2, '0'));
+    return parts.join(':');
+  }
+
+  function formatSpeed(itemsPerMinute) {
+    if (!Number.isFinite(itemsPerMinute) || itemsPerMinute <= 0) return '—';
+    if (itemsPerMinute >= 1) {
+      return `${itemsPerMinute.toFixed(2)} ID/мин`;
+    }
+    return `${(itemsPerMinute * 60).toFixed(2)} ID/час`;
+  }
 
   function formatLogArg(arg) {
     if (typeof arg === 'string') return arg;
@@ -96,6 +212,9 @@
 
   // Сохраняем в TM-хранилище
   function saveState() {
+    if (state.running && typeof state.startedAt === 'number') {
+      state.lastHeartbeat = now();
+    }
     try { GM_setValue(STORE_KEY, JSON.stringify(state)); } catch (e) { console.error(e); }
   }
   // Загружаем из TM-хранилища
@@ -245,6 +364,16 @@
     return `${collapsed.slice(0, limit)}…`;
   }
 
+  function computeEtaMs() {
+    const total = state.ids?.length || 0;
+    const done = state.currentIdIndex || 0;
+    if (total <= 0 || done < 0 || done >= total) return 0;
+    const avg = getAverageDurationMs();
+    if (!Number.isFinite(avg) || avg <= 0) return 0;
+    const remaining = total - done;
+    return remaining * avg;
+  }
+
   function extractOfferTitle(data) {
     if (!data || typeof data !== 'object') return '';
     const candidates = [
@@ -320,6 +449,7 @@
   const OFFER_STATUS_SOURCES = ['active', 'paused', 'draft'];
   const OFFER_LIST_PAGE_SIZE = 100;
   const OFFER_CATALOG_TTL = 3 * 60 * 1000; // 3 минуты
+  const OFFER_DETAILS_CACHE_TTL = 5 * 60 * 1000; // 5 минут
 
   function createOfferCatalogCache() {
     return {
@@ -335,11 +465,28 @@
   let offerCatalog = createOfferCatalogCache();
   let offerCatalogLoading = null;
   let catalogNeedsReload = true;
+  const offerDetailsCache = new Map();
 
   function resetOfferCatalogCache() {
     offerCatalog = createOfferCatalogCache();
     offerCatalogLoading = null;
     catalogNeedsReload = true;
+    offerDetailsCache.clear();
+  }
+
+  function getOfferDetailsFromCache(offerId) {
+    const entry = offerDetailsCache.get(offerId);
+    if (!entry) return null;
+    if ((now() - entry.storedAt) > OFFER_DETAILS_CACHE_TTL) {
+      offerDetailsCache.delete(offerId);
+      return null;
+    }
+    return entry.payload;
+  }
+
+  function saveOfferDetailsToCache(offerId, payload) {
+    if (!offerId) return;
+    offerDetailsCache.set(offerId, { payload, storedAt: now() });
   }
 
   function registerOfferInCatalog(offer, statusTag) {
@@ -694,6 +841,11 @@
 
   async function fetchOfferDetails(offerId) {
     const url = `https://seller.ggsel.net/api/v1/offers/${offerId}`;
+    const cached = getOfferDetailsFromCache(offerId);
+    if (cached) {
+      log.info('Используем кэшированные детали оффера.');
+      return cached;
+    }
     const requestHeaders = buildAuthHeaders();
     log.info('Запрашиваем данные оффера через API:', JSON.stringify({
       method: 'GET',
@@ -749,8 +901,12 @@
       if (payload && typeof payload === 'object' && 'data' in payload) {
         const inner = payload.data;
         if (inner && typeof inner === 'object') {
+          saveOfferDetailsToCache(offerId, inner);
           return inner;
         }
+      }
+      if (payload && typeof payload === 'object') {
+        saveOfferDetailsToCache(offerId, payload);
       }
       return payload;
     } finally {
@@ -862,6 +1018,8 @@
           <div class="ggsel-kv"><span>Текущий ID:</span><span id="ggsel-current" class="ggsel-muted">—</span></div>
           <div class="ggsel-kv"><span>Последний завершённый:</span><span id="ggsel-last-done" class="ggsel-muted">—</span></div>
           <div class="ggsel-kv"><span>Остановились на:</span><span id="ggsel-last-stop" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>Скорость:</span><span id="ggsel-speed" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>ETA:</span><span id="ggsel-eta" class="ggsel-muted">—</span></div>
         </div>
         <div class="ggsel-log" id="ggsel-log"></div>
       </div>
@@ -882,6 +1040,8 @@
       current: panel.querySelector('#ggsel-current'),
       lastDone: panel.querySelector('#ggsel-last-done'),
       lastStop: panel.querySelector('#ggsel-last-stop'),
+      speed: panel.querySelector('#ggsel-speed'),
+      eta: panel.querySelector('#ggsel-eta'),
       log: panel.querySelector('#ggsel-log')
     };
 
@@ -910,6 +1070,14 @@
     ui.current.textContent = state.ids?.[state.currentIdIndex] || '—';
     ui.lastDone.textContent = state.lastProcessedId || '—';
     ui.lastStop.textContent = state.lastStoppedId || '—';
+    if (ui.speed) {
+      const avg = getAverageDurationMs();
+      const perMinute = avg > 0 ? 60000 / avg : 0;
+      ui.speed.textContent = formatSpeed(perMinute);
+    }
+    if (ui.eta) {
+      ui.eta.textContent = formatDuration(computeEtaMs());
+    }
   }
 
   async function onStart() {
@@ -928,6 +1096,13 @@
     state.lastProcessedId = null;
     state.lastStoppedId = ids[0] || null;
     state.pausedDueToError = false;
+    state.elapsedMs = 0;
+    state.startedAt = now();
+    state.currentIdStartedAt = null;
+    state.currentIdElapsedMs = 0;
+    state.recentDurations = [];
+    state.rewindOnNextRun = false;
+    state.lastHeartbeat = now();
     saveState();
     updateUi();
     await resumeFlow();
@@ -935,9 +1110,12 @@
 
   function onPause() {
     log.info('Скрипт приостановлен пользователем.');
+    accumulateRunTiming();
+    accumulateCurrentIdTiming();
     state.running = false;
     state.lastStoppedId = state.ids[state.currentIdIndex] || null;
     state.pausedDueToError = false;
+    state.rewindOnNextRun = false;
     saveState();
     updateUi();
   }
@@ -963,6 +1141,8 @@
     state.running = true;
     state.pausedDueToError = false;
     state.lastStoppedId = state.ids[state.currentIdIndex] || null;
+    resumeRunTiming();
+    state.currentIdStartedAt = null;
     saveState();
     updateUi();
     await resumeFlow();
@@ -987,8 +1167,31 @@
    ******************************************************************/
 
   // Возобновление сразу после загрузки страницы (если шли в процессе)
+  let reloadPrepared = false;
+
+  function prepareStateForResume() {
+    if (reloadPrepared) return;
+    reloadPrepared = true;
+    if (!state.running) return;
+    const currentTime = now();
+    const heartbeat = typeof state.lastHeartbeat === 'number' ? state.lastHeartbeat : currentTime;
+    if (typeof state.startedAt === 'number') {
+      const reference = Math.min(heartbeat, currentTime);
+      state.elapsedMs += Math.max(0, reference - state.startedAt);
+    }
+    state.startedAt = currentTime;
+    if (typeof state.currentIdStartedAt === 'number') {
+      const reference = Math.min(heartbeat, currentTime);
+      state.currentIdElapsedMs += Math.max(0, reference - state.currentIdStartedAt);
+    }
+    state.currentIdStartedAt = null;
+    state.rewindOnNextRun = true;
+    saveState();
+  }
+
   async function autoResumeIfNeeded() {
     buildUi();
+    prepareStateForResume();
     if (isServerErrorPage()) {
       pauseDueToServerError('Обнаружена страница ошибки 500. Скрипт приостановлен до дальнейших действий.');
       return;
@@ -1000,6 +1203,30 @@
 
   let activeRunner = null;
 
+  function applyRecoveryRewind() {
+    if (!state.rewindOnNextRun) return;
+    state.rewindOnNextRun = false;
+    if (!state.ids.length) return;
+    const boundedIndex = Math.min(Math.max(state.currentIdIndex, 0), state.ids.length);
+    const redoStart = Math.max(0, boundedIndex - 3);
+    const redoEndExclusive = state.currentIdIndex < state.ids.length ? Math.min(state.ids.length, state.currentIdIndex + 1) : boundedIndex;
+    const redoIds = state.ids.slice(redoStart, redoEndExclusive);
+    if (redoIds.length) {
+      const normalized = new Set(redoIds.map(normalizeIdKey).filter(Boolean));
+      state.results = state.results.filter(row => !normalized.has(getResultRowKey(row)));
+      log.info('Повторно проверим ID после восстановления:', redoIds.join(', '));
+    }
+    state.currentIdIndex = redoStart;
+    state.currentParamIndex = 0;
+    state.currentIdElapsedMs = 0;
+    state.currentIdStartedAt = null;
+    const prevIdx = redoStart - 1;
+    state.lastProcessedId = prevIdx >= 0 ? state.ids[prevIdx] : null;
+    state.lastStoppedId = state.ids[state.currentIdIndex] || null;
+    saveState();
+    updateUi();
+  }
+
   async function resumeFlow() {
     if (activeRunner) {
       return activeRunner;
@@ -1008,11 +1235,14 @@
       log.info('Возобновление обработки.');
       if (!state.ids.length) {
         log.warn('Список ID пуст. Нечего обрабатывать.');
+        accumulateRunTiming();
+        accumulateCurrentIdTiming();
         state.running = false;
         saveState();
         updateUi();
         return;
       }
+      applyRecoveryRewind();
       try {
         if (catalogNeedsReload) {
           log.info('Обновляем каталог офферов по статусам.');
@@ -1023,8 +1253,11 @@
         }
       } catch (error) {
         log.error('Не удалось подготовить каталог офферов:', error?.message || error);
+        accumulateRunTiming();
+        accumulateCurrentIdTiming();
         state.running = false;
         state.pausedDueToError = true;
+        state.rewindOnNextRun = true;
         saveState();
         updateUi();
         return;
@@ -1046,40 +1279,17 @@
   function pauseDueToServerError(reason = 'Детектирована страница ошибки 500. Останавливаем выполнение.') {
     log.warn(reason);
 
-    if (!state.ids.length) {
-      state.running = false;
-      state.pausedDueToError = true;
-      state.lastStoppedId = null;
-      saveState();
-      updateUi();
-      return;
-    }
-
-    if (!state.pausedDueToError) {
-      const boundedIndex = Math.min(state.currentIdIndex, state.ids.length);
-      const redoStart = Math.max(0, boundedIndex - 3);
-      const redoEndExclusive = state.currentIdIndex < state.ids.length ? state.currentIdIndex + 1 : boundedIndex;
-      const redoIds = new Set(state.ids.slice(redoStart, redoEndExclusive));
-
-      if (redoIds.size) {
-        const normalizedRedoIds = new Set(Array.from(redoIds).map(normalizeIdKey).filter(Boolean));
-        state.results = state.results.filter(row => !normalizedRedoIds.has(getResultRowKey(row)));
-      }
-
+    accumulateRunTiming();
+    accumulateCurrentIdTiming();
+    if (state.ids.length) {
       const stoppedIdx = Math.min(state.currentIdIndex, state.ids.length - 1);
       state.lastStoppedId = stoppedIdx >= 0 ? state.ids[stoppedIdx] : null;
-      const prevIdx = redoStart - 1;
-      state.lastProcessedId = prevIdx >= 0 ? state.ids[prevIdx] : null;
-      state.currentIdIndex = redoStart;
-      state.currentParamIndex = 0;
-
-      if (redoIds.size) {
-        log.info('После возобновления будут перепроверены ID:', Array.from(redoIds).join(', '));
-      }
+    } else {
+      state.lastStoppedId = null;
     }
-
     state.running = false;
     state.pausedDueToError = true;
+    state.rewindOnNextRun = true;
     saveState();
     updateUi();
   }
@@ -1096,8 +1306,14 @@
 
     await pausePoint();
 
+    resumeRunTiming();
+    if (state.currentParamIndex === 0) {
+      state.currentIdElapsedMs = 0;
+    }
+    resumeCurrentIdTiming();
     state.lastStoppedId = inputId;
     saveState();
+    updateUi();
 
     if (isServerErrorPage()) {
       pauseDueToServerError('Детектирована страница 500 во время обработки. Останавливаем выполнение.');
@@ -1111,8 +1327,11 @@
       resolution = await resolveOfferForInputId(inputId);
     } catch (error) {
       log.error('Ошибка при сопоставлении ID товара с оффером:', error?.message || error);
+      accumulateRunTiming();
+      accumulateCurrentIdTiming();
       state.running = false;
       state.pausedDueToError = true;
+      state.rewindOnNextRun = true;
       saveState();
       updateUi();
       return;
@@ -1155,8 +1374,11 @@
         } else {
           const message = `Не удалось получить данные оффера: ${error?.message || error}`;
           log.error(message);
+          accumulateRunTiming();
+          accumulateCurrentIdTiming();
           state.running = false;
           state.pausedDueToError = true;
+          state.rewindOnNextRun = true;
           saveState();
           updateUi();
         }
@@ -1181,8 +1403,11 @@
         } else {
           const message = `Не удалось получить данные оффера: ${error?.message || error}`;
           log.error(message);
+          accumulateRunTiming();
+          accumulateCurrentIdTiming();
           state.running = false;
           state.pausedDueToError = true;
+          state.rewindOnNextRun = true;
           saveState();
           updateUi();
         }
@@ -1192,8 +1417,11 @@
 
     if (!offerData || typeof offerData !== 'object') {
       log.error('Не удалось подготовить данные оффера. Ожидался объект с полями товара.');
+      accumulateRunTiming();
+      accumulateCurrentIdTiming();
       state.running = false;
       state.pausedDueToError = true;
+      state.rewindOnNextRun = true;
       saveState();
       updateUi();
       return;
@@ -1216,8 +1444,11 @@
 
     if (basePrice == null) {
       log.error('Не удалось прочитать стандартную цену из данных оффера. Останавливаем выполнение.');
+      accumulateRunTiming();
+      accumulateCurrentIdTiming();
       state.running = false;
       state.pausedDueToError = true;
+      state.rewindOnNextRun = true;
       saveState();
       updateUi();
       return;
@@ -1313,10 +1544,16 @@
     state.currentParamIndex = 0;
 
     const completedOfferId = state.ids[state.currentIdIndex] || null;
+    const duration = finalizeCurrentIdDuration();
+    if (duration != null) {
+      recordDurationSample(duration);
+    }
     state.lastProcessedId = completedOfferId;
 
     // переходим к следующему ID
     state.currentIdIndex++;
+    state.currentIdStartedAt = null;
+    state.currentIdElapsedMs = 0;
     state.lastStoppedId = state.ids[state.currentIdIndex] || null;
     state.pausedDueToError = false;
     saveState();
@@ -1325,6 +1562,7 @@
     // если всё выполнено — можно экспортировать, иначе — открыть след. товар
     if (state.currentIdIndex >= state.ids.length) {
       log.info('Все офферы обработаны. Скрипт остановлен.');
+      accumulateRunTiming();
       state.running = false;
       saveState();
       updateUi();
