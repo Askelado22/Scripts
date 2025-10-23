@@ -1,12 +1,16 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.3.0
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: панель запускается поверх любой страницы, выполняет фоновые запросы к админке и показывает карточки категорий. Последние изменения: кросс-доменные запросы к staging-домену и синхронизация cookie.
+// @version      1.3.1
 // @match        *://*/*
 // @match        https://back-office.staging.ggsel.com/*
+// @match        https://back-office.staging.ggsel.com/admin/*
 // @match        https://admin.ggsel.com/*
+// @match        https://admin.ggsel.com/admin/*
 // @include      https://back-office.staging.ggsel.com/*
+// @include      https://back-office.staging.ggsel.com/admin/*
 // @include      https://admin.ggsel.com/*
+// @include      https://admin.ggsel.com/admin/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
@@ -228,9 +232,22 @@
         return new Promise((resolve) => {
             try {
                 const listUrl = `${parsed.origin.replace(/\/$/, '')}/`;
-                GM_cookie.list({ url: listUrl }, (cookies, error) => {
+                const options = { url: listUrl };
+                if (parsed.hostname) {
+                    options.domain = parsed.hostname;
+                    options.firstPartyDomain = parsed.hostname;
+                }
+                GM_cookie.list(options, (cookies, error) => {
                     if (error) {
                         logger.warn('Не удалось получить cookies админки', { url: listUrl, error });
+                        if (error && typeof error === 'string' && error.includes('needs to be included')) {
+                            logger.info('Проверьте, что в менеджере скриптов сохранены разрешения на домены админки', {
+                                matches: [
+                                    'https://back-office.staging.ggsel.com/*',
+                                    'https://admin.ggsel.com/*',
+                                ],
+                            });
+                        }
                         cookieHeaderCache.delete(cacheKey);
                         resolve(null);
                         return;
