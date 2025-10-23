@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GGSEL Pricing Parser → XLSX (pause/resume)
 // @namespace    ggsel.pricing.parser
-// @version      1.2.1
-// @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма и прогресса.
+// @version      1.3.0
+// @description  Парсинг стандартной цены и модификаторов параметров, экспорт в XLSX. Поддержка паузы/резюма, прогресса и восстановления.
 // @author       vibe-coding
 // @match        https://seller.ggsel.net/*
 // @grant        GM_setValue
@@ -28,13 +28,29 @@
     results: [],
     lastProcessedId: null,
     lastStoppedId: null,
-    pausedDueToError: false
+    pausedDueToError: false,
+    runtime: {
+      totalActiveMs: 0,
+      lastResumeTs: null
+    },
+    resumeRewindApplied: true
   };
 
   /** @type {typeof DEFAULT_STATE} */
   let state = Object.assign({}, DEFAULT_STATE, loadState() || {});
   if (!Array.isArray(state.ids)) state.ids = [];
   if (!Array.isArray(state.results)) state.results = [];
+  if (!state.runtime || typeof state.runtime !== 'object') {
+    state.runtime = { totalActiveMs: 0, lastResumeTs: null };
+  } else {
+    state.runtime = {
+      totalActiveMs: Number(state.runtime.totalActiveMs) || 0,
+      lastResumeTs: Number.isFinite(state.runtime.lastResumeTs) ? state.runtime.lastResumeTs : null
+    };
+  }
+  if (typeof state.resumeRewindApplied !== 'boolean') {
+    state.resumeRewindApplied = true;
+  }
 
   /******************************************************************
    * УТИЛИТЫ
@@ -156,6 +172,85 @@
       if (!variants.includes(numericStr)) variants.push(numericStr);
     }
     return variants;
+  }
+
+  function ensureRuntimeStructure() {
+    if (!state.runtime || typeof state.runtime !== 'object') {
+      state.runtime = { totalActiveMs: 0, lastResumeTs: null };
+    } else {
+      if (!Number.isFinite(state.runtime.totalActiveMs)) {
+        state.runtime.totalActiveMs = 0;
+      }
+      if (!Number.isFinite(state.runtime.lastResumeTs)) {
+        state.runtime.lastResumeTs = null;
+      }
+    }
+  }
+
+  function markRuntimeResume() {
+    ensureRuntimeStructure();
+    if (!state.runtime.lastResumeTs) {
+      state.runtime.lastResumeTs = Date.now();
+    }
+  }
+
+  function markRuntimePause() {
+    ensureRuntimeStructure();
+    if (state.runtime.lastResumeTs) {
+      state.runtime.totalActiveMs += Date.now() - state.runtime.lastResumeTs;
+      state.runtime.lastResumeTs = null;
+    }
+  }
+
+  function getActiveRuntimeMs() {
+    ensureRuntimeStructure();
+    let total = state.runtime.totalActiveMs || 0;
+    if (state.runtime.lastResumeTs) {
+      total += Date.now() - state.runtime.lastResumeTs;
+    }
+    return total;
+  }
+
+  function formatDuration(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return '—';
+    }
+    const totalSeconds = Math.floor(ms / 1000);
+    const seconds = totalSeconds % 60;
+    const minutes = Math.floor(totalSeconds / 60) % 60;
+    const hours = Math.floor(totalSeconds / 3600);
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function formatSpeed(itemsPerMinute) {
+    if (!Number.isFinite(itemsPerMinute) || itemsPerMinute <= 0) {
+      return '—';
+    }
+    if (itemsPerMinute >= 10) {
+      return `${itemsPerMinute.toFixed(0)} ID/мин`;
+    }
+    if (itemsPerMinute >= 1) {
+      return `${itemsPerMinute.toFixed(1)} ID/мин`;
+    }
+    return `${itemsPerMinute.toFixed(2)} ID/мин`;
+  }
+
+  function formatEta(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return '—';
+    }
+    const totalSeconds = Math.max(1, Math.round(ms / 1000));
+    const seconds = totalSeconds % 60;
+    const minutes = Math.floor(totalSeconds / 60) % 60;
+    const hours = Math.floor(totalSeconds / 3600);
+    const parts = [];
+    if (hours > 0) parts.push(`${hours}ч`);
+    if (minutes > 0 || hours > 0) parts.push(`${minutes}м`);
+    parts.push(`${seconds}с`);
+    return parts.join(' ');
   }
 
   function extractProductIdFromUrl(url) {
@@ -315,6 +410,35 @@
       page: currentPage,
       lastPage
     };
+  }
+
+  function dropResultsForIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) return;
+    const normalized = new Set(ids.map(normalizeIdKey).filter(Boolean));
+    if (!normalized.size) return;
+    state.results = state.results.filter(row => !normalized.has(getResultRowKey(row)));
+  }
+
+  function applyRewindCheckpointIfNeeded() {
+    if (!state.running) return;
+    if (!Array.isArray(state.ids) || !state.ids.length) return;
+    if (state.resumeRewindApplied) return;
+    const originalIndex = Math.min(Math.max(0, state.currentIdIndex), state.ids.length);
+    const rewindIndex = Math.max(0, originalIndex - 3);
+    if (rewindIndex < originalIndex) {
+      const idsToRedo = state.ids.slice(rewindIndex, originalIndex);
+      if (idsToRedo.length) {
+        dropResultsForIds(idsToRedo);
+        log.info('После сбоя повторно проверим ID:', idsToRedo.join(', '));
+      }
+      state.currentIdIndex = rewindIndex;
+      state.currentParamIndex = 0;
+      state.lastProcessedId = rewindIndex > 0 ? state.ids[rewindIndex - 1] : null;
+      state.lastStoppedId = state.ids[rewindIndex] || null;
+    }
+    state.resumeRewindApplied = true;
+    saveState();
+    updateUi();
   }
 
   const OFFER_STATUS_SOURCES = ['active', 'paused', 'draft'];
@@ -860,6 +984,9 @@
           <div class="ggsel-kv"><span>Всего ID:</span><span id="ggsel-total" class="ggsel-muted">0</span></div>
           <div class="ggsel-kv"><span>Обработано:</span><span id="ggsel-done" class="ggsel-muted">0</span></div>
           <div class="ggsel-kv"><span>Текущий ID:</span><span id="ggsel-current" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>Скорость:</span><span id="ggsel-speed" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>ETA:</span><span id="ggsel-eta" class="ggsel-muted">—</span></div>
+          <div class="ggsel-kv"><span>Время работы:</span><span id="ggsel-runtime" class="ggsel-muted">—</span></div>
           <div class="ggsel-kv"><span>Последний завершённый:</span><span id="ggsel-last-done" class="ggsel-muted">—</span></div>
           <div class="ggsel-kv"><span>Остановились на:</span><span id="ggsel-last-stop" class="ggsel-muted">—</span></div>
         </div>
@@ -882,6 +1009,9 @@
       current: panel.querySelector('#ggsel-current'),
       lastDone: panel.querySelector('#ggsel-last-done'),
       lastStop: panel.querySelector('#ggsel-last-stop'),
+      eta: panel.querySelector('#ggsel-eta'),
+      speed: panel.querySelector('#ggsel-speed'),
+      runtime: panel.querySelector('#ggsel-runtime'),
       log: panel.querySelector('#ggsel-log')
     };
 
@@ -905,11 +1035,22 @@
     if (!ui) return;
     const pct = getProgressPct();
     ui.bar.style.width = `${pct}%`;
-    ui.total.textContent = String(state.ids?.length || 0);
-    ui.done.textContent = String(state.currentIdIndex || 0);
+    const total = state.ids?.length || 0;
+    const processed = Math.max(0, Math.min(state.currentIdIndex || 0, total));
+    const runtimeMs = getActiveRuntimeMs();
+    const itemsPerMinute = runtimeMs > 0 ? (processed / (runtimeMs / 60000)) : 0;
+    const remaining = Math.max(0, total - processed);
+    const speedPerMs = runtimeMs > 0 && processed > 0 ? processed / runtimeMs : 0;
+    const etaMs = speedPerMs > 0 ? remaining / speedPerMs : 0;
+
+    ui.total.textContent = String(total);
+    ui.done.textContent = String(processed);
     ui.current.textContent = state.ids?.[state.currentIdIndex] || '—';
     ui.lastDone.textContent = state.lastProcessedId || '—';
     ui.lastStop.textContent = state.lastStoppedId || '—';
+    if (ui.speed) ui.speed.textContent = formatSpeed(itemsPerMinute);
+    if (ui.eta) ui.eta.textContent = formatEta(etaMs);
+    if (ui.runtime) ui.runtime.textContent = runtimeMs > 0 ? formatDuration(runtimeMs) : '0:00';
   }
 
   async function onStart() {
@@ -928,6 +1069,8 @@
     state.lastProcessedId = null;
     state.lastStoppedId = ids[0] || null;
     state.pausedDueToError = false;
+    state.runtime = { totalActiveMs: 0, lastResumeTs: Date.now() };
+    state.resumeRewindApplied = false;
     saveState();
     updateUi();
     await resumeFlow();
@@ -938,6 +1081,8 @@
     state.running = false;
     state.lastStoppedId = state.ids[state.currentIdIndex] || null;
     state.pausedDueToError = false;
+    markRuntimePause();
+    state.resumeRewindApplied = true;
     saveState();
     updateUi();
   }
@@ -963,6 +1108,8 @@
     state.running = true;
     state.pausedDueToError = false;
     state.lastStoppedId = state.ids[state.currentIdIndex] || null;
+    markRuntimeResume();
+    state.resumeRewindApplied = false;
     saveState();
     updateUi();
     await resumeFlow();
@@ -971,7 +1118,12 @@
   function onReset() {
     if (!confirm('Сбросить прогресс и результаты?')) return;
     log.info('Сбрасываем состояние скрипта.');
+    markRuntimePause();
     state = Object.assign({}, DEFAULT_STATE);
+    state.ids = [];
+    state.results = [];
+    state.runtime = { totalActiveMs: 0, lastResumeTs: null };
+    state.resumeRewindApplied = true;
     saveState();
     if (ui) ui.ids.value = '';
     resetOfferCatalogCache();
@@ -995,6 +1147,8 @@
     }
     if (!state.ids.length) return;           // нет задач
     if (!state.running) return;              // не в режиме запуска
+    applyRewindCheckpointIfNeeded();
+    markRuntimeResume();
     await resumeFlow();
   }
 
@@ -1004,10 +1158,14 @@
     if (activeRunner) {
       return activeRunner;
     }
+    markRuntimeResume();
+    state.resumeRewindApplied = false;
+    saveState();
     activeRunner = (async () => {
       log.info('Возобновление обработки.');
       if (!state.ids.length) {
         log.warn('Список ID пуст. Нечего обрабатывать.');
+        markRuntimePause();
         state.running = false;
         saveState();
         updateUi();
@@ -1023,6 +1181,7 @@
         }
       } catch (error) {
         log.error('Не удалось подготовить каталог офферов:', error?.message || error);
+        markRuntimePause();
         state.running = false;
         state.pausedDueToError = true;
         saveState();
@@ -1047,6 +1206,7 @@
     log.warn(reason);
 
     if (!state.ids.length) {
+      markRuntimePause();
       state.running = false;
       state.pausedDueToError = true;
       state.lastStoppedId = null;
@@ -1078,6 +1238,7 @@
       }
     }
 
+    markRuntimePause();
     state.running = false;
     state.pausedDueToError = true;
     saveState();
@@ -1111,6 +1272,7 @@
       resolution = await resolveOfferForInputId(inputId);
     } catch (error) {
       log.error('Ошибка при сопоставлении ID товара с оффером:', error?.message || error);
+      markRuntimePause();
       state.running = false;
       state.pausedDueToError = true;
       saveState();
@@ -1146,6 +1308,11 @@
       } catch (error) {
         if (error?.name === 'AbortError') {
           log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
+          markRuntimePause();
+          state.running = false;
+          state.pausedDueToError = true;
+          saveState();
+          updateUi();
         } else if (typeof error?.status === 'number' && error.status >= 500) {
           pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
         } else if (error?.status === 404) {
@@ -1155,6 +1322,7 @@
         } else {
           const message = `Не удалось получить данные оффера: ${error?.message || error}`;
           log.error(message);
+          markRuntimePause();
           state.running = false;
           state.pausedDueToError = true;
           saveState();
@@ -1172,6 +1340,11 @@
       } catch (error) {
         if (error?.name === 'AbortError') {
           log.error('Истек таймаут ожидания ответа API. Останавливаем выполнение.');
+          markRuntimePause();
+          state.running = false;
+          state.pausedDueToError = true;
+          saveState();
+          updateUi();
         } else if (typeof error?.status === 'number' && error.status >= 500) {
           pauseDueToServerError(`Получен ответ ${error.status} от API. Прогресс поставлен на паузу.`);
         } else if (error?.status === 404) {
@@ -1181,6 +1354,7 @@
         } else {
           const message = `Не удалось получить данные оффера: ${error?.message || error}`;
           log.error(message);
+          markRuntimePause();
           state.running = false;
           state.pausedDueToError = true;
           saveState();
@@ -1192,6 +1366,7 @@
 
     if (!offerData || typeof offerData !== 'object') {
       log.error('Не удалось подготовить данные оффера. Ожидался объект с полями товара.');
+      markRuntimePause();
       state.running = false;
       state.pausedDueToError = true;
       saveState();
@@ -1216,6 +1391,7 @@
 
     if (basePrice == null) {
       log.error('Не удалось прочитать стандартную цену из данных оффера. Останавливаем выполнение.');
+      markRuntimePause();
       state.running = false;
       state.pausedDueToError = true;
       saveState();
@@ -1325,6 +1501,8 @@
     // если всё выполнено — можно экспортировать, иначе — открыть след. товар
     if (state.currentIdIndex >= state.ids.length) {
       log.info('Все офферы обработаны. Скрипт остановлен.');
+      markRuntimePause();
+      state.resumeRewindApplied = true;
       state.running = false;
       saveState();
       updateUi();
