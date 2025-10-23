@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: расширили панель до 400px и добавили контекстные действия из карточки категории с подтверждениями для критичных операций.
-// @version      1.2.18
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: расширили панель до 400px, добавили контекстные действия из карточки категории и встроили форму редактирования в модальном окне с сохранением без перехода.
+// @version      1.2.19
 // @match        https://back-office.ggsel.net/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -473,6 +473,11 @@
                 const oldestKey = this.map.keys().next().value;
                 this.map.delete(oldestKey);
             }
+        }
+
+        delete(key) {
+            if (!this.map.has(key)) return false;
+            return this.map.delete(key);
         }
     }
 
@@ -1747,6 +1752,224 @@
                 margin: 4px 0;
                 background: rgba(148,163,213,.16);
             }
+            .modal-backdrop {
+                position: fixed;
+                inset: 0;
+                background: rgba(10,13,22,.72);
+                z-index: 1000002;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 36px 24px;
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
+                transition: opacity var(--dur-2);
+                opacity: 0;
+            }
+            .modal-backdrop[hidden] {
+                display: none !important;
+            }
+            .modal-backdrop.open {
+                opacity: 1;
+            }
+            .modal {
+                background: linear-gradient(165deg, rgba(12,16,30,.97), rgba(25,31,48,.94));
+                border-radius: var(--radius);
+                border: 1px solid rgba(59,130,246,.32);
+                box-shadow: 0 28px 68px rgba(15,23,42,.55);
+                width: min(860px, 100%);
+                max-height: calc(100vh - 96px);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                color: rgba(226,232,255,.9);
+            }
+            .modal__header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 18px 22px 16px;
+                border-bottom: 1px solid rgba(71,85,126,.32);
+                gap: 16px;
+            }
+            .modal__title {
+                font-size: 18px;
+                font-weight: 700;
+                letter-spacing: .01em;
+                margin: 0;
+                color: rgba(248,250,252,.96);
+            }
+            .modal__close {
+                background: transparent;
+                border: 0;
+                color: rgba(148,163,213,.85);
+                font-size: 20px;
+                cursor: pointer;
+                padding: 4px 6px;
+                line-height: 1;
+                border-radius: 999px;
+                transition: background var(--dur-1), color var(--dur-1);
+            }
+            .modal__close:hover,
+            .modal__close:focus-visible {
+                background: rgba(59,130,246,.18);
+                color: rgba(248,250,252,.96);
+                outline: none;
+            }
+            .modal__content {
+                padding: 0 22px 18px;
+                overflow-y: auto;
+            }
+            .modal__loading {
+                padding: 28px 22px 32px;
+                font-size: 15px;
+                color: rgba(191,219,254,.85);
+            }
+            .edit-form {
+                display: flex;
+                flex-direction: column;
+                gap: 18px;
+                padding: 0 22px 22px;
+            }
+            .edit-form__info {
+                font-size: 12px;
+                color: rgba(148,163,213,.85);
+                background: rgba(30,41,76,.45);
+                border: 1px solid rgba(59,130,246,.26);
+                padding: 10px 12px;
+                border-radius: var(--radius-sm);
+                line-height: 1.45;
+            }
+            .edit-form__fields {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }
+            .edit-field {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                background: rgba(14,18,36,.65);
+                border: 1px solid rgba(71,85,126,.28);
+                border-radius: var(--radius-sm);
+                padding: 14px 16px;
+            }
+            .edit-field__label {
+                font-size: 13px;
+                font-weight: 600;
+                letter-spacing: .01em;
+                color: rgba(226,232,255,.92);
+            }
+            .edit-field__pair-inputs {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+                gap: 12px;
+            }
+            .edit-field__input {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .edit-field__lang {
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: .12em;
+                color: rgba(148,163,213,.8);
+            }
+            .edit-control {
+                background: rgba(15,23,42,.72);
+                border: 1px solid rgba(59,130,246,.28);
+                border-radius: 10px;
+                color: rgba(226,232,255,.92);
+                padding: 10px 12px;
+                font: inherit;
+                line-height: 1.45;
+                min-height: 38px;
+                transition: border-color var(--dur-1), box-shadow var(--dur-1), background var(--dur-1);
+            }
+            .edit-control:focus {
+                outline: none;
+                border-color: rgba(59,130,246,.65);
+                box-shadow: 0 0 0 2px rgba(59,130,246,.2);
+                background: rgba(17,24,39,.92);
+            }
+            .edit-control[type="checkbox"] {
+                width: 18px;
+                height: 18px;
+                min-height: 18px;
+                border-radius: 6px;
+                padding: 0;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .edit-control[type="file"] {
+                padding: 8px 10px;
+            }
+            .edit-control--textarea {
+                min-height: 120px;
+                resize: vertical;
+            }
+            .edit-field__help {
+                font-size: 11px;
+                color: rgba(148,163,213,.75);
+                line-height: 1.5;
+            }
+            .edit-field--checkbox {
+                flex-direction: row;
+                align-items: center;
+                gap: 12px;
+            }
+            .edit-field--checkbox .edit-field__label {
+                font-weight: 500;
+            }
+            .edit-field--checkbox .edit-field__content {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+            .edit-form__footer {
+                display: flex;
+                justify-content: flex-end;
+                gap: 12px;
+                margin-top: 6px;
+            }
+            .edit-form__button {
+                border-radius: 12px;
+                border: 1px solid rgba(59,130,246,.4);
+                background: rgba(30,41,76,.65);
+                color: rgba(191,219,254,.9);
+                padding: 10px 18px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1), transform var(--dur-1);
+            }
+            .edit-form__button:hover,
+            .edit-form__button:focus-visible {
+                background: rgba(59,130,246,.24);
+                border-color: rgba(96,165,250,.6);
+                color: rgba(244,249,255,.96);
+                outline: none;
+            }
+            .edit-form__button:disabled {
+                opacity: .6;
+                cursor: default;
+            }
+            .edit-form__button--primary {
+                background: linear-gradient(150deg, rgba(59,130,246,.9), rgba(14,165,233,.82));
+                border-color: rgba(59,130,246,.72);
+                color: #f8fafc;
+                box-shadow: 0 12px 32px rgba(59,130,246,.35);
+            }
+            .edit-form__button--primary:hover,
+            .edit-form__button--primary:focus-visible {
+                background: linear-gradient(150deg, rgba(59,130,246,.98), rgba(14,165,233,.88));
+                border-color: rgba(96,165,250,.8);
+            }
+            .edit-form__button--primary:disabled {
+                box-shadow: none;
+            }
             .popover {
                 position: fixed;
                 background: linear-gradient(160deg, rgba(10,13,22,.98), rgba(21,24,36,.94));
@@ -1885,6 +2108,12 @@
             this._onContextMenuPointerOver = null;
             this._contextMenuEditableTarget = null;
             this._contextMenuEditableSelection = null;
+            this.modalBackdrop = null;
+            this.modalContainer = null;
+            this._activeModal = null;
+            this._onModalKeyDown = null;
+            this._currentEditMeta = null;
+            this._modalState = { loading: false };
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -2594,7 +2823,22 @@
                 return;
             }
             if (nodeAction) {
+                if (actionKey === 'edit') {
+                    await this._openEditModal(node || null, nodeAction);
+                    return;
+                }
                 await this._executeNodeAction(nodeAction, node || null);
+                return;
+            }
+            if (actionKey === 'edit') {
+                const fallbackAction = node && Array.isArray(node.actions)
+                    ? node.actions.find(action => (action.key || '') === 'edit' || resolveActionKey(action.label) === 'edit')
+                    : null;
+                if (fallbackAction) {
+                    await this._openEditModal(node || null, fallbackAction);
+                    return;
+                }
+                this._showToast('Не удалось найти ссылку для редактирования', 'error');
                 return;
             }
             const labelMap = {
@@ -2617,6 +2861,584 @@
             });
             const target = node ? ` для «${node.name}»` : '';
             this._showToast(`Действие «${label}» пока недоступно${target}`, 'info');
+        }
+
+        _ensureModal() {
+            if (this.modalBackdrop && this.modalContainer) return;
+            const backdrop = document.createElement('div');
+            backdrop.className = 'modal-backdrop';
+            backdrop.hidden = true;
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            backdrop.appendChild(modal);
+            backdrop.addEventListener('click', (event) => {
+                if (event.target === backdrop) {
+                    this._closeModal();
+                }
+            });
+            this.shadowRoot.appendChild(backdrop);
+            this.modalBackdrop = backdrop;
+            this.modalContainer = modal;
+            this._onModalKeyDown = (event) => {
+                if (event.defaultPrevented) return;
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this._closeModal();
+                }
+            };
+        }
+
+        _showModal() {
+            this._ensureModal();
+            if (!this.modalBackdrop) return;
+            this.modalBackdrop.hidden = false;
+            requestAnimationFrame(() => {
+                if (this.modalBackdrop) {
+                    this.modalBackdrop.classList.add('open');
+                }
+            });
+            if (this._onModalKeyDown) {
+                window.addEventListener('keydown', this._onModalKeyDown, true);
+            }
+        }
+
+        _closeModal() {
+            if (!this.modalBackdrop) return;
+            this.modalBackdrop.classList.remove('open');
+            setTimeout(() => {
+                if (this.modalBackdrop) {
+                    this.modalBackdrop.hidden = true;
+                }
+            }, 180);
+            if (this.modalContainer) {
+                this.modalContainer.innerHTML = '';
+            }
+            if (this._onModalKeyDown) {
+                window.removeEventListener('keydown', this._onModalKeyDown, true);
+            }
+            this._activeModal = null;
+            this._currentEditMeta = null;
+            this._modalState.loading = false;
+        }
+
+        _createModalHeader(titleText) {
+            const header = document.createElement('div');
+            header.className = 'modal__header';
+            const title = document.createElement('h2');
+            title.className = 'modal__title';
+            title.textContent = titleText || 'Редактирование';
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'modal__close';
+            close.setAttribute('aria-label', 'Закрыть модальное окно');
+            close.innerHTML = '&times;';
+            close.addEventListener('click', () => this._closeModal());
+            header.appendChild(title);
+            header.appendChild(close);
+            return header;
+        }
+
+        _renderModalLoading(title, message) {
+            if (!this.modalContainer) return;
+            this.modalContainer.innerHTML = '';
+            const header = this._createModalHeader(title);
+            const content = document.createElement('div');
+            content.className = 'modal__content';
+            const loading = document.createElement('div');
+            loading.className = 'modal__loading';
+            loading.textContent = message || 'Загрузка…';
+            content.appendChild(loading);
+            this.modalContainer.appendChild(header);
+            this.modalContainer.appendChild(content);
+        }
+
+        async _openEditModal(node, action) {
+            if (!action || !action.href) {
+                this._showToast('Ссылка для редактирования недоступна', 'error');
+                return;
+            }
+            if (this._modalState.loading) {
+                return;
+            }
+            this._ensureModal();
+            this._showModal();
+            const nodeName = node && node.name ? node.name : 'Категория';
+            this._renderModalLoading(`Редактирование: ${nodeName}`, 'Загрузка формы редактирования…');
+            this._modalState.loading = true;
+            try {
+                const requestUrl = new URL(action.href, location.origin).toString();
+                const html = await fetcher.fetchText(requestUrl);
+                const doc = domParser.parseFromString(html, 'text/html');
+                const form = doc.querySelector('form#edit_resource, form.edit_resource');
+                if (!form) {
+                    throw new Error('form-not-found');
+                }
+                const meta = this._extractEditFormData(form, doc, requestUrl);
+                this._renderEditForm(meta, node || null);
+                this._modalState.loading = false;
+            } catch (err) {
+                logger.error('Не удалось открыть модальное редактирование', {
+                    error: err && err.message,
+                    nodeId: node ? node.id : null,
+                });
+                this._modalState.loading = false;
+                this._showToast('Не удалось загрузить форму редактирования', 'error');
+                this._closeModal();
+            }
+        }
+
+        _extractEditFormData(formEl, doc, requestUrl) {
+            const actionAttr = formEl.getAttribute('action') || requestUrl || '';
+            const absoluteAction = actionAttr ? new URL(actionAttr, location.origin).toString() : requestUrl;
+            const methodAttr = (formEl.getAttribute('method') || 'post').toUpperCase();
+            const enctypeAttr = formEl.getAttribute('enctype') || '';
+            const hiddenFields = [];
+            const singles = [];
+            const pairMap = new Map();
+            let order = 0;
+            let csrfToken = null;
+            const elements = Array.from(formEl.elements || []);
+            for (const element of elements) {
+                if (!element || !element.tagName) continue;
+                const tagName = element.tagName.toLowerCase();
+                if (tagName === 'button') continue;
+                const name = element.getAttribute('name');
+                if (!name) continue;
+                const typeAttr = (element.getAttribute('type') || (tagName === 'textarea' ? 'textarea' : tagName === 'select' ? 'select' : 'text')).toLowerCase();
+                if (typeAttr === 'submit' || typeAttr === 'button') continue;
+                if (element.disabled) continue;
+                if (typeAttr === 'hidden') {
+                    hiddenFields.push({
+                        name,
+                        value: element.value || '',
+                    });
+                    if (name === 'authenticity_token' && !csrfToken) {
+                        csrfToken = element.value || null;
+                    }
+                    continue;
+                }
+                const fieldData = {
+                    name,
+                    tag: tagName,
+                    type: typeAttr,
+                    value: tagName === 'textarea' ? element.value : element.value,
+                    checked: typeAttr === 'checkbox' ? element.checked : undefined,
+                    required: element.hasAttribute('required'),
+                    placeholder: element.getAttribute('placeholder') || '',
+                    options: tagName === 'select'
+                        ? Array.from(element.options || []).map(option => ({
+                            value: option.value,
+                            label: collapseSpaces(option.textContent || ''),
+                            selected: option.selected,
+                            disabled: option.disabled,
+                        }))
+                        : null,
+                    multiple: tagName === 'select' ? element.multiple : false,
+                    step: element.getAttribute('step') || null,
+                    min: element.getAttribute('min') || null,
+                    max: element.getAttribute('max') || null,
+                    label: this._findFieldLabel(element, formEl),
+                    help: this._findFieldHelp(element),
+                    order: order++,
+                };
+                const langInfo = this._detectFieldLanguage(name);
+                if (langInfo) {
+                    const { baseName, lang } = langInfo;
+                    if (!pairMap.has(baseName)) {
+                        pairMap.set(baseName, {
+                            baseName,
+                            fields: {},
+                            label: fieldData.label,
+                            helps: new Set(),
+                            order: fieldData.order,
+                        });
+                    }
+                    const entry = pairMap.get(baseName);
+                    entry.fields[lang] = fieldData;
+                    entry.order = Math.min(entry.order, fieldData.order);
+                    if (!entry.label && fieldData.label) {
+                        entry.label = fieldData.label;
+                    }
+                    if (fieldData.help) {
+                        entry.helps.add(fieldData.help);
+                    }
+                    continue;
+                }
+                singles.push(fieldData);
+            }
+            const pairs = Array.from(pairMap.values())
+                .sort((a, b) => a.order - b.order)
+                .map(entry => ({
+                    baseName: entry.baseName,
+                    label: entry.label,
+                    helps: Array.from(entry.helps || []),
+                    fields: entry.fields,
+                }));
+            singles.sort((a, b) => a.order - b.order);
+            const breadcrumbsEl = doc.querySelector('.container p');
+            const breadcrumbs = breadcrumbsEl ? collapseSpaces(breadcrumbsEl.textContent || '') : '';
+            const viewLink = doc.querySelector('.box-header .pull-right a[href*="/admin/categories/"]');
+            const viewHref = viewLink && viewLink.getAttribute('href')
+                ? new URL(viewLink.getAttribute('href'), location.origin).toString()
+                : '';
+            const headerTitleEl = doc.querySelector('.box-header .box-title, .box-header h3, .content-header h1');
+            const headerTitle = headerTitleEl ? collapseSpaces(headerTitleEl.textContent || '') : '';
+            const idMatch = absoluteAction ? absoluteAction.match(/categories\/(\d+)/) : null;
+            return {
+                action: absoluteAction,
+                method: methodAttr || 'POST',
+                enctype: enctypeAttr,
+                hiddenFields,
+                singles,
+                pairs,
+                csrfToken: csrfToken || null,
+                requestUrl: requestUrl || '',
+                categoryId: idMatch ? idMatch[1] : null,
+                info: {
+                    breadcrumbs,
+                    viewHref,
+                    headerTitle,
+                },
+            };
+        }
+
+        _renderEditForm(meta, node) {
+            if (!this.modalContainer) return;
+            const title = node && node.name ? `Редактирование: ${node.name}` : 'Редактирование категории';
+            this.modalContainer.innerHTML = '';
+            const header = this._createModalHeader(title);
+            const content = document.createElement('div');
+            content.className = 'modal__content';
+            const formEl = document.createElement('form');
+            formEl.className = 'edit-form';
+            formEl.noValidate = true;
+            formEl.dataset.action = meta.action || '';
+            formEl.dataset.method = meta.method || 'POST';
+            formEl.dataset.enctype = meta.enctype || '';
+            formEl.dataset.nodeId = node && node.id ? String(node.id) : '';
+            const hiddenFragment = document.createDocumentFragment();
+            if (Array.isArray(meta.hiddenFields)) {
+                meta.hiddenFields.forEach((hidden) => {
+                    if (!hidden || !hidden.name) return;
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = hidden.name;
+                    input.value = hidden.value || '';
+                    hiddenFragment.appendChild(input);
+                });
+            }
+            formEl.appendChild(hiddenFragment);
+            if (meta.info && (meta.info.breadcrumbs || meta.info.viewHref || meta.info.headerTitle)) {
+                const infoBlock = document.createElement('div');
+                infoBlock.className = 'edit-form__info';
+                if (meta.info.headerTitle) {
+                    const headerLine = document.createElement('div');
+                    headerLine.textContent = meta.info.headerTitle;
+                    infoBlock.appendChild(headerLine);
+                }
+                if (meta.info.breadcrumbs) {
+                    const pathLine = document.createElement('div');
+                    pathLine.textContent = meta.info.breadcrumbs;
+                    infoBlock.appendChild(pathLine);
+                }
+                if (meta.info.viewHref) {
+                    const link = document.createElement('a');
+                    link.href = meta.info.viewHref;
+                    link.textContent = 'Открыть оригинал';
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    infoBlock.appendChild(link);
+                }
+                formEl.appendChild(infoBlock);
+            }
+            const fieldsWrapper = document.createElement('div');
+            fieldsWrapper.className = 'edit-form__fields';
+            const languageOrder = ['ru', 'en'];
+            if (Array.isArray(meta.pairs)) {
+                meta.pairs.forEach((pair) => {
+                    const block = document.createElement('div');
+                    block.className = 'edit-field';
+                    const label = document.createElement('div');
+                    label.className = 'edit-field__label';
+                    label.textContent = pair.label || pair.baseName || 'Поле';
+                    block.appendChild(label);
+                    const inputsWrap = document.createElement('div');
+                    inputsWrap.className = 'edit-field__pair-inputs';
+                    languageOrder.forEach((lang) => {
+                        const field = pair.fields[lang];
+                        if (!field) return;
+                        const inputWrap = document.createElement('div');
+                        inputWrap.className = 'edit-field__input';
+                        const langLabel = document.createElement('span');
+                        langLabel.className = 'edit-field__lang';
+                        langLabel.textContent = lang.toUpperCase();
+                        inputWrap.appendChild(langLabel);
+                        const control = this._createControlElement(field);
+                        inputWrap.appendChild(control);
+                        inputsWrap.appendChild(inputWrap);
+                    });
+                    block.appendChild(inputsWrap);
+                    if (pair.helps && pair.helps.length) {
+                        pair.helps.forEach((text) => {
+                            if (!text) return;
+                            const help = document.createElement('div');
+                            help.className = 'edit-field__help';
+                            help.textContent = text;
+                            block.appendChild(help);
+                        });
+                    }
+                    fieldsWrapper.appendChild(block);
+                });
+            }
+            if (Array.isArray(meta.singles)) {
+                meta.singles.forEach((field) => {
+                    if (field.type === 'checkbox') {
+                        const block = document.createElement('div');
+                        block.className = 'edit-field edit-field--checkbox';
+                        const labelWrap = document.createElement('label');
+                        labelWrap.className = 'edit-field__content';
+                        const control = this._createControlElement(field);
+                        labelWrap.appendChild(control);
+                        const textSpan = document.createElement('span');
+                        textSpan.className = 'edit-field__label';
+                        textSpan.textContent = field.label || field.name;
+                        labelWrap.appendChild(textSpan);
+                        block.appendChild(labelWrap);
+                        if (field.help) {
+                            const help = document.createElement('div');
+                            help.className = 'edit-field__help';
+                            help.textContent = field.help;
+                            block.appendChild(help);
+                        }
+                        fieldsWrapper.appendChild(block);
+                        return;
+                    }
+                    const block = document.createElement('div');
+                    block.className = 'edit-field';
+                    const label = document.createElement('div');
+                    label.className = 'edit-field__label';
+                    label.textContent = field.label || field.name;
+                    block.appendChild(label);
+                    const inputWrap = document.createElement('div');
+                    inputWrap.className = 'edit-field__input';
+                    const control = this._createControlElement(field);
+                    inputWrap.appendChild(control);
+                    block.appendChild(inputWrap);
+                    if (field.help) {
+                        const help = document.createElement('div');
+                        help.className = 'edit-field__help';
+                        help.textContent = field.help;
+                        block.appendChild(help);
+                    }
+                    fieldsWrapper.appendChild(block);
+                });
+            }
+            formEl.appendChild(fieldsWrapper);
+            const footer = document.createElement('div');
+            footer.className = 'edit-form__footer';
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'edit-form__button';
+            cancelBtn.textContent = 'Отмена';
+            cancelBtn.addEventListener('click', () => this._closeModal());
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'submit';
+            saveBtn.className = 'edit-form__button edit-form__button--primary';
+            saveBtn.textContent = 'Сохранить';
+            footer.appendChild(cancelBtn);
+            footer.appendChild(saveBtn);
+            formEl.appendChild(footer);
+            formEl.addEventListener('submit', (event) => {
+                event.preventDefault();
+                this._submitEditForm(formEl, { ...meta, saveButton: saveBtn }, node || null);
+            });
+            content.appendChild(formEl);
+            this.modalContainer.appendChild(header);
+            this.modalContainer.appendChild(content);
+            this._currentEditMeta = { ...meta, formEl, saveButton: saveBtn, nodeId: node && node.id ? node.id : null };
+        }
+
+        _createControlElement(field) {
+            let control;
+            if (field.tag === 'textarea' || field.type === 'textarea') {
+                control = document.createElement('textarea');
+                control.className = 'edit-control edit-control--textarea';
+                control.value = field.value || '';
+            } else if (field.tag === 'select') {
+                control = document.createElement('select');
+                control.className = 'edit-control';
+                if (field.multiple) {
+                    control.multiple = true;
+                }
+                if (Array.isArray(field.options)) {
+                    field.options.forEach((optionData) => {
+                        const option = document.createElement('option');
+                        option.value = optionData.value;
+                        option.textContent = optionData.label;
+                        if (optionData.disabled) {
+                            option.disabled = true;
+                        }
+                        if (optionData.selected) {
+                            option.selected = true;
+                        }
+                        control.appendChild(option);
+                    });
+                }
+                if (field.value != null) {
+                    control.value = field.value;
+                }
+            } else {
+                control = document.createElement('input');
+                const inputType = field.type && field.type !== 'textarea' ? field.type : 'text';
+                control.type = inputType;
+                control.className = 'edit-control';
+                if (inputType === 'checkbox') {
+                    control.checked = Boolean(field.checked);
+                    control.value = field.value != null ? field.value : '1';
+                } else if (inputType !== 'file' && field.value != null) {
+                    control.value = field.value;
+                }
+            }
+            control.name = field.name;
+            if (field.placeholder) {
+                control.placeholder = field.placeholder;
+            }
+            if (field.required) {
+                control.required = true;
+            }
+            if (field.step && control instanceof HTMLInputElement) {
+                control.step = field.step;
+            }
+            if (field.min && control instanceof HTMLInputElement) {
+                control.min = field.min;
+            }
+            if (field.max && control instanceof HTMLInputElement) {
+                control.max = field.max;
+            }
+            return control;
+        }
+
+        async _submitEditForm(formEl, meta, node) {
+            if (!meta || !meta.action) {
+                this._showToast('Форма недоступна', 'error');
+                return;
+            }
+            if (this._modalState.loading) {
+                return;
+            }
+            const saveButton = meta.saveButton || null;
+            if (saveButton) {
+                saveButton.disabled = true;
+                saveButton.textContent = 'Сохранение…';
+            }
+            this._modalState.loading = true;
+            try {
+                const formData = new FormData(formEl);
+                const csrfToken = meta.csrfToken || this._resolveCsrfToken();
+                const headers = {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                };
+                if (csrfToken) {
+                    headers['X-CSRF-Token'] = csrfToken;
+                }
+                const response = await fetch(meta.action, {
+                    method: meta.method || 'POST',
+                    body: formData,
+                    credentials: 'include',
+                    headers,
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                this._showToast('Категория сохранена', 'success');
+                if (meta.requestUrl) {
+                    pageCache.delete(meta.requestUrl);
+                }
+                if (node && node.id) {
+                    statsCache.delete(node.id);
+                    const showUrl = `/admin/categories/${node.id}`;
+                    pageCache.delete(showUrl);
+                    loadStats(node.id).catch(() => {});
+                }
+                this._closeModal();
+            } catch (err) {
+                logger.error('Ошибка сохранения формы редактирования', {
+                    error: err && err.message,
+                    nodeId: node ? node.id : null,
+                });
+                this._showToast('Не удалось сохранить категорию', 'error');
+            } finally {
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = 'Сохранить';
+                }
+                this._modalState.loading = false;
+            }
+        }
+
+        _resolveCsrfToken() {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            return meta ? meta.getAttribute('content') : null;
+        }
+
+        _detectFieldLanguage(name) {
+            if (!name) return null;
+            const bracketMatch = name.match(/^(.*\[[^\]]*?)(?:_([a-z]{2}))\]$/i);
+            if (bracketMatch) {
+                const lang = bracketMatch[2].toLowerCase();
+                if (lang === 'ru' || lang === 'en') {
+                    return {
+                        baseName: `${bracketMatch[1]}]`,
+                        lang,
+                    };
+                }
+            }
+            const simpleMatch = name.match(/^(.*)_([a-z]{2})$/i);
+            if (simpleMatch) {
+                const lang = simpleMatch[2].toLowerCase();
+                if (lang === 'ru' || lang === 'en') {
+                    return {
+                        baseName: simpleMatch[1],
+                        lang,
+                    };
+                }
+            }
+            return null;
+        }
+
+        _findFieldLabel(element, formEl) {
+            if (!element) return '';
+            const id = element.getAttribute('id');
+            if (id) {
+                try {
+                    const label = formEl.querySelector(`label[for="${CSS.escape(id)}"]`);
+                    if (label && label.textContent) {
+                        return collapseSpaces(label.textContent);
+                    }
+                } catch (err) {
+                    logger.debug('Не удалось найти label по id', { error: err && err.message, id });
+                }
+            }
+            const closestLabel = element.closest('label');
+            if (closestLabel && closestLabel.textContent) {
+                return collapseSpaces(closestLabel.textContent);
+            }
+            const group = element.closest('.form-group');
+            if (group) {
+                const label = group.querySelector('label');
+                if (label && label.textContent) {
+                    return collapseSpaces(label.textContent);
+                }
+            }
+            return '';
+        }
+
+        _findFieldHelp(element) {
+            if (!element) return '';
+            const group = element.closest('.form-group');
+            if (!group) return '';
+            const help = group.querySelector('.help-block');
+            return help && help.textContent ? collapseSpaces(help.textContent) : '';
         }
 
         _captureEditableSelection(editable) {
