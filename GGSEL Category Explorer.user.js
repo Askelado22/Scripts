@@ -1,11 +1,21 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.14
-// @match        https://back-office.staging.ggsel.com/admin/categories*
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: панель запускается поверх любой страницы, выполняет фоновые запросы к админке и показывает карточки категорий. Последние изменения: кросс-доменные запросы к staging-домену и синхронизация cookie.
+// @version      1.3.1
+// @match        *://*/*
+// @match        https://back-office.staging.ggsel.com/*
+// @match        https://back-office.staging.ggsel.com/admin/*
+// @match        https://admin.ggsel.com/*
+// @match        https://admin.ggsel.com/admin/*
+// @include      https://back-office.staging.ggsel.com/*
+// @include      https://back-office.staging.ggsel.com/admin/*
+// @include      https://admin.ggsel.com/*
+// @include      https://admin.ggsel.com/admin/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_cookie
 // @connect      back-office.staging.ggsel.com
+// @connect      admin.ggsel.com
 // ==/UserScript==
 
 (function() {
@@ -24,7 +34,7 @@
     const WAIT_FOR_TIMEOUT_MS = 6500;
     const WAIT_FOR_INTERVAL_MS = 120;
     const FOCUSED_HIGHLIGHT_MS = 1600;
-    const TOAST_HIDE_MS = 4500;
+    const TOAST_HIDE_MS = 2600;
     const LIST_LEAF_HIGHLIGHT_BG = 'rgba(59,130,246,.18)';
     const LIST_LEAF_HIGHLIGHT_BORDER = 'rgba(59,130,246,.38)';
     const SUBLIST_BASE_INDENT = 24;
@@ -37,15 +47,226 @@
     const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
 
-    // --- Вспомогательные функции ---
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
     // --- Утилита логирования ---
     const logger = {
         debug: (...args) => console.debug(LOG_PREFIX, ...args),
         info: (...args) => console.info(LOG_PREFIX, ...args),
         warn: (...args) => console.warn(LOG_PREFIX, ...args),
         error: (...args) => console.error(LOG_PREFIX, ...args),
+    };
+
+    const ADMIN_ORIGIN_STORAGE_KEY = 'ggsel-category-explorer:admin-origin';
+    const KNOWN_ADMIN_HOSTS = new Set([
+        'admin.ggsel.com',
+        'back-office.staging.ggsel.com',
+    ]);
+    const PRIMARY_ADMIN_ORIGIN = 'https://back-office.staging.ggsel.com';
+    const DEFAULT_ADMIN_ORIGINS = [
+        PRIMARY_ADMIN_ORIGIN,
+        'https://admin.ggsel.com',
+    ];
+    const LEGACY_ADMIN_HOSTS = new Set(['admin.ggsel.com']);
+
+    const normalizeAdminOrigin = (value) => {
+        if (value == null) return null;
+        const text = String(value).trim();
+        if (!text) return null;
+        const candidate = /^https?:\/\//i.test(text) ? text : `https://${text}`;
+        try {
+            const url = new URL(candidate);
+            if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+            return `${url.protocol}//${url.host}`;
+        } catch (err) {
+            logger.debug('Некорректный адрес админки', { value, error: err && err.message });
+            return null;
+        }
+    };
+
+    const detectAdminOriginFromEnvironment = () => {
+        try {
+            if (typeof location !== 'undefined' && location) {
+                const { origin, hostname, pathname } = location;
+                if (origin && hostname) {
+                    const hostLower = hostname.toLowerCase();
+                    if (KNOWN_ADMIN_HOSTS.has(hostLower) || pathname.startsWith('/admin')) {
+                        return origin;
+                    }
+                }
+            }
+        } catch (err) {
+            logger.debug('Не удалось определить адрес админки из окружения', { error: err && err.message });
+        }
+        for (const candidate of DEFAULT_ADMIN_ORIGINS) {
+            const normalized = normalizeAdminOrigin(candidate);
+            if (normalized) return normalized;
+        }
+        return PRIMARY_ADMIN_ORIGIN;
+    };
+
+    const upgradeLegacyAdminOrigin = (normalized) => {
+        try {
+            const url = new URL(normalized);
+            if (LEGACY_ADMIN_HOSTS.has(url.host.toLowerCase())) {
+                logger.info('Обновляем устаревший адрес админки до актуального', {
+                    from: normalized,
+                    to: PRIMARY_ADMIN_ORIGIN,
+                });
+                return PRIMARY_ADMIN_ORIGIN;
+            }
+        } catch (err) {
+            logger.debug('Не удалось нормализовать адрес админки для обновления', {
+                value: normalized,
+                error: err && err.message,
+            });
+        }
+        return normalized;
+    };
+
+    const persistAdminOrigin = (origin) => {
+        try {
+            if (origin) {
+                localStorage.setItem(ADMIN_ORIGIN_STORAGE_KEY, origin);
+            } else {
+                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
+            }
+        } catch (err) {
+            logger.debug('Не удалось сохранить адрес админки', { error: err && err.message });
+        }
+    };
+
+    const loadStoredAdminOrigin = () => {
+        try {
+            const raw = localStorage.getItem(ADMIN_ORIGIN_STORAGE_KEY);
+            if (!raw) return null;
+            const normalized = normalizeAdminOrigin(raw);
+            if (!normalized) {
+                localStorage.removeItem(ADMIN_ORIGIN_STORAGE_KEY);
+                return null;
+            }
+            const upgraded = upgradeLegacyAdminOrigin(normalized);
+            if (upgraded !== normalized) {
+                persistAdminOrigin(upgraded);
+            }
+            return upgraded;
+        } catch (err) {
+            logger.debug('Не удалось прочитать сохранённый адрес админки', { error: err && err.message });
+            return null;
+        }
+    };
+
+    let adminOrigin = (() => {
+        const stored = loadStoredAdminOrigin();
+        if (stored) {
+            logger.info('Используем адрес админки из хранилища', { origin: stored });
+            return stored;
+        }
+        const detected = detectAdminOriginFromEnvironment();
+        logger.info('Используем адрес админки по умолчанию', { origin: detected });
+        return detected;
+    })();
+
+    const getAdminOrigin = () => adminOrigin;
+
+    const resolveAdminUrl = (input) => {
+        const origin = getAdminOrigin();
+        if (!input) {
+            return new URL('/admin/categories', origin).toString();
+        }
+        try {
+            if (input instanceof URL) {
+                return input.toString();
+            }
+        } catch (err) {
+            // ignore
+        }
+        const raw = String(input).trim();
+        if (!raw) {
+            return new URL('/admin/categories', origin).toString();
+        }
+        if (/^https?:\/\//i.test(raw)) {
+            return raw;
+        }
+        if (raw.startsWith('//')) {
+            try {
+                const temp = new URL(origin);
+                return `${temp.protocol}${raw}`;
+            } catch (err) {
+                logger.debug('Не удалось преобразовать протокол-зависимый URL', { input: raw, error: err && err.message });
+            }
+        }
+        try {
+            return new URL(raw, origin).toString();
+        } catch (err) {
+            logger.warn('Не удалось построить URL админки, используем корень', { input: raw, error: err && err.message });
+            return new URL('/admin/categories', origin).toString();
+        }
+    };
+
+    // --- Вспомогательные функции ---
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const COOKIE_CACHE_TTL_MS = 45000;
+    const cookieHeaderCache = new Map();
+
+    const clearCookieCache = () => {
+        cookieHeaderCache.clear();
+    };
+
+    const getCookieHeaderForUrl = async (url) => {
+        if (typeof GM_cookie === 'undefined' || typeof GM_cookie.list !== 'function') {
+            return null;
+        }
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (err) {
+            logger.debug('Не удалось разобрать URL для cookie', { url, error: err && err.message });
+            return null;
+        }
+        const cacheKey = parsed.hostname;
+        const cached = cookieHeaderCache.get(cacheKey);
+        const now = Date.now();
+        if (cached && (now - cached.timestamp) < COOKIE_CACHE_TTL_MS) {
+            return cached.value || null;
+        }
+        return new Promise((resolve) => {
+            try {
+                const listUrl = `${parsed.origin.replace(/\/$/, '')}/`;
+                const options = { url: listUrl };
+                if (parsed.hostname) {
+                    options.domain = parsed.hostname;
+                    options.firstPartyDomain = parsed.hostname;
+                }
+                GM_cookie.list(options, (cookies, error) => {
+                    if (error) {
+                        logger.warn('Не удалось получить cookies админки', { url: listUrl, error });
+                        if (error && typeof error === 'string' && error.includes('needs to be included')) {
+                            logger.info('Проверьте, что в менеджере скриптов сохранены разрешения на домены админки', {
+                                matches: [
+                                    'https://back-office.staging.ggsel.com/*',
+                                    'https://admin.ggsel.com/*',
+                                ],
+                            });
+                        }
+                        cookieHeaderCache.delete(cacheKey);
+                        resolve(null);
+                        return;
+                    }
+                    if (!Array.isArray(cookies) || cookies.length === 0) {
+                        cookieHeaderCache.set(cacheKey, { value: '', timestamp: now });
+                        resolve(null);
+                        return;
+                    }
+                    const header = cookies.map(item => `${item.name}=${item.value}`).join('; ');
+                    cookieHeaderCache.set(cacheKey, { value: header, timestamp: now });
+                    resolve(header || null);
+                });
+            } catch (err) {
+                logger.warn('GM_cookie.list вызвал исключение', { url, error: err && err.message });
+                cookieHeaderCache.delete(cacheKey);
+                resolve(null);
+            }
+        });
     };
 
     const storage = {
@@ -194,6 +415,16 @@
         return trimTrailingZeros(fixed);
     };
 
+    const normalizeCommissionPercent = (value) => {
+        if (value == null) return null;
+        const match = String(value).trim().match(/-?\d+(?:[.,]\d+)?/);
+        if (!match) return null;
+        const numeric = Number(match[0].replace(',', '.'));
+        if (Number.isNaN(numeric)) return null;
+        const percent = numeric <= 1 ? numeric * 100 : numeric;
+        return Math.round(percent * 100) / 100;
+    };
+
     const formatPercent = (value) => {
         if (value == null || Number.isNaN(Number(value))) return null;
         const amount = Number(value);
@@ -202,14 +433,17 @@
     };
 
     const formatAutoFinish = (hours, rawValue) => {
-        if (hours == null || Number.isNaN(Number(hours))) {
-            return rawValue || '—';
+        if (hours != null && !Number.isNaN(Number(hours))) {
+            const hoursValue = Number(hours);
+            const daysValue = hoursValue / 24;
+            if (!Number.isFinite(daysValue)) {
+                return rawValue || '—';
+            }
+            const fractionDigits = Number.isInteger(daysValue) ? 0 : (Math.abs(daysValue) >= 10 ? 1 : 2);
+            const daysText = formatNumber(daysValue, fractionDigits);
+            return `${daysText} d дней`;
         }
-        const hoursValue = Number(hours);
-        const daysValue = hoursValue / 24;
-        const hoursText = formatNumber(hoursValue, hoursValue % 1 === 0 ? 0 : 1);
-        const daysText = formatNumber(daysValue, daysValue >= 10 ? 1 : 2);
-        return `${hoursText} ч · ${daysText} дн.`;
+        return rawValue || '—';
     };
 
     const getStatusClass = (status) => {
@@ -241,7 +475,8 @@
     class UrlBuilder {
         // Собираем URL с параметрами поиска
         static buildSearchUrl(baseUrl, queryInfo, page = 1) {
-            const url = new URL(baseUrl, location.origin);
+            const resolvedBase = resolveAdminUrl(baseUrl || '/admin/categories');
+            const url = new URL(resolvedBase);
             const params = url.searchParams;
             params.set('page', String(page));
             params.set('search[id]', queryInfo.type === 'id' ? queryInfo.value : '');
@@ -292,7 +527,9 @@
 
         // Выполняем HTTP-запрос с таймаутом и повторами
         fetchText(url, options = {}) {
-            return this.enqueue(() => this._fetchWithRetry(url, options, RETRY_COUNT));
+            const resolvedUrl = resolveAdminUrl(url);
+            const requestOptions = { ...options };
+            return this.enqueue(() => this._fetchWithRetry(resolvedUrl, requestOptions, RETRY_COUNT));
         }
 
         async _fetchWithRetry(url, options, retries) {
@@ -312,36 +549,75 @@
 
         _fetchWithTimeout(url, options) {
             return new Promise((resolve, reject) => {
+                const shouldForceFallback = this._shouldBypassWindowFetch(url);
+                const invokeFallback = (error) => {
+                    if (typeof GM_xmlhttpRequest === 'function') {
+                        if (error) {
+                            logger.warn('Переход на GM_xmlhttpRequest', { url, error: error && error.message });
+                        } else {
+                            logger.debug('Используем GM_xmlhttpRequest из-за другого домена', { url });
+                        }
+                        this._fallbackRequest(url, options).then(resolve).catch(reject);
+                    } else {
+                        const err = error || new Error('GM_xmlhttpRequest недоступен');
+                        logger.error('Запрос не удался', { url, error: err && err.message });
+                        reject(err);
+                    }
+                };
+
+                if (shouldForceFallback) {
+                    invokeFallback();
+                    return;
+                }
+
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     controller.abort();
                     reject(new Error('timeout'));
                 }, REQUEST_TIMEOUT_MS);
-                const requestOptions = { ...options, signal: controller.signal, credentials: 'same-origin' };
+                const requestOptions = { ...options, signal: controller.signal, credentials: 'include' };
                 fetch(url, requestOptions).then(resp => {
                     clearTimeout(timeoutId);
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     return resp.text();
                 }).then(resolve).catch(err => {
                     clearTimeout(timeoutId);
-                    if (typeof GM_xmlhttpRequest === 'function') {
-                        logger.warn('Переход на GM_xmlhttpRequest', { url, error: err && err.message });
-                        this._fallbackRequest(url, options).then(resolve).catch(reject);
-                    } else {
-                        logger.error('Запрос не удался', { url, error: err && err.message });
-                        reject(err);
-                    }
+                    invokeFallback(err);
                 });
             });
         }
 
+        _shouldBypassWindowFetch(url) {
+            try {
+                if (typeof location === 'undefined' || !location.origin) {
+                    return true;
+                }
+                const target = new URL(url);
+                return target.origin !== location.origin;
+            } catch (err) {
+                logger.warn('Не удалось сравнить origin, используем GM_xmlhttpRequest', { url, error: err && err.message });
+                return true;
+            }
+        }
+
         // Фоллбек через GM_xmlhttpRequest
-        _fallbackRequest(url, options) {
+        async _fallbackRequest(url, options) {
+            const headers = { ...(options.headers || {}) };
+            try {
+                if (!headers.Cookie) {
+                    const cookieHeader = await getCookieHeaderForUrl(url);
+                    if (cookieHeader) {
+                        headers.Cookie = cookieHeader;
+                    }
+                }
+            } catch (err) {
+                logger.warn('Не удалось подготовить Cookie для запроса', { url, error: err && err.message });
+            }
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: options.method || 'GET',
                     url,
-                    headers: options.headers || {},
+                    headers,
                     data: options.body,
                     timeout: REQUEST_TIMEOUT_MS,
                     onload: (response) => {
@@ -388,12 +664,53 @@
                 this.map.delete(oldestKey);
             }
         }
+
+        clear() {
+            this.map.clear();
+        }
     }
 
     const pageCache = new LRUCache(50);
     const statsCache = new LRUCache(100);
     const childrenCache = new LRUCache(100);
     const pendingChildrenPromises = new Map();
+
+    const resetAllCaches = () => {
+        pageCache.clear();
+        statsCache.clear();
+        childrenCache.clear();
+        pendingChildrenPromises.clear();
+        clearCookieCache();
+    };
+
+    const setAdminOrigin = (value) => {
+        if (value == null || (typeof value === 'string' && value.trim() === '')) {
+            persistAdminOrigin(null);
+            const fallback = detectAdminOriginFromEnvironment();
+            const previous = adminOrigin;
+            adminOrigin = fallback;
+            const changed = previous !== adminOrigin;
+            if (changed) {
+                resetAllCaches();
+            }
+            logger.info('Адрес админки сброшен к умолчанию', { origin: adminOrigin, changed });
+            return { success: true, origin: adminOrigin, changed, stored: false };
+        }
+        const normalized = normalizeAdminOrigin(value);
+        if (!normalized) {
+            logger.warn('Попытка задать некорректный адрес админки', { value });
+            return { success: false, origin: adminOrigin, changed: false, stored: false };
+        }
+        const previous = adminOrigin;
+        adminOrigin = normalized;
+        persistAdminOrigin(normalized);
+        const changed = previous !== adminOrigin;
+        if (changed) {
+            resetAllCaches();
+        }
+        logger.info('Адрес админки обновлён', { origin: adminOrigin, changed });
+        return { success: true, origin: adminOrigin, changed, stored: true };
+    };
 
     // --- Парсер HTML ---
     const Parser = {
@@ -511,7 +828,8 @@
                 const kind = pickCellText(columnIndex.kind, 2);
                 const digi = pickCellText(columnIndex.digi, 3);
                 const name = breadcrumbNames[breadcrumbNames.length - 1] || (nameCell.textContent || '').trim();
-                const href = idLink.getAttribute('href');
+                const hrefAttr = idLink.getAttribute('href');
+                const href = hrefAttr ? resolveAdminUrl(hrefAttr) : resolveAdminUrl(`/admin/categories/${id}`);
                 items.push({ id, name, pathDepth, href, pathAnchors: breadcrumbNames, status, kind, digi });
             }
             logger.info('Распарсено элементов', items.length);
@@ -531,7 +849,7 @@
                     return !Number.isNaN(num) && num === currentPage + 1;
                 });
                 if (candidates.length) {
-                    nextPage = new URL(candidates[0].getAttribute('href'), location.origin).toString();
+                    nextPage = resolveAdminUrl(candidates[0].getAttribute('href'));
                     logger.debug('Обнаружена ссылка на следующую страницу', { nextPage });
                 }
             }
@@ -555,13 +873,14 @@
                 const cells = Array.from(tr.children);
                 const idLink = cells[0] ? cells[0].querySelector('a[href*="/admin/categories/"]') : null;
                 const id = idLink ? idLink.textContent.trim() : (cells[0] ? cells[0].textContent.trim() : '');
+                const hrefAttr = idLink ? idLink.getAttribute('href') : null;
                 return {
                     id,
                     name: cells[1] ? cells[1].textContent.trim() : '',
                     status: cells[2] ? cells[2].textContent.trim() : '',
                     digi: cells[3] ? cells[3].textContent.trim() : '',
                     kind: cells[4] ? cells[4].textContent.trim() : '',
-                    href: idLink ? idLink.getAttribute('href') : null,
+                    href: hrefAttr ? resolveAdminUrl(hrefAttr) : resolveAdminUrl(`/admin/categories/${id}`),
                 };
             }).filter(item => item.id);
             logger.debug('Распарсены дочерние категории', { count: items.length });
@@ -604,8 +923,64 @@
                         if (labelCell.tagName === 'TH' && valueCell.tagName === 'TH') continue;
                         const labelText = labelCell.textContent || '';
                         const valueText = valueCell.textContent || '';
-                        if (!labelText.trim() || !valueText.trim()) continue;
-                        pushPair(labelText, valueText);
+                        if (!labelText.trim()) continue;
+                        pushPair(labelText, valueText.trim() ? valueText : '');
+                    }
+                }
+            };
+
+            const extractCommissionFromTables = () => {
+                const tables = doc.querySelectorAll('table');
+                for (const table of tables) {
+                    for (const row of Array.from(table.querySelectorAll('tr'))) {
+                        const headerCell = row.querySelector('th');
+                        if (!headerCell) continue;
+                        const headerText = (headerCell.textContent || '').trim().toLowerCase();
+                        if (!headerText.includes('комис')) continue;
+                        const valueCell = row.querySelector('td');
+                        if (!valueCell) continue;
+                        const valueText = (valueCell.textContent || '').trim();
+                        if (!valueText) continue;
+                        const normalized = normalizeCommissionPercent(valueText);
+                        if (normalized != null) {
+                            stats.commissionPercent = normalized;
+                            stats.commissionRaw = null;
+                        } else if (stats.commissionPercent == null && !stats.commissionRaw) {
+                            stats.commissionRaw = valueText;
+                        }
+                        return;
+                    }
+                }
+            };
+
+            const extractAutoFinishFromTables = () => {
+                const tables = doc.querySelectorAll('table');
+                for (const table of tables) {
+                    for (const row of Array.from(table.querySelectorAll('tr'))) {
+                        const headerCell = row.querySelector('th');
+                        if (!headerCell) continue;
+                        const headerText = (headerCell.textContent || '').trim().toLowerCase();
+                        if (
+                            !headerText.includes('автозаверш')
+                            && !headerText.includes('авто заверш')
+                            && !headerText.includes('задержка авто')
+                            && !headerText.includes('auto-complete')
+                            && !headerText.includes('auto complete')
+                        ) {
+                            continue;
+                        }
+                        const valueCell = row.querySelector('td');
+                        if (!valueCell) continue;
+                        const rawValue = (valueCell.textContent || '').trim();
+                        if (!rawValue) continue;
+                        const numeric = parseFloat(rawValue.replace(',', '.'));
+                        if (!Number.isNaN(numeric)) {
+                            stats.autoFinishHours = numeric;
+                            stats.autoFinishRaw = null;
+                        } else if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
+                            stats.autoFinishRaw = rawValue;
+                        }
+                        return;
                     }
                 }
             };
@@ -646,6 +1021,14 @@
                 collectInfoBlocks(null);
             }
 
+            if (stats.commissionPercent == null && !stats.commissionRaw) {
+                extractCommissionFromTables();
+            }
+
+            if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
+                extractAutoFinishFromTables();
+            }
+
             const setIfEmpty = (key, value) => {
                 if (value == null || value === '') return;
                 if (stats[key] == null || stats[key] === '') {
@@ -671,19 +1054,28 @@
                     }
                 }
                 if (label.includes('комис')) {
-                    const numeric = parseFloat(value.replace(',', '.'));
-                    if (!Number.isNaN(numeric)) {
-                        const percent = numeric <= 1 ? numeric * 100 : numeric;
-                        stats.commissionPercent = Math.round(percent * 100) / 100;
-                    } else {
+                    const normalized = normalizeCommissionPercent(value);
+                    if (normalized != null) {
+                        stats.commissionPercent = normalized;
+                        stats.commissionRaw = null;
+                    } else if (!stats.commissionPercent) {
                         stats.commissionRaw = value;
                     }
                 }
-                if (label.includes('автозаверш') || label.includes('autofinish') || label.includes('auto finish')) {
+                if (
+                    label.includes('автозаверш')
+                    || label.includes('авто заверш')
+                    || label.includes('задержка авто')
+                    || label.includes('autofinish')
+                    || label.includes('auto finish')
+                    || label.includes('auto-complete')
+                    || label.includes('auto complete')
+                ) {
                     const numeric = parseFloat(value.replace(',', '.'));
                     if (!Number.isNaN(numeric)) {
                         stats.autoFinishHours = numeric;
-                    } else {
+                        stats.autoFinishRaw = null;
+                    } else if (stats.autoFinishHours == null && !stats.autoFinishRaw) {
                         stats.autoFinishRaw = value;
                     }
                 }
@@ -718,7 +1110,8 @@
         constructor(data, parentId = null) {
             this.id = data.id;
             this.name = (data.name || '').trim();
-            this.href = data.href || `/admin/categories/${this.id}`;
+            const rawHref = data.href || `/admin/categories/${this.id}`;
+            this.href = resolveAdminUrl(rawHref);
             this.parentId = parentId;
             this.children = [];
             this.childrenLoaded = false;
@@ -728,6 +1121,18 @@
             this.status = data.status || '';
             this.kind = data.kind || '';
             this.digi = (data.digi || '').trim();
+            const initialCommission = data.commissionPercent != null ? data.commissionPercent : data.commissionRaw;
+            const normalizedCommission = normalizeCommissionPercent(initialCommission);
+            this.commissionPercent = normalizedCommission != null ? normalizedCommission : null;
+            this.commissionRaw = normalizedCommission == null && data.commissionRaw != null
+                ? String(data.commissionRaw).trim()
+                : null;
+            this.autoFinishHours = data.autoFinishHours != null && !Number.isNaN(Number(data.autoFinishHours))
+                ? Number(data.autoFinishHours)
+                : null;
+            this.autoFinishRaw = this.autoFinishHours == null && data.autoFinishRaw != null
+                ? String(data.autoFinishRaw).trim()
+                : null;
             this.hasChildren = typeof data.hasChildren === 'boolean' ? data.hasChildren : null;
             const rawSegments = Array.isArray(data.pathAnchors) && data.pathAnchors.length
                 ? data.pathAnchors.slice()
@@ -743,6 +1148,34 @@
     }
 
     const nodesMap = new Map();
+
+    let panelInstance = null;
+    let externalBridgeCleanup = null;
+
+    const mergeStatsIntoNode = (node, stats) => {
+        if (!node || !stats) return;
+        if (stats.status) node.status = stats.status;
+        if (stats.kind) node.kind = stats.kind;
+        if (stats.digi) node.digi = stats.digi;
+        if (stats.commissionPercent != null && !Number.isNaN(Number(stats.commissionPercent))) {
+            node.commissionPercent = Number(stats.commissionPercent);
+            node.commissionRaw = null;
+        } else if (stats.commissionRaw != null && stats.commissionRaw !== '') {
+            node.commissionRaw = String(stats.commissionRaw).trim();
+            if (node.commissionPercent == null) {
+                const normalized = normalizeCommissionPercent(stats.commissionRaw);
+                if (normalized != null) {
+                    node.commissionPercent = normalized;
+                }
+            }
+        }
+        if (stats.autoFinishHours != null && !Number.isNaN(Number(stats.autoFinishHours))) {
+            node.autoFinishHours = Number(stats.autoFinishHours);
+            node.autoFinishRaw = null;
+        } else if (stats.autoFinishRaw != null && stats.autoFinishRaw !== '' && node.autoFinishHours == null) {
+            node.autoFinishRaw = String(stats.autoFinishRaw).trim();
+        }
+    };
 
     const getNodePathSegments = (node) => {
         if (!node) return [];
@@ -943,7 +1376,7 @@
                 cursor: grabbing;
             }
             .panel.compact {
-                --panel-width: calc(46px + 24px);
+                --panel-width: calc(48px + 24px);
                 padding: 12px;
                 gap: 0;
             }
@@ -963,6 +1396,10 @@
             .panel.compact.dock-left .search-row { justify-content: flex-start; }
             .panel.compact.dock-right .search-row { justify-content: flex-end; }
             .panel.compact:not(.dock-left):not(.dock-right) .search-row { justify-content: center; }
+            .panel.compact.flush-left .search-row,
+            .panel.compact.flush-right .search-row {
+                justify-content: center;
+            }
             .panel.compact .search-control {
                 width: 46px;
                 max-width: 46px;
@@ -1052,6 +1489,42 @@
             }
             .search-control.collapsed .search-toggle:active {
                 transform: translateY(1px);
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle,
+            .panel.compact.flush-left .search-control.collapsed .search-toggle {
+                border-right-color: rgba(244,63,94,.45);
+                border-left-color: rgba(244,63,94,.45);
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle {
+                border-right-color: transparent;
+            }
+            .panel.compact.flush-left .search-control.collapsed .search-toggle {
+                border-left-color: transparent;
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle::after,
+            .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
+                content: '';
+                position: absolute;
+                top: -1px;
+                bottom: -1px;
+                width: calc((var(--panel-width) - 46px) / 2 + 1px);
+                background: rgba(244,63,94,.18);
+                border: 1px solid rgba(244,63,94,.45);
+                border-radius: 0;
+                box-shadow: 0 12px 26px rgba(244,63,94,.18);
+                pointer-events: none;
+                z-index: -1;
+                background-clip: padding-box;
+            }
+            .panel.compact.flush-right .search-control.collapsed .search-toggle::after {
+                left: calc(100% - 1px);
+                border-left: 0;
+                border-right: 0;
+            }
+            .panel.compact.flush-left .search-control.collapsed .search-toggle::after {
+                right: calc(100% - 1px);
+                border-right: 0;
+                border-left: 0;
             }
             .search-toggle svg {
                 display: block;
@@ -1234,6 +1707,24 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
+            .row .commission {
+                flex: 0 0 auto;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: .03em;
+                color: rgba(255,220,228,.88);
+                margin-left: 10px;
+                white-space: nowrap;
+                text-align: right;
+                opacity: .9;
+            }
+            .row .commission.muted {
+                color: rgba(226,232,255,.6);
+                opacity: .72;
+            }
+            .row .commission[hidden] {
+                display: none !important;
+            }
             .row[data-has-children="true"]:not(.leaf),
             .row[data-has-children="unknown"]:not(.leaf) {
                 border-color: rgba(39,48,70,.85);
@@ -1345,45 +1836,94 @@
                 transform: translateY(1px);
             }
             .toast-stack {
+                position: absolute;
+                top: 10px;
+                left: 14px;
+                right: 14px;
                 display: flex;
                 flex-direction: column;
+                align-items: center;
                 gap: 6px;
-                margin: 4px 2px 0;
+                pointer-events: none;
+                z-index: 3;
             }
             .toast-stack[hidden] {
                 display: none !important;
-                margin: 0;
             }
             .toast {
-                background: rgba(21,24,36,.94);
-                border: 1px solid rgba(39,48,70,.85);
+                background: linear-gradient(150deg, rgba(244,63,94,.95), rgba(244,63,94,.82));
+                border: 1px solid rgba(244,63,94,.68);
                 border-radius: var(--radius-sm);
-                padding: 10px 12px;
+                padding: 10px 14px;
                 font-size: 12px;
-                color: var(--text);
-                box-shadow: var(--shadow-1);
+                color: #fff5f7;
+                text-shadow: 0 1px 2px rgba(0,0,0,.35);
+                box-shadow: 0 18px 36px rgba(244,63,94,.34);
                 opacity: 0;
                 transform: translateY(-6px);
                 transition: opacity var(--dur-2), transform var(--dur-2);
+                pointer-events: none;
+                max-width: 100%;
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
             }
             .toast.show {
                 opacity: 1;
                 transform: translateY(0);
             }
-            .toast--info {
-                border-color: rgba(59,130,246,.38);
-                background: rgba(59,130,246,.18);
-                color: #dbeafe;
-            }
-            .toast--error {
-                border-color: rgba(244,63,94,.55);
-                background: rgba(244,63,94,.18);
-                color: #ffe1e6;
-            }
+            .toast--info,
+            .toast--error,
             .toast--success {
-                border-color: rgba(34,197,94,.45);
-                background: rgba(34,197,94,.18);
-                color: #dcfce7;
+                background: linear-gradient(150deg, rgba(244,63,94,.96), rgba(244,63,94,.82));
+                border-color: rgba(244,63,94,.7);
+                color: #fff6f8;
+            }
+            .context-menu {
+                position: fixed;
+                z-index: 1000001;
+                background: linear-gradient(165deg, rgba(11,15,28,.97), rgba(17,24,39,.94));
+                color: rgba(226,232,255,.92);
+                border-radius: var(--radius-sm);
+                border: 1px solid rgba(59,130,246,.32);
+                width: 160px;
+                max-width: calc(100vw - 24px);
+                box-shadow: var(--shadow-2);
+                padding: 6px 0;
+                display: none;
+                font-size: 13px;
+                font-weight: 500;
+                backdrop-filter: blur(12px) saturate(140%);
+                letter-spacing: .01em;
+            }
+            .context-menu.open {
+                display: block;
+            }
+            .context-menu__item {
+                width: 100%;
+                background: transparent;
+                border: 0;
+                color: inherit;
+                text-align: left;
+                padding: 8px 14px;
+                cursor: pointer;
+                font: inherit;
+                line-height: 1.45;
+                letter-spacing: inherit;
+                transition: background var(--dur-1), color var(--dur-1);
+                white-space: nowrap;
+            }
+            .context-menu__item:hover,
+            .context-menu__item:focus-visible {
+                background: rgba(244,63,94,.22);
+                color: #ffe4ea;
+            }
+            .context-menu__item:focus {
+                outline: none;
+            }
+            .context-menu__separator {
+                height: 1px;
+                margin: 4px 0;
+                background: rgba(148,163,213,.16);
             }
             .popover {
                 position: fixed;
@@ -1477,6 +2017,18 @@
 
         const ui = new UIPanel(shadow, panel, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
+        panelInstance = ui;
+        if (typeof registerExternalAPIs === 'function') {
+            if (externalBridgeCleanup) {
+                try {
+                    externalBridgeCleanup();
+                } catch (err) {
+                    logger.debug('Не удалось очистить предыдущие хуки внешнего API', { error: err && err.message });
+                }
+                externalBridgeCleanup = null;
+            }
+            externalBridgeCleanup = registerExternalAPIs(ui);
+        }
     }
 
     // --- Управление UI ---
@@ -1509,6 +2061,20 @@
             this.collapseTimer = null;
             this._manualCollapsed = false;
             this._hiddenDueToCollapse = { results: false, toasts: false };
+            this._toastQueue = [];
+            this._activeToastEl = null;
+            this._toastTimers = { hide: null, remove: null };
+            this.contextMenuEl = null;
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+            this._onResultsContextMenu = null;
+            this._onPanelContextMenu = null;
+            this._onContextPointerDown = null;
+            this._onDocumentPointerDown = null;
+            this._onWindowBlur = null;
+            this._onContextMenuPointerOver = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
             if (this.resultsContainer) {
                 this.resultsContainer.hidden = true;
             }
@@ -1528,6 +2094,9 @@
                 this.searchToggleEl.addEventListener('click', () => this._onSearchToggleClick());
             }
             this.resultsContainer.addEventListener('scroll', () => {
+                if (this._contextMenuVisible) {
+                    this._hideContextMenu();
+                }
                 this._prefetchVisible();
                 this._schedulePersist();
             });
@@ -1537,9 +2106,11 @@
             this._setupDragHandles();
             this._onWindowResize = () => {
                 this._applyPanelPosition({ persist: true });
+                this._hideContextMenu();
             };
             window.addEventListener('resize', this._onWindowResize);
             this._setupScrollIsolation();
+            this._setupContextMenu();
             this._updateSearchAffordance();
             this.render();
             this._restoreState().catch((err) => {
@@ -1715,6 +2286,371 @@
                     }
                 }
             }, { passive: false });
+        }
+
+        _setupContextMenu() {
+            if (!this.shadowRoot) return;
+            if (this._onResultsContextMenu && this.resultsContainer) {
+                this.resultsContainer.removeEventListener('contextmenu', this._onResultsContextMenu);
+            }
+            if (this._onPanelContextMenu && this.panelEl) {
+                this.panelEl.removeEventListener('contextmenu', this._onPanelContextMenu);
+            }
+            if (this._onShadowContextMenu && this.shadowRoot) {
+                this.shadowRoot.removeEventListener('contextmenu', this._onShadowContextMenu);
+            }
+            if (this._onContextPointerDown && this.shadowRoot) {
+                this.shadowRoot.removeEventListener('pointerdown', this._onContextPointerDown);
+            }
+            if (this._onDocumentPointerDown) {
+                document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
+            }
+            if (this._onWindowBlur) {
+                window.removeEventListener('blur', this._onWindowBlur);
+            }
+            if (this._onContextMenuPointerOver && this.contextMenuEl) {
+                this.contextMenuEl.removeEventListener('pointerover', this._onContextMenuPointerOver);
+            }
+            if (this.contextMenuEl) {
+                this.contextMenuEl.remove();
+            }
+            const menu = document.createElement('div');
+            menu.className = 'context-menu';
+            this.shadowRoot.appendChild(menu);
+            this.contextMenuEl = menu;
+            this.contextMenuEl.style.left = '-9999px';
+            this.contextMenuEl.style.top = '-9999px';
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
+
+            this._onPanelContextMenu = null;
+
+            this._onShadowContextMenu = (event) => {
+                if (!this.panelEl) return;
+                const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+                let targetEl = event.target instanceof Element ? event.target : null;
+                if (!targetEl && Array.isArray(path)) {
+                    targetEl = path.find((node) => node instanceof Element) || null;
+                }
+                if (!targetEl || !this.panelEl.contains(targetEl)) {
+                    return;
+                }
+                if (targetEl.closest('.context-menu')) {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                const editableTarget = targetEl.closest('input, textarea, [contenteditable="true"]');
+                const row = editableTarget ? null : targetEl.closest('.row');
+                let node = null;
+                if (row && row.dataset && row.dataset.id) {
+                    const rawId = row.dataset.id;
+                    node = nodesMap.get(rawId);
+                    if (!node) {
+                        const numericId = Number(rawId);
+                        if (!Number.isNaN(numericId)) {
+                            node = nodesMap.get(numericId);
+                        }
+                    }
+                }
+                this._showContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    node: node || null,
+                    editableTarget: editableTarget || null,
+                });
+            };
+            if (this.shadowRoot) {
+                this.shadowRoot.addEventListener('contextmenu', this._onShadowContextMenu);
+            }
+
+            this._onContextPointerDown = (event) => {
+                if (!this._contextMenuVisible) return;
+                if (event.target.closest('.context-menu')) return;
+                this._hideContextMenu();
+            };
+            this.shadowRoot.addEventListener('pointerdown', this._onContextPointerDown);
+
+            this._onDocumentPointerDown = (event) => {
+                if (!this._contextMenuVisible) return;
+                const path = typeof event.composedPath === 'function' ? event.composedPath() : null;
+                if (path && path.includes(this.contextMenuEl)) {
+                    return;
+                }
+                this._hideContextMenu();
+            };
+            document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
+
+            this._onWindowBlur = () => {
+                this._hideContextMenu();
+            };
+            window.addEventListener('blur', this._onWindowBlur);
+
+            this._onContextMenuPointerOver = (event) => {
+                if (!this._contextMenuVisible || !this.contextMenuEl) return;
+                const focusedItem = this.contextMenuEl.querySelector('.context-menu__item:focus');
+                if (!focusedItem) return;
+                const targetButton = event.target instanceof Element ? event.target.closest('.context-menu__item') : null;
+                if (targetButton && targetButton !== focusedItem && focusedItem instanceof HTMLElement) {
+                    focusedItem.blur();
+                }
+            };
+            this.contextMenuEl.addEventListener('pointerover', this._onContextMenuPointerOver);
+        }
+
+        _showContextMenu({ x, y, node, editableTarget }) {
+            if (!this.contextMenuEl) return;
+            this._buildContextMenuItems(node, editableTarget);
+            this.contextMenuEl.style.left = '0px';
+            this.contextMenuEl.style.top = '0px';
+            this.contextMenuEl.classList.add('open');
+            this.contextMenuEl.style.visibility = 'hidden';
+            const { offsetWidth, offsetHeight } = this.contextMenuEl;
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            let left = x;
+            let top = y;
+            if (left + offsetWidth > viewportWidth) {
+                left = Math.max(0, viewportWidth - offsetWidth - 4);
+            }
+            if (top + offsetHeight > viewportHeight) {
+                top = Math.max(0, viewportHeight - offsetHeight - 4);
+            }
+            this.contextMenuEl.style.left = `${left}px`;
+            this.contextMenuEl.style.top = `${top}px`;
+            this.contextMenuEl.style.visibility = '';
+            this._contextMenuVisible = true;
+            this._contextMenuNodeId = node ? node.id : null;
+            this._contextMenuEditableTarget = editableTarget instanceof HTMLElement ? editableTarget : null;
+            this._contextMenuEditableSelection = this._contextMenuEditableTarget ? this._captureEditableSelection(this._contextMenuEditableTarget) : null;
+            const firstItem = this.contextMenuEl.querySelector('.context-menu__item');
+            if (firstItem) {
+                firstItem.focus();
+            }
+        }
+
+        _hideContextMenu() {
+            if (!this.contextMenuEl || !this._contextMenuVisible) return;
+            this.contextMenuEl.classList.remove('open');
+            this.contextMenuEl.innerHTML = '';
+            this.contextMenuEl.style.left = '-9999px';
+            this.contextMenuEl.style.top = '-9999px';
+            this._contextMenuVisible = false;
+            this._contextMenuNodeId = null;
+            this._contextMenuEditableTarget = null;
+            this._contextMenuEditableSelection = null;
+        }
+
+        _buildContextMenuItems(node, editableTarget) {
+            if (!this.contextMenuEl) return;
+            this.contextMenuEl.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            const actions = [];
+            if (editableTarget) {
+                actions.push(
+                    { key: 'copy', label: 'Копировать', contextNode: null, editableTarget },
+                    { key: 'paste', label: 'Вставить', contextNode: null, editableTarget },
+                    { key: 'separator' }
+                );
+            }
+            if (node) {
+                actions.push(
+                    { key: 'create', label: 'Создать', contextNode: node },
+                    { key: 'edit', label: 'Редактировать', contextNode: node },
+                    { key: 'move', label: 'Переместить', contextNode: node },
+                    { key: 'separator' }
+                );
+            }
+            actions.push(
+                { key: 'settings', label: 'Настройки', contextNode: null },
+                { key: 'help', label: 'Справка', contextNode: null }
+            );
+
+            for (const action of actions) {
+                if (action.key === 'separator') {
+                    const separator = document.createElement('div');
+                    separator.className = 'context-menu__separator';
+                    fragment.appendChild(separator);
+                    continue;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'context-menu__item';
+                button.textContent = action.label;
+                button.addEventListener('click', () => {
+                    const selectionSnapshot = this._contextMenuEditableSelection;
+                    this._hideContextMenu();
+                    Promise.resolve(this._handleContextMenuAction(action.key, {
+                        node: action.contextNode || null,
+                        editable: action.editableTarget || null,
+                        selection: selectionSnapshot,
+                    })).catch((err) => {
+                        logger.warn('Ошибка обработки пункта контекстного меню', { error: err && err.message, action: action.key });
+                    });
+                });
+                fragment.appendChild(button);
+            }
+            this.contextMenuEl.appendChild(fragment);
+        }
+
+        async _handleContextMenuAction(actionKey, context = {}) {
+            const { node, editable, selection } = context || {};
+            if (actionKey === 'copy') {
+                if (!editable) {
+                    this._showToast('Поле ввода не найдено', 'error');
+                    return;
+                }
+                const selectionInfo = selection || this._captureEditableSelection(editable);
+                const textToCopy = selectionInfo && selectionInfo.text ? selectionInfo.text : '';
+                if (!textToCopy) {
+                    this._restoreEditableSelection(editable, selectionInfo);
+                    this._showToast('Нет выделенного текста для копирования', 'error');
+                    return;
+                }
+                const success = await copyTextToClipboard(textToCopy);
+                this._restoreEditableSelection(editable, selectionInfo);
+                if (success) {
+                    this._showToast('Текст скопирован в буфер обмена', 'success');
+                } else {
+                    this._showToast('Не удалось скопировать текст', 'error');
+                }
+                return;
+            }
+            if (actionKey === 'paste') {
+                if (!editable) {
+                    this._showToast('Поле ввода не найдено', 'error');
+                    return;
+                }
+                const selectionInfo = selection || this._captureEditableSelection(editable);
+                const clipboardText = await this._readClipboardText();
+                if (clipboardText == null) {
+                    this._restoreEditableSelection(editable, selectionInfo);
+                    this._showToast('Буфер обмена недоступен', 'error');
+                    return;
+                }
+                this._restoreEditableSelection(editable, selectionInfo);
+                const inserted = this._pasteTextIntoEditable(editable, clipboardText);
+                if (inserted) {
+                    this._showToast('Текст вставлен из буфера обмена', 'success');
+                } else {
+                    this._showToast('Не удалось вставить текст', 'error');
+                }
+                return;
+            }
+            const labelMap = {
+                create: 'Создать',
+                edit: 'Редактировать',
+                move: 'Переместить',
+                settings: 'Настройки',
+                help: 'Справка',
+                copy: 'Копировать',
+                paste: 'Вставить',
+            };
+            const label = labelMap[actionKey] || actionKey;
+            logger.info('Контекстное действие (stub)', {
+                action: actionKey,
+                nodeId: node ? node.id : null,
+            });
+            const target = node ? ` для «${node.name}»` : '';
+            this._showToast(`Действие «${label}» пока недоступно${target}`, 'info');
+        }
+
+        _captureEditableSelection(editable) {
+            if (!editable) return null;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                const rawStart = typeof editable.selectionStart === 'number' ? editable.selectionStart : editable.value.length;
+                const rawEnd = typeof editable.selectionEnd === 'number' ? editable.selectionEnd : rawStart;
+                const start = Math.max(0, Math.min(rawStart, rawEnd));
+                const end = Math.max(start, Math.max(rawStart, rawEnd));
+                const text = editable.value.slice(start, end);
+                return { type: 'input', start, end, text };
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                const selection = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                if (!selection || selection.rangeCount === 0) {
+                    return { type: 'contenteditable', range: null, text: '' };
+                }
+                const range = selection.getRangeAt(0);
+                if (!editable.contains(range.commonAncestorContainer)) {
+                    return { type: 'contenteditable', range: null, text: '' };
+                }
+                return { type: 'contenteditable', range: range.cloneRange(), text: selection.toString() };
+            }
+            return null;
+        }
+
+        _restoreEditableSelection(editable, selection) {
+            if (!editable) return;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                editable.focus({ preventScroll: true });
+                if (selection && typeof selection.start === 'number' && typeof selection.end === 'number') {
+                    editable.setSelectionRange(selection.start, selection.end);
+                } else {
+                    const caret = editable.value.length;
+                    editable.setSelectionRange(caret, caret);
+                }
+                return;
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                editable.focus({ preventScroll: true });
+                if (selection && selection.range) {
+                    const sel = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                    if (sel) {
+                        sel.removeAllRanges();
+                        sel.addRange(selection.range.cloneRange());
+                    }
+                }
+            }
+        }
+
+        _pasteTextIntoEditable(editable, text) {
+            if (!editable || text == null) return false;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+                const start = typeof editable.selectionStart === 'number' ? editable.selectionStart : editable.value.length;
+                const end = typeof editable.selectionEnd === 'number' ? editable.selectionEnd : start;
+                const newEnd = start + text.length;
+                editable.setRangeText(text, start, end, 'end');
+                editable.dispatchEvent(new Event('input', { bubbles: true }));
+                editable.dispatchEvent(new Event('change', { bubbles: true }));
+                editable.setSelectionRange(newEnd, newEnd);
+                return true;
+            }
+            if (editable instanceof HTMLElement && editable.isContentEditable) {
+                const selection = editable.ownerDocument ? editable.ownerDocument.getSelection() : null;
+                if (!selection) return false;
+                if (selection.rangeCount === 0) {
+                    const range = editable.ownerDocument.createRange();
+                    range.selectNodeContents(editable);
+                    range.collapse(false);
+                    selection.addRange(range);
+                }
+                selection.deleteFromDocument();
+                const range = selection.getRangeAt(0);
+                const textNode = editable.ownerDocument.createTextNode(text);
+                range.insertNode(textNode);
+                range.setStartAfter(textNode);
+                range.setEndAfter(textNode);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                editable.dispatchEvent(new Event('input', { bubbles: true }));
+                editable.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+            return false;
+        }
+
+        async _readClipboardText() {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                    return await navigator.clipboard.readText();
+                } catch (err) {
+                    logger.warn('Не удалось прочитать текст из буфера обмена', { error: err && err.message });
+                }
+            }
+            logger.warn('Clipboard API для чтения недоступен');
+            return null;
         }
 
         _getDefaultPanelPlacement() {
@@ -2094,6 +3030,32 @@
             return this._performSearch();
         }
 
+        openExternally(detail = {}) {
+            const payload = (detail && typeof detail === 'object') ? detail : { query: detail };
+            const focusOnly = Boolean(payload.focusOnly);
+            const candidates = [payload.query, payload.value, payload.id, payload.digi, payload.term, payload.search];
+            const target = candidates.find((candidate) => {
+                if (candidate == null) return false;
+                const text = String(candidate).trim();
+                return text.length > 0;
+            });
+            this._setSearchExpanded(true, { focus: true });
+            if (!this.inputEl) {
+                return Promise.resolve();
+            }
+            if (target != null) {
+                const queryText = String(target).trim();
+                this.inputEl.value = queryText;
+                this._updateSearchAffordance();
+                return this.startSearch(queryText, { preserveSelection: Boolean(payload.preserveSelection) });
+            }
+            this._updateSearchAffordance();
+            if (!focusOnly) {
+                this.inputEl.select();
+            }
+            return Promise.resolve();
+        }
+
         async _performSearch(loadMore = false) {
             if (!SearchState.queryInfo) return;
             if (loadMore && !SearchState.nextPage) return;
@@ -2157,6 +3119,7 @@
         }
 
         render() {
+            this._hideContextMenu();
             const container = this.resultsContainer;
             container.innerHTML = '';
             this.visibleNodes = [];
@@ -2244,7 +3207,7 @@
             } else {
                 row.classList.add('CATologies-type-category');
             }
-            const nodeHref = new URL(node.href, location.origin).toString();
+            const nodeHref = resolveAdminUrl(node.href);
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
@@ -2262,6 +3225,11 @@
 
             row.appendChild(digiBadge);
             row.appendChild(nameEl);
+
+            const commissionEl = document.createElement('span');
+            commissionEl.className = 'commission';
+            row.appendChild(commissionEl);
+            this._updateRowCommission(row, node);
 
             if (row.dataset.state === 'leaf') {
                 row.classList.add('leaf');
@@ -2296,6 +3264,20 @@
             parentContainer.appendChild(row);
             this.visibleNodes.push({ node, row });
 
+            const shouldPrefetchCommission = row.dataset.hasChildren === 'false'
+                && node.commissionPercent == null
+                && !node.commissionRaw;
+            if (shouldPrefetchCommission) {
+                const cachedStats = statsCache.get(node.id);
+                if (cachedStats) {
+                    this._applyStatsToNode(node, cachedStats);
+                } else {
+                    loadStats(node.id)
+                        .then(stats => this._applyStatsToNode(node, stats))
+                        .catch(() => {});
+                }
+            }
+
             if (node.expanded && node.childrenLoaded && node.children.length) {
                 const sublist = document.createElement('div');
                 sublist.className = 'sublist CATologies-acc-sublist';
@@ -2307,6 +3289,46 @@
                 for (const child of node.children) {
                     this._renderNode(sublist, child, depth + 1);
                 }
+            }
+        }
+
+        _getNodeCommissionText(node) {
+            if (!node) return '';
+            const percent = node.commissionPercent != null && !Number.isNaN(Number(node.commissionPercent))
+                ? Number(node.commissionPercent)
+                : normalizeCommissionPercent(node.commissionRaw);
+            if (percent != null && !Number.isNaN(percent)) {
+                return formatPercent(percent);
+            }
+            if (node.commissionRaw) {
+                return String(node.commissionRaw);
+            }
+            return '';
+        }
+
+        _updateRowCommission(row, node) {
+            if (!row) return;
+            const commissionEl = row.querySelector('.commission');
+            if (!commissionEl) return;
+            const isSection = row.dataset.hasChildren === 'false';
+            if (!isSection) {
+                commissionEl.textContent = '';
+                commissionEl.hidden = true;
+                return;
+            }
+            const text = this._getNodeCommissionText(node);
+            const hasValue = Boolean(text);
+            commissionEl.hidden = false;
+            commissionEl.textContent = hasValue ? text : '—';
+            commissionEl.classList.toggle('muted', !hasValue);
+        }
+
+        _applyStatsToNode(node, stats) {
+            if (!node || !stats) return;
+            mergeStatsIntoNode(node, stats);
+            const entry = this.visibleNodes.find(item => item.node === node);
+            if (entry) {
+                this._updateRowCommission(entry.row, node);
             }
         }
 
@@ -2467,27 +3489,59 @@
 
         _showToast(message, type = 'info') {
             if (!this.toastStackEl) return;
-            const toast = document.createElement('div');
-            toast.className = `toast toast--${type}`;
-            toast.textContent = message;
-            this.toastStackEl.appendChild(toast);
-            this._setToastVisibility(true);
-            requestAnimationFrame(() => {
-                toast.classList.add('show');
-            });
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => {
-                    toast.remove();
-                    this._setToastVisibility(this.toastStackEl.children.length > 0);
-                }, 220);
-            }, TOAST_HIDE_MS);
+            this._toastQueue.push({ message, type });
+            this._processToastQueue();
+        }
+
+        showToast(message, type = 'info') {
+            this._showToast(message, type);
         }
 
         _setToastVisibility(visible) {
             if (!this.toastStackEl) return;
             this.toastStackEl.hidden = !visible;
             this._updatePanelLayout();
+        }
+
+        _processToastQueue() {
+            if (!this.toastStackEl) return;
+            if (this._activeToastEl) return;
+            if (!this._toastQueue.length) {
+                this._setToastVisibility(false);
+                return;
+            }
+            const { message, type } = this._toastQueue.shift();
+            const toast = document.createElement('div');
+            toast.className = `toast toast--${type}`;
+            toast.textContent = message;
+            this.toastStackEl.appendChild(toast);
+            this._activeToastEl = toast;
+            this._setToastVisibility(true);
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+            if (this._toastTimers.hide) {
+                clearTimeout(this._toastTimers.hide);
+                this._toastTimers.hide = null;
+            }
+            if (this._toastTimers.remove) {
+                clearTimeout(this._toastTimers.remove);
+                this._toastTimers.remove = null;
+            }
+            this._toastTimers.hide = setTimeout(() => {
+                toast.classList.remove('show');
+                this._toastTimers.remove = setTimeout(() => {
+                    toast.remove();
+                    this._activeToastEl = null;
+                    this._toastTimers.hide = null;
+                    this._toastTimers.remove = null;
+                    if (this._toastQueue.length) {
+                        this._processToastQueue();
+                    } else {
+                        this._setToastVisibility(false);
+                    }
+                }, 220);
+            }, TOAST_HIDE_MS);
         }
 
         async _loadChildrenForNode(node, { expand = false } = {}) {
@@ -2575,6 +3629,10 @@
 
         _onGlobalKeyDown(event) {
             if (event.key === 'Escape') {
+                if (this._contextMenuVisible) {
+                    this._hideContextMenu();
+                    return;
+                }
                 this._clearSelection();
             }
         }
@@ -2662,6 +3720,7 @@
             this.hoverTimer = setTimeout(async () => {
                 try {
                     const stats = await loadStats(node.id);
+                    this._applyStatsToNode(node, stats);
                     this._showPopover(row, node, stats);
                 } catch (err) {
                     logger.error('Ошибка загрузки статистики', { id: node.id, error: err && err.message });
@@ -2723,11 +3782,14 @@
                 const commissionValue = stats.commissionPercent != null
                     ? formatPercent(stats.commissionPercent)
                     : (stats.commissionRaw || '—');
-                const autoFinishValue = formatAutoFinish(stats.autoFinishHours, stats.autoFinishRaw);
+                const autoFinishValue = formatAutoFinish(
+                    stats.autoFinishHours != null ? stats.autoFinishHours : node.autoFinishHours,
+                    stats.autoFinishRaw || node.autoFinishRaw
+                );
 
                 appendRow('Каталог', digiValue);
                 appendRow('Комиссия', commissionValue || '—');
-                appendRow('Автозавершение', autoFinishValue);
+                appendRow('Холд', autoFinishValue);
 
                 pop.appendChild(title);
                 pop.appendChild(grid);
@@ -2792,16 +3854,89 @@
         _prefetchVisible() {
             const visible = this.visibleNodes.slice(0, PREFETCH_VISIBLE_LIMIT);
             for (const { node } of visible) {
-                if (!statsCache.get(node.id)) {
-                    loadStats(node.id).catch(() => {});
+                const cached = statsCache.get(node.id);
+                if (cached) {
+                    this._applyStatsToNode(node, cached);
+                } else {
+                    loadStats(node.id)
+                        .then(stats => this._applyStatsToNode(node, stats))
+                        .catch(() => {});
                 }
                 if (node.expanded && node.childrenLoaded) {
                     for (const child of node.children.slice(0, PREFETCH_VISIBLE_LIMIT)) {
-                        if (!statsCache.get(child.id)) loadStats(child.id).catch(() => {});
+                        const childCached = statsCache.get(child.id);
+                        if (childCached) {
+                            this._applyStatsToNode(child, childCached);
+                        } else {
+                            loadStats(child.id)
+                                .then(stats => this._applyStatsToNode(child, stats))
+                                .catch(() => {});
+                        }
                     }
                 }
             }
         }
+    }
+
+    function registerExternalAPIs(ui) {
+        if (!ui) {
+            return null;
+        }
+
+        const openFromDetail = (detail) => {
+            try {
+                return ui.openExternally(detail);
+            } catch (err) {
+                logger.error('Ошибка запуска поиска через внешнее API', { error: err && err.message });
+                ui.showToast('Не удалось открыть поиск', 'error');
+                return Promise.reject(err);
+            }
+        };
+
+        const eventHandler = (event) => {
+            const payload = event && typeof event.detail === 'object' ? event.detail : {};
+            openFromDetail(payload);
+        };
+
+        window.addEventListener('ggsel:cqe-open', eventHandler);
+        window.addEventListener('vibe:cqe-open', eventHandler);
+
+        const openShortcut = (value) => openFromDetail(value);
+
+        const applyOriginChange = (value) => {
+            const result = setAdminOrigin(value);
+            if (!result.success) {
+                ui.showToast('Не удалось обновить адрес админки', 'error');
+            } else if (result.changed) {
+                ui.showToast(result.stored ? 'Адрес админки обновлён' : 'Адрес админки сброшен', 'success');
+            } else {
+                ui.showToast('Этот адрес админки уже используется', 'info');
+            }
+            return result;
+        };
+
+        const bridge = {
+            open: openShortcut,
+            setOrigin: applyOriginChange,
+            getOrigin: () => getAdminOrigin(),
+            resolveUrl: resolveAdminUrl,
+            panel: ui,
+        };
+
+        window.ggselCategoryExplorer = bridge;
+        window.ggselCategoryExplorerOpen = openShortcut;
+        window.vibeCqeOpen = openShortcut;
+        window.ggselCategoryExplorerSetOrigin = applyOriginChange;
+        window.ggselCategoryExplorerGetOrigin = () => getAdminOrigin();
+        window.ggselCategoryExplorerResolveUrl = resolveAdminUrl;
+
+        return () => {
+            window.removeEventListener('ggsel:cqe-open', eventHandler);
+            window.removeEventListener('vibe:cqe-open', eventHandler);
+            if (window.ggselCategoryExplorer === bridge) {
+                delete window.ggselCategoryExplorer;
+            }
+        };
     }
 
     // --- Загрузка дочерних категорий ---
@@ -2816,7 +3951,7 @@
         }
         const promise = (async () => {
             logger.debug('Запрос на загрузку дочерних категорий', { id: categoryId });
-            const url = `/admin/categories/${categoryId}`;
+            const url = resolveAdminUrl(`/admin/categories/${categoryId}`);
             const cachedPage = pageCache.get(url);
             if (cachedPage) {
                 logger.debug('Карточка категории из кэша', { url });
@@ -2825,6 +3960,34 @@
             }
             const html = cachedPage ? cachedPage : await fetcher.fetchText(url);
             if (!cachedPage) pageCache.set(url, html);
+            try {
+                const stats = Parser.parseStats(html);
+                const hasText = (value) => typeof value === 'string' && value.trim() !== '';
+                const hasMeaningfulStats = stats && (
+                    hasText(stats.status)
+                    || hasText(stats.kind)
+                    || hasText(stats.digi)
+                    || stats.commissionPercent != null
+                    || (stats.commissionRaw != null && String(stats.commissionRaw).trim() !== '')
+                    || stats.autoFinishHours != null
+                    || (stats.autoFinishRaw != null && String(stats.autoFinishRaw).trim() !== '')
+                );
+                if (hasMeaningfulStats) {
+                    const existing = statsCache.get(categoryId);
+                    const mergedStats = existing ? { ...existing, ...stats } : { ...stats };
+                    mergedStats.id = mergedStats.id || categoryId;
+                    statsCache.set(categoryId, mergedStats);
+                    const relatedNode = nodesMap.get(categoryId);
+                    if (relatedNode) {
+                        mergeStatsIntoNode(relatedNode, mergedStats);
+                    }
+                }
+            } catch (err) {
+                logger.debug('Не удалось распарсить статистику при загрузке дочерних', {
+                    id: categoryId,
+                    error: err && err.message,
+                });
+            }
             const parsed = Parser.parseChildren(html).map(child => ({ ...child }));
             logger.debug('Распарсено дочерних категорий', { id: categoryId, count: parsed.length });
             childrenCache.set(categoryId, parsed);
@@ -2847,7 +4010,7 @@
             return cached;
         }
         logger.debug('Запрос статистики категории', { id: categoryId });
-        const url = `/admin/categories/${categoryId}`;
+        const url = resolveAdminUrl(`/admin/categories/${categoryId}`);
         const cachedPage = pageCache.get(url);
         if (cachedPage) {
             logger.debug('Карточка для статистики из кэша', { url });
@@ -2861,9 +4024,7 @@
         logger.debug('Распарсена статистика', stats);
         const relatedNode = nodesMap.get(categoryId);
         if (relatedNode) {
-            if (stats.status) relatedNode.status = stats.status;
-            if (stats.kind) relatedNode.kind = stats.kind;
-            if (stats.digi) relatedNode.digi = stats.digi;
+            mergeStatsIntoNode(relatedNode, stats);
         }
         statsCache.set(categoryId, stats);
         return stats;
