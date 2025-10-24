@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.4
-// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: ссылка на тип возврата в сводке ведёт к детальной карточке возврата.
+// @version      1.1.5
+// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Общий флоу: мгновенно прячет базовую разметку, строит новое представление заказа, загружает профили, чат, карточку товара и возвраты. Последние изменения: автосворачивание в FAB с настройкой, кеширование загрузок между страницами, настройки поиска и цветные чипы совпадений.
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
@@ -13,6 +13,21 @@
 (function () {
   'use strict';
   const log = (...a) => console.log('[VIBE-UI]', ...a);
+
+  const SETTINGS_KEY = 'vuiOrderOverlaySettings';
+  const FAB_POS_KEY = 'vuiOrderOverlayFabPos';
+  const DEFAULT_SETTINGS = {
+    autoCollapseOnOpen: true,
+    parallelSearchOrder: true,
+    parallelSearchUser: true,
+  };
+  const DEFAULT_FAB_POSITION = { topPercent: 78, leftPercent: 84 };
+
+  let settings = loadSettings();
+  let overlayState = null;
+  let currentDomRefs = null;
+  let lastCollectedData = null;
+  let settingsListenersBound = false;
 
   const PREHIDE_CLASS = 'vui-prehide';
   let prehideTimer = null;
@@ -35,6 +50,170 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     if (prehideStyle.parentNode) prehideStyle.parentNode.removeChild(prehideStyle);
   };
   prehideTimer = setTimeout(releasePrehide, 4000);
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return { ...DEFAULT_SETTINGS };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SETTINGS };
+      return { ...DEFAULT_SETTINGS, ...parsed };
+    } catch (error) {
+      console.warn('[VIBE-UI] Failed to load settings, fallback to defaults', error);
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function persistSettings(next) {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    } catch (error) {
+      console.warn('[VIBE-UI] Failed to persist settings', error);
+    }
+  }
+
+  function applySettingsPatch(patch) {
+    settings = { ...settings, ...patch };
+    persistSettings(settings);
+  }
+
+  const persistentCache = {
+    key(namespace, key) {
+      return `vuiCache:${namespace}:${encodeURIComponent(key)}`;
+    },
+    get(namespace, key) {
+      try {
+        const storeKey = this.key(namespace, key);
+        const raw = sessionStorage.getItem(storeKey);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && 'value' in parsed) {
+          return parsed.value;
+        }
+        return parsed;
+      } catch (error) {
+        return null;
+      }
+    },
+    set(namespace, key, value) {
+      try {
+        const storeKey = this.key(namespace, key);
+        const payload = JSON.stringify({ value, savedAt: Date.now() });
+        sessionStorage.setItem(storeKey, payload);
+      } catch (error) {
+        if (error && error.name === 'QuotaExceededError') {
+          this.clearNamespace(namespace);
+        }
+      }
+    },
+    clearNamespace(namespace) {
+      try {
+        const prefix = `vuiCache:${namespace}:`;
+        for (let i = sessionStorage.length - 1; i >= 0; i -= 1) {
+          const key = sessionStorage.key(i);
+          if (key && key.startsWith(prefix)) {
+            sessionStorage.removeItem(key);
+          }
+        }
+      } catch (error) {
+        console.warn('[VIBE-UI] Failed to cleanup cache namespace', namespace, error);
+      }
+    },
+  };
+
+  function loadFabPosition() {
+    try {
+      const raw = localStorage.getItem(FAB_POS_KEY);
+      if (!raw) return { ...DEFAULT_FAB_POSITION };
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const topPercent = Number.isFinite(parsed.topPercent) ? parsed.topPercent : DEFAULT_FAB_POSITION.topPercent;
+        const leftPercent = Number.isFinite(parsed.leftPercent) ? parsed.leftPercent : DEFAULT_FAB_POSITION.leftPercent;
+        return { topPercent, leftPercent };
+      }
+    } catch (error) {
+      console.warn('[VIBE-UI] Failed to load FAB position', error);
+    }
+    return { ...DEFAULT_FAB_POSITION };
+  }
+
+  function saveFabPosition(pos) {
+    try {
+      localStorage.setItem(FAB_POS_KEY, JSON.stringify(pos));
+    } catch (error) {
+      console.warn('[VIBE-UI] Failed to persist FAB position', error);
+    }
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function applyFabPosition(fab, pos) {
+    if (!fab || !pos) return;
+    const top = clamp(pos.topPercent, 2, 92);
+    const left = clamp(pos.leftPercent, 2, 92);
+    fab.style.top = `${top}%`;
+    fab.style.left = `${left}%`;
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+  }
+
+  function setupFabDrag(fab) {
+    if (!fab) return;
+    fab.style.position = 'fixed';
+    fab.style.touchAction = 'none';
+    const state = { position: loadFabPosition() };
+    applyFabPosition(fab, state.position);
+
+    const resizeHandler = () => {
+      applyFabPosition(fab, state.position);
+    };
+    window.addEventListener('resize', resizeHandler);
+
+    fab.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const rect = fab.getBoundingClientRect();
+      const offsetX = event.clientX - rect.left;
+      const offsetY = event.clientY - rect.top;
+      let moved = false;
+      const pointerId = event.pointerId;
+      try { fab.setPointerCapture(pointerId); } catch {}
+      fab.dataset.dragging = 'true';
+
+      const moveHandler = (moveEvent) => {
+        const x = moveEvent.clientX - offsetX;
+        const y = moveEvent.clientY - offsetY;
+        const leftPercent = (x / window.innerWidth) * 100;
+        const topPercent = (y / window.innerHeight) * 100;
+        state.position = {
+          leftPercent: clamp(leftPercent, 2, 92),
+          topPercent: clamp(topPercent, 2, 92),
+        };
+        applyFabPosition(fab, state.position);
+        moved = true;
+      };
+
+      const upHandler = (upEvent) => {
+        document.removeEventListener('pointermove', moveHandler);
+        document.removeEventListener('pointerup', upHandler);
+        fab.dataset.dragging = 'false';
+        try { fab.releasePointerCapture(pointerId); } catch {}
+        if (moved) {
+          saveFabPosition(state.position);
+          upEvent.preventDefault();
+          upEvent.stopPropagation();
+        }
+        requestAnimationFrame(() => {
+          fab.removeAttribute('data-dragging');
+        });
+      };
+
+      document.addEventListener('pointermove', moveHandler);
+      document.addEventListener('pointerup', upHandler, { once: true });
+    });
+  }
 
   // ---------- helpers ----------
   const txt = n => (n ? n.textContent.trim() : '');
@@ -90,6 +269,30 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       setTimeout(() => target.classList.remove('vui-isCopied'), 900);
     }
   };
+
+  function bindCopyHandlers(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-copy-value]').forEach((el) => {
+      if (el.dataset.copyBound === 'true') return;
+      el.dataset.copyBound = 'true';
+      if (!el.hasAttribute('tabindex') && !['BUTTON', 'A', 'INPUT', 'TEXTAREA'].includes(el.tagName)) {
+        el.setAttribute('tabindex', '0');
+      }
+      el.addEventListener('click', (event) => {
+        const value = el.getAttribute('data-copy-value');
+        if (!value) return;
+        event.preventDefault();
+        copy(value, el);
+      });
+      el.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const value = el.getAttribute('data-copy-value');
+        if (!value) return;
+        event.preventDefault();
+        copy(value, el);
+      });
+    });
+  }
   const profileCache = new Map();
   const chatCache = new Map();
   const productCache = new Map();
@@ -251,11 +454,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     try {
       const absolute = new URL(url, location.origin).href;
       if (profileCache.has(absolute)) return profileCache.get(absolute);
+      const cached = persistentCache.get('profile', absolute);
+      if (cached) {
+        profileCache.set(absolute, cached);
+        return cached;
+      }
       const res = await fetch(absolute, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const data = parseProfileHtml(html, absolute);
       profileCache.set(absolute, data);
+      persistentCache.set('profile', absolute, data);
       return data;
     } catch (e) {
       log('Failed to load profile', url, e);
@@ -268,11 +477,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     try {
       const absolute = new URL(url, location.origin).href;
       if (chatCache.has(absolute)) return chatCache.get(absolute);
+      const cached = persistentCache.get('chat', absolute);
+      if (cached) {
+        chatCache.set(absolute, cached);
+        return cached;
+      }
       const res = await fetch(absolute, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const data = parseChatHtml(html, absolute);
       chatCache.set(absolute, data);
+      persistentCache.set('chat', absolute, data);
       return data;
     } catch (e) {
       log('Failed to load chat', url, e);
@@ -285,11 +500,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     try {
       const absolute = new URL(url, location.origin).href;
       if (productCache.has(absolute)) return productCache.get(absolute);
+      const cached = persistentCache.get('product', absolute);
+      if (cached) {
+        productCache.set(absolute, cached);
+        return cached;
+      }
       const res = await fetch(absolute, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const data = parseProductHtml(html, absolute);
       productCache.set(absolute, data);
+      persistentCache.set('product', absolute, data);
       return data;
     } catch (e) {
       log('Failed to load product', url, e);
@@ -302,6 +523,11 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     try {
       const absolute = new URL(url, location.origin).href;
       if (refundCache.has(absolute)) return refundCache.get(absolute);
+      const cached = persistentCache.get('refundList', absolute);
+      if (cached) {
+        refundCache.set(absolute, cached);
+        return cached;
+      }
       const res = await fetch(absolute, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
@@ -317,6 +543,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
         data.entries = enriched;
       }
       refundCache.set(absolute, data);
+      persistentCache.set('refundList', absolute, data);
       return data;
     } catch (e) {
       log('Failed to load refund list', url, e);
@@ -329,11 +556,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     try {
       const absolute = new URL(url, location.origin).href;
       if (refundDetailCache.has(absolute)) return refundDetailCache.get(absolute);
+      const cached = persistentCache.get('refundDetail', absolute);
+      if (cached) {
+        refundDetailCache.set(absolute, cached);
+        return cached;
+      }
       const res = await fetch(absolute, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const data = parseRefundDetailHtml(html, absolute);
       refundDetailCache.set(absolute, data);
+      persistentCache.set('refundDetail', absolute, data);
       return data;
     } catch (e) {
       log('Failed to load refund detail', url, e);
@@ -675,20 +908,42 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     };
   }
 
-  // ---------- hide old (not remove) ----------
-  function hideOld(domRefs) {
-    const blocks = [
+  function legacyBlocks(domRefs) {
+    if (!domRefs) return [];
+    const nodes = [
       domRefs.mainBox,
       domRefs.sellerWrap?.closest('.box'),
       domRefs.buyerWrap?.closest('.box'),
       domRefs.revWrap?.closest('.box'),
       domRefs.hCost,
       domRefs.hProdBox,
-    ].filter(Boolean);
-    for (const b of blocks) {
-      b.classList.add('vui-old-hidden');
-      b.style.display = 'none';
+    ];
+    return nodes.filter(Boolean);
+  }
+
+  function setLegacyVisibility(domRefs, visible) {
+    const nodes = legacyBlocks(domRefs);
+    for (const node of nodes) {
+      if (!node) continue;
+      if (visible) {
+        const stored = node.dataset.vuiOriginalDisplay;
+        if (stored && stored !== 'none') {
+          node.style.display = stored;
+        } else {
+          node.style.removeProperty('display');
+        }
+      } else {
+        if (!Object.prototype.hasOwnProperty.call(node.dataset, 'vuiOriginalDisplay')) {
+          node.dataset.vuiOriginalDisplay = node.style.display || '';
+        }
+        node.style.display = 'none';
+      }
     }
+  }
+
+  // ---------- hide old (not remove) ----------
+  function hideOld(domRefs) {
+    setLegacyVisibility(domRefs, false);
   }
 
   // ---------- styles (fully namespaced) ----------
@@ -720,9 +975,51 @@ body{color-scheme:dark;}
   gap:20px;
   padding:0 16px 32px;
 }
+.vui-shell{position:relative;}
+.vui-shell .vui-fab{display:none;}
+.vui-shell--collapsed .vui-wrap{display:none;}
+.vui-shell--collapsed .vui-fab{display:inline-flex;}
+.vui-fab{position:fixed;z-index:100001;display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:999px;border:1px solid rgba(76,155,255,.35);background:rgba(13,16,22,.92);color:var(--vui-text);cursor:pointer;box-shadow:0 18px 40px rgba(0,0,0,.45);transition:transform .2s ease,box-shadow .2s ease;}
+.vui-fab:hover{box-shadow:0 22px 48px rgba(0,0,0,.55);transform:translateY(-1px);}
+.vui-fab:focus-visible{outline:2px solid var(--vui-accent);outline-offset:3px;}
+.vui-fab[data-dragging="true"]{cursor:grabbing;}
 .vui-wrap *{box-sizing:border-box;}
 .vui-layout{display:grid;gap:16px;margin-top:16px;grid-template-columns:minmax(0,7fr) minmax(0,5fr);align-items:flex-start;}
 .vui-layoutMain,.vui-layoutSide{display:flex;flex-direction:column;gap:16px;}
+.vui-headControls{display:flex;gap:8px;margin-left:auto;align-items:center;flex-wrap:wrap;}
+.vui-iconBtn{border:1px solid rgba(148,163,184,.2);background:rgba(255,255,255,.04);color:var(--vui-text);padding:6px 10px;border-radius:8px;font:inherit;cursor:pointer;line-height:1;display:inline-flex;align-items:center;gap:6px;transition:background .2s ease,border-color .2s ease,color .2s ease;}
+.vui-iconBtn:hover{background:rgba(76,155,255,.12);border-color:rgba(76,155,255,.4);color:var(--vui-accent);}
+.vui-iconBtn:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
+.vui-iconBtn--ghost{background:transparent;border-color:rgba(148,163,184,.25);}
+.vui-settingsPanel{position:fixed;top:92px;right:48px;width:280px;background:var(--vui-card);border:1px solid var(--vui-line);border-radius:14px;box-shadow:0 24px 55px rgba(0,0,0,.55);padding:16px;display:none;z-index:100002;}
+.vui-settingsPanel.is-open{display:block;}
+.vui-settingsPanel__head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.vui-settingsPanel__head h3{margin:0;font-size:15px;font-weight:700;color:var(--vui-text);}
+.vui-settingsPanel__body{display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--vui-text);}
+.vui-settingsOption{display:flex;gap:10px;align-items:flex-start;line-height:1.4;}
+.vui-settingsOption input{margin-top:3px;}
+.vui-searchResult{border:1px solid var(--vui-line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;background:rgba(255,255,255,.02);}
+.vui-searchResult+.vui-searchResult{margin-top:12px;}
+.vui-searchHead{display:flex;justify-content:space-between;gap:12px;align-items:center;}
+.vui-searchTitle{font-weight:700;color:var(--vui-text);}
+.vui-searchSubtitle{font-size:12px;color:var(--vui-muted);}
+.vui-searchChips{display:flex;flex-wrap:wrap;gap:6px;}
+.vui-searchMeta{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;font-size:12px;color:var(--vui-muted);}
+.vui-searchMetaItem span{display:block;text-transform:uppercase;letter-spacing:.04em;font-size:10px;margin-bottom:2px;}
+.vui-searchMetaItem b{display:block;color:var(--vui-text);word-break:break-word;cursor:pointer;transition:color .2s ease;}
+.vui-searchMetaItem b:hover{color:var(--vui-accent);}
+.vui-chipMatch{font-weight:700;}
+.vui-chipMatch--order{background:rgba(47,129,247,.18);border-color:#2f81f7;color:#a5c8ff;}
+.vui-chipMatch--user{background:rgba(147,112,219,.18);border-color:#9163ff;color:#d7c5ff;}
+.vui-chipMatch--seller{background:rgba(76,155,255,.18);border-color:#4c9bff;color:#c4dfff;}
+.vui-chipMatch--email{background:rgba(34,197,94,.18);border-color:#22c55e;color:#a0f5c3;}
+.vui-chipMatch--ip{background:rgba(248,113,113,.18);border-color:#f87171;color:#ffc7c7;}
+.vui-chipMatch--default{background:rgba(148,163,184,.18);border-color:#94a3b8;color:#e2e8f0;}
+.vui-cardMatch--order,.vui-searchResult--order{border-color:rgba(47,129,247,.45);box-shadow:0 0 0 1px rgba(47,129,247,.25);}
+.vui-cardMatch--user,.vui-searchResult--user{border-color:rgba(147,112,219,.45);box-shadow:0 0 0 1px rgba(147,112,219,.25);}
+.vui-cardMatch--seller{border-color:rgba(76,155,255,.6);box-shadow:0 0 0 1px rgba(76,155,255,.35);}
+.vui-cardMatch--email{border-color:rgba(34,197,94,.4);box-shadow:0 0 0 1px rgba(34,197,94,.18);}
+.vui-cardMatch--ip{border-color:rgba(248,113,113,.4);box-shadow:0 0 0 1px rgba(248,113,113,.2);}
 .vui-head{background:var(--vui-card);border:1px solid var(--vui-line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;}
 .vui-headTitle{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .vui-headLine{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
@@ -858,13 +1155,15 @@ body.vui-lightboxOpen{overflow:hidden;}
 .vui-lightboxClose:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
 .vui-lightboxClose:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 @keyframes vuiCopyPulse{0%{box-shadow:0 0 0 0 rgba(76,155,255,.5);background:rgba(76,155,255,.2);}100%{box-shadow:0 0 0 36px rgba(76,155,255,0);background:transparent;}}
-.vui-old-hidden{display:none!important;}
 @media(max-width:1200px){
   .vui-layout{grid-template-columns:1fr;}
 }
 @media(max-width:1024px){
   .vui-chrono{padding-top:8px;}
   .vui-chronoItem{min-width:140px;}
+}
+@media(max-width:768px){
+  .vui-settingsPanel{right:16px;left:16px;width:auto;}
 }
 `;
     const s = document.createElement('style');
@@ -914,6 +1213,8 @@ body.vui-lightboxOpen{overflow:hidden;}
     const panel = wrap?.querySelector(`.vui-profileDetails[data-role="${role}"]`);
     if (!panel) return;
     panel.innerHTML = renderProfileDetails(profile, fallbackUrl);
+    bindCopyHandlers(panel);
+    decorateMatchChips(panel);
 
     const chatButton = wrap?.querySelector(`[data-chat-role="${role}"]`);
     if (chatButton) {
@@ -964,6 +1265,334 @@ body.vui-lightboxOpen{overflow:hidden;}
       event.stopPropagation();
     };
     box.addEventListener('touchmove', touchHandler, { passive: false });
+  }
+
+  function detectMatchType(text) {
+    const value = norm(text).toLowerCase();
+    if (!value.includes('совпадение')) return '';
+    if (value.includes('email') || value.includes('почт')) return 'email';
+    if (value.includes('ip') || value.includes('айпи')) return 'ip';
+    if (value.includes('пользовател') || value.includes('клиент')) return 'user';
+    if (value.includes('продавц')) return 'seller';
+    if (value.includes('заказ')) return 'order';
+    return 'default';
+  }
+
+  function decorateMatchChips(container) {
+    if (!container) return;
+    const chips = container.querySelectorAll('.vui-chip');
+    chips.forEach((chipEl) => {
+      if (chipEl.classList.contains('vui-chipMatch')) return;
+      const type = detectMatchType(chipEl.textContent || '');
+      if (!type) return;
+      chipEl.classList.add('vui-chipMatch', `vui-chipMatch--${type}`);
+      const card = chipEl.closest('.vui-searchResult, .vui-card, .vui-mini, .vui-head');
+      if (card) {
+        card.classList.add('vui-matchCard', `vui-cardMatch--${type}`);
+      }
+    });
+  }
+
+  function closeSettingsPanel() {
+    const panel = overlayState?.settingsPanel;
+    if (!panel) return;
+    panel.classList.remove('is-open');
+    panel.setAttribute('aria-hidden', 'true');
+  }
+
+  function openSettingsPanel() {
+    if (!overlayState || overlayState.collapsed) return;
+    const panel = overlayState.settingsPanel;
+    if (!panel) return;
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+    const firstInput = panel.querySelector('input, button');
+    if (firstInput) {
+      try { firstInput.focus({ preventScroll: true }); } catch { firstInput.focus(); }
+    }
+  }
+
+  function toggleSettingsPanel(force) {
+    const panel = overlayState?.settingsPanel;
+    if (!panel) return;
+    const shouldOpen = typeof force === 'boolean'
+      ? force
+      : !panel.classList.contains('is-open');
+    if (shouldOpen) openSettingsPanel();
+    else closeSettingsPanel();
+  }
+
+  function handleSettingsOutside(event) {
+    if (!overlayState) return;
+    const panel = overlayState.settingsPanel;
+    if (!panel || !panel.classList.contains('is-open')) return;
+    if (panel.contains(event.target)) return;
+    const toggleBtn = overlayState.wrap?.querySelector('[data-overlay-action="settings"]');
+    if (toggleBtn && toggleBtn.contains(event.target)) return;
+    closeSettingsPanel();
+  }
+
+  function handleSettingsKey(event) {
+    if (event.key !== 'Escape') return;
+    if (!overlayState) return;
+    const panel = overlayState.settingsPanel;
+    if (!panel || !panel.classList.contains('is-open')) return;
+    event.preventDefault();
+    closeSettingsPanel();
+  }
+
+  function ensureSettingsListeners() {
+    if (settingsListenersBound) return;
+    document.addEventListener('click', handleSettingsOutside, true);
+    document.addEventListener('keydown', handleSettingsKey);
+    settingsListenersBound = true;
+  }
+
+  function applySettingsToPanel(panel) {
+    if (!panel) return;
+    panel.querySelectorAll('[data-setting-key]').forEach((input) => {
+      const key = input.getAttribute('data-setting-key');
+      if (!key) return;
+      input.checked = Boolean(settings[key]);
+      input.addEventListener('change', () => {
+        applySettingsPatch({ [key]: Boolean(input.checked) });
+        if (key === 'autoCollapseOnOpen' && settings.autoCollapseOnOpen && overlayState && !overlayState.collapsed) {
+          collapseOverlay({ reason: 'settings' });
+        }
+        if (lastCollectedData && overlayState?.wrap) {
+          runParallelSearch(lastCollectedData, overlayState.wrap);
+        }
+      });
+    });
+
+    const closeBtn = panel.querySelector('[data-settings-close]');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        closeSettingsPanel();
+      });
+    }
+  }
+
+  function createSettingsPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'vui-settingsPanel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-hidden', 'true');
+    panel.innerHTML = `
+      <div class="vui-settingsPanel__head">
+        <h3>Настройки</h3>
+        <button type="button" class="vui-iconBtn vui-iconBtn--ghost" data-settings-close aria-label="Закрыть настройки">×</button>
+      </div>
+      <div class="vui-settingsPanel__body">
+        <label class="vui-settingsOption">
+          <input type="checkbox" data-setting-key="autoCollapseOnOpen">
+          <span>Автоматически сворачивать окно после открытия заказа</span>
+        </label>
+        <label class="vui-settingsOption">
+          <input type="checkbox" data-setting-key="parallelSearchOrder">
+          <span>Параллельный поиск по ID заказа</span>
+        </label>
+        <label class="vui-settingsOption">
+          <input type="checkbox" data-setting-key="parallelSearchUser">
+          <span>Параллельный поиск по ID пользователя</span>
+        </label>
+      </div>
+    `;
+    return panel;
+  }
+
+  function collapseOverlay({ reason } = {}) {
+    if (!overlayState || overlayState.collapsed) return;
+    overlayState.collapsed = true;
+    overlayState.shell.classList.add('vui-shell--collapsed');
+    if (overlayState.fab) {
+      overlayState.fab.setAttribute('aria-expanded', 'false');
+      overlayState.fab.setAttribute('aria-label', 'Открыть интерфейс заказа');
+    }
+    setLegacyVisibility(overlayState.domRefs, true);
+    closeSettingsPanel();
+    if (reason === 'auto' && overlayState.fab) {
+      setTimeout(() => {
+        try { overlayState.fab.focus({ preventScroll: true }); } catch { overlayState.fab.focus(); }
+      }, 10);
+    }
+  }
+
+  function expandOverlay({ focus } = {}) {
+    if (!overlayState || !overlayState.collapsed) return;
+    overlayState.collapsed = false;
+    overlayState.shell.classList.remove('vui-shell--collapsed');
+    if (overlayState.fab) {
+      overlayState.fab.setAttribute('aria-expanded', 'true');
+    }
+    setLegacyVisibility(overlayState.domRefs, false);
+    if (focus) {
+      const target = overlayState.wrap?.querySelector('[data-overlay-action="collapse"]')
+        || overlayState.wrap?.querySelector('button, a, [tabindex]');
+      if (target) {
+        try { target.focus({ preventScroll: true }); } catch { target.focus(); }
+      }
+    }
+  }
+
+  function setupOverlayShell(wrap, data) {
+    if (!wrap) return null;
+    const parent = wrap.parentElement;
+    if (!parent) return null;
+    const shell = document.createElement('div');
+    shell.className = 'vui-shell';
+    parent.insertBefore(shell, wrap);
+    shell.appendChild(wrap);
+
+    const fab = document.createElement('button');
+    fab.type = 'button';
+    fab.className = 'vui-fab';
+    fab.innerHTML = '<span class="vui-fabLabel">Открыть интерфейс заказа</span>';
+    fab.setAttribute('aria-expanded', 'true');
+    fab.setAttribute('aria-label', 'Открыть интерфейс заказа');
+    shell.appendChild(fab);
+
+    const settingsPanel = createSettingsPanel();
+    shell.appendChild(settingsPanel);
+    applySettingsToPanel(settingsPanel);
+    ensureSettingsListeners();
+
+    overlayState = {
+      shell,
+      wrap,
+      fab,
+      settingsPanel,
+      domRefs: data.domRefs,
+      collapsed: false,
+    };
+
+    setupFabDrag(fab);
+    fab.addEventListener('click', (event) => {
+      if (fab.dataset.dragging === 'true') return;
+      event.preventDefault();
+      expandOverlay({ focus: true });
+    });
+
+    return overlayState;
+  }
+
+  function extractIdFromUrl(url) {
+    if (!url) return '';
+    try {
+      const absolute = new URL(url, location.origin);
+      const segments = absolute.pathname.split('/').filter(Boolean).reverse();
+      const idSegment = segments.find(segment => /^\d+$/.test(segment));
+      return idSegment || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function computeSearchResults(data) {
+    const results = [];
+    const orderNumber = data.order?.number ? String(data.order.number) : '';
+    if (orderNumber) {
+      const totalLabel = data.cost?.total ? { label: 'Итого', value: data.cost.total } : null;
+      const paymentLabel = data.order?.payment_system ? { label: 'Платёжная система', value: data.order.payment_system } : null;
+      const meta = [totalLabel, paymentLabel].filter(Boolean);
+      results.push({
+        id: orderNumber,
+        type: 'order',
+        title: `Заказ №${orderNumber}`,
+        subtitle: data.order?.status || '',
+        link: data.actions?.edit || location.href,
+        chips: [{ label: 'Совпадение по номеру заказа', type: 'order' }],
+        meta,
+      });
+    }
+
+    const buyerId = extractIdFromUrl(data.buyer?.profile);
+    if (buyerId) {
+      const meta = [];
+      if (data.buyer?.email) meta.push({ label: 'Email', value: data.buyer.email });
+      if (data.buyer?.ip) meta.push({ label: 'IP', value: data.buyer.ip });
+      results.push({
+        id: buyerId,
+        type: 'user',
+        title: data.buyer?.name ? `Покупатель ${data.buyer.name}` : `Покупатель #${buyerId}`,
+        subtitle: data.buyer?.email || '',
+        link: data.buyer?.profile || '',
+        chips: [{ label: 'Совпадение по пользователю', type: 'user' }],
+        meta,
+      });
+    }
+
+    return results;
+  }
+
+  function filterSearchResults(results) {
+    if (!Array.isArray(results)) return [];
+    return results.filter((item) => {
+      if (item.type === 'order') return Boolean(settings.parallelSearchOrder);
+      if (item.type === 'user') return Boolean(settings.parallelSearchUser);
+      return true;
+    });
+  }
+
+  function renderSearchResults(wrap, results) {
+    const card = wrap?.querySelector('[data-search-results]');
+    if (!card) return;
+    const body = card.querySelector('.vui-card__body');
+    if (!body) return;
+
+    if (!settings.parallelSearchOrder && !settings.parallelSearchUser) {
+      body.innerHTML = '<div class="vui-empty">Поиск отключён в настройках.</div>';
+      return;
+    }
+
+    if (!results.length) {
+      body.innerHTML = '<div class="vui-empty">Совпадения не найдены.</div>';
+      return;
+    }
+
+    const markup = results.map((item) => {
+      const chips = Array.isArray(item.chips) && item.chips.length
+        ? `<div class="vui-searchChips">${item.chips.map(chip => `<span class="vui-chip" data-match-type="${esc(chip.type || '')}">${esc(chip.label || '')}</span>`).join('')}</div>`
+        : '';
+      const meta = Array.isArray(item.meta) && item.meta.length
+        ? `<div class="vui-searchMeta">${item.meta.map(metaItem => `<div class="vui-searchMetaItem"><span>${esc(metaItem.label || '')}</span><b data-copy-value="${esc(metaItem.value || '')}">${esc(metaItem.value || '')}</b></div>`).join('')}</div>`
+        : '';
+      const linkMarkup = item.link
+        ? `<a class="vui-linkAction" href="${esc(item.link)}" target="_blank" rel="noopener noreferrer">Открыть</a>`
+        : '';
+      const subtitle = item.subtitle ? `<div class="vui-searchSubtitle">${esc(item.subtitle)}</div>` : '';
+      return `
+        <div class="vui-searchResult vui-searchResult--${esc(item.type || 'default')}">
+          <div class="vui-searchHead">
+            <div class="vui-searchTitle">${esc(item.title || '')}</div>
+            ${linkMarkup}
+          </div>
+          ${subtitle}
+          ${chips}
+          ${meta}
+        </div>
+      `;
+    }).join('');
+
+    body.innerHTML = markup;
+    bindCopyHandlers(body);
+    decorateMatchChips(body);
+  }
+
+  function runParallelSearch(data, wrap) {
+    if (!wrap) return;
+    const baseKey = data.order?.number || data.order?.uuid || location.pathname;
+    const cached = persistentCache.get('searchBase', baseKey);
+    if (cached) {
+      const filteredCached = filterSearchResults(cached);
+      renderSearchResults(wrap, filteredCached);
+    }
+
+    const fresh = computeSearchResults(data);
+    persistentCache.set('searchBase', baseKey, fresh);
+    const filteredFresh = filterSearchResults(fresh);
+    renderSearchResults(wrap, filteredFresh);
   }
 
   function loadProfileSections(data, wrap) {
@@ -1359,6 +1988,7 @@ body.vui-lightboxOpen{overflow:hidden;}
         }
 
         summaryEl.innerHTML = parts.join('<span class="vui-refundInfo__separator">•</span>');
+        decorateMatchChips(summaryEl);
       })
       .catch(() => {
         summaryEl.remove();
@@ -1557,6 +2187,14 @@ body.vui-lightboxOpen{overflow:hidden;}
           </article>`
       : '';
 
+    const matchesCardMarkup = `
+          <article class="vui-card" data-search-results>
+            <header class="vui-card__head"><div class="vui-title">Совпадения</div></header>
+            <div class="vui-card__body">
+              <div class="vui-empty" data-search-status>Поиск совпадений…</div>
+            </div>
+          </article>`;
+
     wrap.innerHTML = `
       <section class="vui-layout">
         <div class="vui-layoutMain">
@@ -1666,6 +2304,7 @@ body.vui-lightboxOpen{overflow:hidden;}
           </article>` : ''}
 
           ${reviewCardMarkup}
+          ${matchesCardMarkup}
         </div>
       </section>
       <div class="vui-footerNote">GsellersBackOffice © 2025 | SERVER TIMEZONE: Moscow</div>
@@ -1699,14 +2338,7 @@ body.vui-lightboxOpen{overflow:hidden;}
       });
     }
 
-    wrap.querySelectorAll('[data-copy-value]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        const value = btn.getAttribute('data-copy-value');
-        if (!value) return;
-        event.preventDefault();
-        copy(value, btn);
-      });
-    });
+    bindCopyHandlers(wrap);
 
     wrap.querySelectorAll('[data-confirm-message]').forEach((link) => {
       link.addEventListener('click', (event) => {
@@ -1750,6 +2382,31 @@ body.vui-lightboxOpen{overflow:hidden;}
         }
       });
     }
+    const headLine = wrap.querySelector('.vui-headLine');
+    if (headLine && !headLine.querySelector('.vui-headControls')) {
+      const controls = document.createElement('div');
+      controls.className = 'vui-headControls';
+      controls.innerHTML = `
+        <button type="button" class="vui-iconBtn" data-overlay-action="settings">Настройки</button>
+        <button type="button" class="vui-iconBtn" data-overlay-action="collapse">Свернуть</button>
+      `;
+      headLine.appendChild(controls);
+    }
+
+    wrap.addEventListener('click', (event) => {
+      const actionBtn = event.target.closest('[data-overlay-action]');
+      if (!actionBtn) return;
+      const action = actionBtn.getAttribute('data-overlay-action');
+      if (action === 'settings') {
+        event.preventDefault();
+        toggleSettingsPanel();
+      } else if (action === 'collapse') {
+        event.preventDefault();
+        collapseOverlay({ reason: 'user' });
+      }
+    });
+
+    decorateMatchChips(wrap);
     return wrap;
   }
 
@@ -1766,13 +2423,22 @@ body.vui-lightboxOpen{overflow:hidden;}
       const data = collectData();
       log('Collected:', data);
 
+      currentDomRefs = data.domRefs;
+      lastCollectedData = data;
+
       hideOld(data.domRefs);
       const wrap = buildUI(data);
+      setupOverlayShell(wrap, data);
       releasePrehide();
       loadProfileSections(data, wrap);
       loadChatSection(data, wrap);
       loadProductSection(data, wrap);
       loadRefundSummary(data, wrap);
+      runParallelSearch(data, wrap);
+
+      if (settings.autoCollapseOnOpen) {
+        setTimeout(() => collapseOverlay({ reason: 'auto' }), 200);
+      }
       log('Overlay ready (namespaced styles).');
     } catch (error) {
       console.error('[VIBE-UI] Failed to initialize overlay', error);
