@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.2
-// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: вытягивание недостающих данных товара и отображение сводки по возвратам.
+// @version      1.1.3
+// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: добавлен разбор типа возврата и уточнённый сбор данных товара.
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
@@ -94,6 +94,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
   const chatCache = new Map();
   const productCache = new Map();
   const refundCache = new Map();
+  const refundDetailCache = new Map();
 
   let confirmModalInstance = null;
   let imageLightboxInstance = null;
@@ -305,10 +306,37 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const data = parseRefundHtml(html, absolute);
+      if (data.entries?.length) {
+        const enriched = await Promise.all(data.entries.map(async (entry) => {
+          if (entry.detail && entry.detail.href) {
+            const details = await fetchRefundDetail(entry.detail.href);
+            return { ...entry, detail: { ...entry.detail, ...details } };
+          }
+          return entry;
+        }));
+        data.entries = enriched;
+      }
       refundCache.set(absolute, data);
       return data;
     } catch (e) {
       log('Failed to load refund list', url, e);
+      return { error: true, url };
+    }
+  }
+
+  async function fetchRefundDetail(url) {
+    if (!url) return null;
+    try {
+      const absolute = new URL(url, location.origin).href;
+      if (refundDetailCache.has(absolute)) return refundDetailCache.get(absolute);
+      const res = await fetch(absolute, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const data = parseRefundDetailHtml(html, absolute);
+      refundDetailCache.set(absolute, data);
+      return data;
+    } catch (e) {
+      log('Failed to load refund detail', url, e);
       return { error: true, url };
     }
   }
@@ -427,10 +455,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       return { url, entries: [] };
     }
 
+    const detailAnchor = cells[0]?.querySelector('a');
     const initiatorAnchor = cells[2]?.querySelector('a');
     const paymentAnchor = cells[6]?.querySelector('a');
 
     const entry = {
+      detail: detailAnchor
+        ? {
+            label: norm(txt(detailAnchor)),
+            href: new URL(detailAnchor.getAttribute('href') || detailAnchor.href || '', url).href,
+          }
+        : null,
       initiator: {
         label: norm(txt(initiatorAnchor || cells[2] || null)),
         href: initiatorAnchor ? new URL(initiatorAnchor.getAttribute('href') || initiatorAnchor.href || '', url).href : '',
@@ -445,6 +480,28 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     };
 
     return { url, entries: [entry] };
+  }
+
+  function parseRefundDetailHtml(html, url) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const dl = doc.querySelector('.box-body dl, .box dl, dl');
+    if (!dl) return { url };
+
+    const dts = Array.from(dl.querySelectorAll('dt'));
+    for (const dt of dts) {
+      const label = norm(txt(dt)).toLowerCase();
+      if (!label) continue;
+      if (label.includes('refund type')) {
+        const dd = dt.nextElementSibling;
+        const value = norm(txt(dd));
+        if (value) {
+          return { url, refundType: value };
+        }
+      }
+    }
+
+    return { url };
   }
 
   function parseChatHtml(html, url) {
@@ -1270,6 +1327,11 @@ body.vui-lightboxOpen{overflow:hidden;}
         if (amountLabel) {
           const currencyLabel = entry.currency ? ` ${entry.currency.trim()}` : '';
           parts.push(`<span class="vui-refundInfo__part">${esc(amountLabel + currencyLabel)}</span>`);
+        }
+
+        const refundType = entry.detail?.refundType ? entry.detail.refundType.trim() : '';
+        if (refundType) {
+          parts.push(`<span class="vui-refundInfo__part">${esc(`Тип: ${refundType}`)}</span>`);
         }
 
         const statusLabel = entry.status ? entry.status.trim() : '';
