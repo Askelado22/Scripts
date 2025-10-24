@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.1
-// @description  Прячет старые таблицы, вытягивает данные и рисует компактный «умный» интерфейс. Email сразу виден. Технический блок с кнопками. Все стили изолированы (префикс vui-).
+// @version      1.1.2
+// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: вытягивание недостающих данных товара и отображение сводки по возвратам.
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
@@ -61,6 +61,24 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       "'": '&#39;',
     }[ch] || ch));
   };
+  const formatProductDate = (raw) => {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+    if (match) {
+      const [, y, m, d, hh, mm] = match;
+      return `${d}.${m}.${y} ${hh}:${mm}`;
+    }
+    return stripTimezoneSuffix(value);
+  };
+  const normalizeCategoryPath = (value) => {
+    if (!value) return '';
+    return value
+      .replace(/\s*>/g, '›')
+      .replace(/›\s*/g, ' › ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  };
   const copy = (value, target) => {
     if (!value) return;
     try { navigator.clipboard?.writeText(value); } catch {}
@@ -75,6 +93,7 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
   const profileCache = new Map();
   const chatCache = new Map();
   const productCache = new Map();
+  const refundCache = new Map();
 
   let confirmModalInstance = null;
   let imageLightboxInstance = null;
@@ -277,6 +296,23 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     }
   }
 
+  async function fetchRefundData(url) {
+    if (!url) return null;
+    try {
+      const absolute = new URL(url, location.origin).href;
+      if (refundCache.has(absolute)) return refundCache.get(absolute);
+      const res = await fetch(absolute, { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const data = parseRefundHtml(html, absolute);
+      refundCache.set(absolute, data);
+      return data;
+    } catch (e) {
+      log('Failed to load refund list', url, e);
+      return { error: true, url };
+    }
+  }
+
   function parseProfileHtml(html, url) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
@@ -341,7 +377,74 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       }
     }
 
-    return { description, url };
+    const rows = Array.from(doc.querySelectorAll('tr'));
+    const findRow = (matcher) => {
+      const list = Array.isArray(matcher) ? matcher : [matcher];
+      return rows.find((tr) => {
+        const label = norm(txt(tr.querySelector('th'))).toLowerCase();
+        return list.some(item => label.includes(item.toLowerCase()));
+      });
+    };
+
+    const titleRow = findRow(['название', 'наименование']);
+    const categoryRow = findRow(['путь размещения', 'катег']);
+    const createdRow = findRow(['дата создания']);
+
+    const title = norm(txt(titleRow?.querySelector('td')));
+
+    let category = '';
+    let categoryLink = '';
+    if (categoryRow) {
+      const td = categoryRow.querySelector('td');
+      const anchors = Array.from(td?.querySelectorAll('a') || []);
+      if (anchors.length) {
+        const last = anchors[anchors.length - 1];
+        const href = last.getAttribute('href') || last.href || '';
+        if (href) categoryLink = new URL(href, url).href;
+      }
+      const raw = td ? td.textContent || '' : '';
+      category = normalizeCategoryPath(raw);
+    }
+
+    const createdRaw = norm(txt(createdRow?.querySelector('td')));
+    const created_at = formatProductDate(createdRaw);
+
+    return { description, title, category, category_link: categoryLink, created_at, url };
+  }
+
+  function parseRefundHtml(html, url) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const table = doc.querySelector('.box-body table');
+    if (!table) return { url, entries: [] };
+
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const dataRow = rows.find(row => row.querySelectorAll('td').length);
+    if (!dataRow) return { url, entries: [] };
+
+    const cells = Array.from(dataRow.querySelectorAll('td'));
+    if (cells.length < 7) {
+      return { url, entries: [] };
+    }
+
+    const initiatorAnchor = cells[2]?.querySelector('a');
+    const paymentAnchor = cells[6]?.querySelector('a');
+
+    const entry = {
+      initiator: {
+        label: norm(txt(initiatorAnchor || cells[2] || null)),
+        href: initiatorAnchor ? new URL(initiatorAnchor.getAttribute('href') || initiatorAnchor.href || '', url).href : '',
+      },
+      amount: norm(txt(cells[3])),
+      currency: norm(txt(cells[4])),
+      status: norm(txt(cells[5])),
+      paymentSystem: {
+        label: norm(txt(paymentAnchor || cells[6] || null)),
+        href: paymentAnchor ? new URL(paymentAnchor.getAttribute('href') || paymentAnchor.href || '', url).href : '',
+      },
+    };
+
+    return { url, entries: [entry] };
   }
 
   function parseChatHtml(html, url) {
@@ -401,11 +504,14 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     const mainBox = findH('.box-header h3', 'Заказ №')?.closest('.box');
     const footer = mainBox?.querySelector('.box-footer');
 
+    const refundCreate = firstLinkWithin(footer, 'Оформить возврат');
+    const refundView = firstLinkWithin(footer, 'Посмотреть возвраты');
     const actions = {
       edit: firstLinkWithin(footer, 'Редактировать'),
       chat: firstLinkWithin(footer, 'Открыть диалог'),
       close: firstLinkWithin(footer, 'Закрыть сделку'),
-      refund: firstLinkWithin(footer, 'Оформить возврат'), // используем и для «Посмотреть возвраты»
+      refundCreate,
+      refundView,
       ps: firstLinkWithin(footer, 'платежную систему'),
       reward: firstLinkWithin(footer, 'награду продавцу'),
     };
@@ -500,6 +606,8 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       link_public: firstLinkWithin(prodFooter, 'на GGSel'),
       link_category: firstLinkWithin(prodFooter, 'Категорию'),
     };
+    product.category = normalizeCategoryPath(product.category);
+    product.created_at = formatProductDate(product.created_at);
     product.options = product.optionsRaw
       ? product.optionsRaw.split(/<br\s*\/?>/i).map(s => norm(s)).filter(Boolean)
       : [];
@@ -563,6 +671,9 @@ body{color-scheme:dark;}
 .vui-headLine{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
 .vui-head h1{margin:0;font-size:20px;color:var(--vui-text);}
 .vui-headStatus{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.vui-refundInfo{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--vui-muted);}
+.vui-refundInfo__part{display:flex;align-items:center;gap:4px;white-space:nowrap;}
+.vui-refundInfo__separator{color:rgba(255,255,255,.25);}
 .vui-headStats{display:flex;gap:16px;flex-wrap:wrap;}
 .vui-headStat{display:flex;flex-direction:column;gap:2px;color:var(--vui-text);font-size:13px;}
 .vui-headStat b{font-size:15px;}
@@ -618,6 +729,7 @@ body.vui-lightboxOpen{overflow:hidden;}
 .vui-copyable:hover{color:var(--vui-accent);}
 .vui-copyable:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
+.vui-productTitleText{color:var(--vui-text);display:inline-flex;align-items:center;gap:6px;font-weight:700;}
 .vui-productTitle:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
 .vui-productTitle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
 .vui-linkAction{cursor:pointer;color:inherit;text-decoration:none;position:relative;display:inline-flex;align-items:center;gap:4px;padding-bottom:2px;}
@@ -1063,6 +1175,46 @@ body.vui-lightboxOpen{overflow:hidden;}
         } else if (toggleEl) {
           toggleEl.disabled = true;
         }
+        if (productData && !productData.error) {
+          const titleValue = productData.title && productData.title.trim();
+          if (titleValue && isEmptyVal(data.product.title)) {
+            data.product.title = titleValue;
+            const titleLink = wrap?.querySelector('[data-product-title]');
+            const titleText = wrap?.querySelector('[data-product-title-text]');
+            if (titleLink) titleLink.textContent = titleValue;
+            if (titleText) titleText.textContent = titleValue;
+          }
+
+          const categoryValue = productData.category && productData.category.trim();
+          if (categoryValue && isEmptyVal(data.product.category)) {
+            data.product.category = categoryValue;
+            const categoryLine = wrap?.querySelector('[data-product-category]');
+            if (categoryLine) {
+              categoryLine.style.display = '';
+              const categoryTextEl = categoryLine.querySelector('[data-product-category-value]');
+              if (categoryTextEl) categoryTextEl.textContent = categoryValue;
+            }
+          }
+          if (productData.category_link && !data.product.link_category) {
+            data.product.link_category = productData.category_link;
+            const categoryLine = wrap?.querySelector('[data-product-category]');
+            const labelEl = categoryLine?.querySelector('[data-product-category-label]');
+            if (labelEl) {
+              labelEl.innerHTML = `<a class="vui-linkAction" href="${esc(productData.category_link)}">Категория</a>`;
+            }
+          }
+
+          const createdValue = productData.created_at && productData.created_at.trim();
+          if (createdValue && isEmptyVal(data.product.created_at)) {
+            data.product.created_at = createdValue;
+            const createdLine = wrap?.querySelector('[data-product-created]');
+            if (createdLine) {
+              createdLine.style.display = '';
+              const createdTextEl = createdLine.querySelector('[data-product-created-value]');
+              if (createdTextEl) createdTextEl.textContent = createdValue;
+            }
+          }
+        }
       })
       .catch(() => {
         const rendered = renderProductDescription({ error: true });
@@ -1077,6 +1229,72 @@ body.vui-lightboxOpen{overflow:hidden;}
           toggleEl.disabled = true;
         }
         if (toggleTextEl) toggleTextEl.textContent = '';
+      });
+  }
+
+  function loadRefundSummary(data, wrap) {
+    const summaryEl = wrap?.querySelector('[data-refund-summary]');
+    if (!summaryEl) return;
+    const status = (data.order.status || '').toLowerCase();
+    if (!status.includes('оформлен возврат')) {
+      summaryEl.remove();
+      return;
+    }
+    const listLink = data.actions.refundView;
+    if (!listLink) {
+      summaryEl.remove();
+      return;
+    }
+
+    summaryEl.textContent = 'Загрузка возврата…';
+
+    fetchRefundData(listLink)
+      .then((refundData) => {
+        const entry = refundData?.entries?.[0];
+        if (!entry) {
+          summaryEl.remove();
+          return;
+        }
+
+        const parts = [];
+        const initiatorLabel = entry.initiator?.label ? entry.initiator.label.trim() : '';
+        if (initiatorLabel) {
+          const initiatorLink = entry.initiator?.href;
+          const initiatorMarkup = initiatorLink
+            ? `<a class="vui-linkAction" href="${esc(initiatorLink)}">${esc(initiatorLabel)}</a>`
+            : esc(initiatorLabel);
+          parts.push(`<span class="vui-refundInfo__part">${initiatorMarkup}</span>`);
+        }
+
+        const amountLabel = entry.amount ? entry.amount.trim() : '';
+        if (amountLabel) {
+          const currencyLabel = entry.currency ? ` ${entry.currency.trim()}` : '';
+          parts.push(`<span class="vui-refundInfo__part">${esc(amountLabel + currencyLabel)}</span>`);
+        }
+
+        const statusLabel = entry.status ? entry.status.trim() : '';
+        if (statusLabel) {
+          parts.push(`<span class="vui-refundInfo__part">${esc(statusLabel)}</span>`);
+        }
+
+        const paymentLabel = entry.paymentSystem?.label ? entry.paymentSystem.label.trim() : '';
+        if (paymentLabel) {
+          const paymentLink = entry.paymentSystem?.href;
+          const paymentMarkup = paymentLink
+            ? `<a class="vui-linkAction" href="${esc(paymentLink)}">${esc(paymentLabel)}</a>`
+            : esc(paymentLabel);
+          parts.push(`<span class="vui-refundInfo__part">${paymentMarkup}</span>`);
+        }
+
+        if (!parts.length) {
+          summaryEl.remove();
+          return;
+        }
+
+        summaryEl.innerHTML = parts.join('<span class="vui-refundInfo__separator">•</span>');
+      })
+      .catch(() => {
+        summaryEl.remove();
       });
   }
 
@@ -1161,10 +1379,17 @@ body.vui-lightboxOpen{overflow:hidden;}
     const orderNumberValue = safe(data.order.number);
     const orderUuidValue = safe(data.order.uuid);
 
-    const statusChip = safe(data.order.status)
-      ? `<span class="${chip(data.order.status)}">${esc(data.order.status)}</span>`
+    const orderStatusValue = safe(data.order.status);
+    const statusChip = orderStatusValue
+      ? `<span class="${chip(orderStatusValue)}">${esc(orderStatusValue)}</span>`
       : '';
-    const statusBlock = statusChip ? `<div class="vui-headStatus">${statusChip}</div>` : '';
+    const isRefundStatus = (orderStatusValue || '').toLowerCase().includes('оформлен возврат');
+    const refundSummaryPlaceholder = (isRefundStatus && (data.actions.refundView || data.actions.refundCreate))
+      ? '<div class="vui-refundInfo" data-refund-summary></div>'
+      : '';
+    const statusBlock = (statusChip || refundSummaryPlaceholder)
+      ? `<div class="vui-headStatus">${refundSummaryPlaceholder}${statusChip}</div>`
+      : '';
     const totalBlock = safe(data.cost.total)
       ? `<div class="vui-headStat"><span class="vui-muted">Итого</span><b>${esc(data.cost.total)}</b></div>`
       : '';
@@ -1180,9 +1405,14 @@ body.vui-lightboxOpen{overflow:hidden;}
     const rewardBlock = safe(data.cost.seller_reward)
       ? `<div class="vui-headStat">${rewardLabelTop}<b>${esc(data.cost.seller_reward)}</b></div>`
       : '';
+    const refundLink = data.actions.refundCreate || data.actions.refundView;
+    const refundIsView = !data.actions.refundCreate && Boolean(data.actions.refundView);
+    const refundLabel = refundIsView ? 'Возвраты' : 'Возврат';
+    const refundConfirm = refundIsView ? 'Открыть список возвратов?' : 'Перейти к оформлению возврата?';
+
     const bottomButtons = [
       data.actions.edit ? `<a class="vui-btn" data-confirm-message="Открыть редактирование заказа?" href="${esc(data.actions.edit)}">Редактировать</a>` : '',
-      data.actions.refund ? `<a class="vui-btn vui-btn--danger" data-confirm-message="Перейти к оформлению возврата?" href="${esc(data.actions.refund)}">Возврат</a>` : '',
+      refundLink ? `<a class="vui-btn vui-btn--danger" data-confirm-message="${esc(refundConfirm)}" href="${esc(refundLink)}">${refundLabel}</a>` : '',
       data.actions.close ? `<a class="vui-btn vui-btn--alert" href="${esc(data.actions.close)}">Закрыть сделку</a>` : '',
     ].filter(Boolean).join('');
 
@@ -1198,9 +1428,22 @@ body.vui-lightboxOpen{overflow:hidden;}
 
     const wrap = document.createElement('div');
     wrap.className = 'vui-wrap';
-    const categoryLine = safe(data.product.category)
-      ? `<div class="vui-line"><span>${data.product.link_category ? `<a class="vui-linkAction" href="${esc(data.product.link_category)}">Категория</a>` : 'Категория'}</span><b>${esc(data.product.category)}</b></div>`
-      : '';
+    const hasCategory = !isEmptyVal(data.product.category);
+    const categoryLabelMarkup = data.product.link_category
+      ? `<a class="vui-linkAction" data-product-category-anchor href="${esc(data.product.link_category)}">Категория</a>`
+      : 'Категория';
+    const categoryLine = `
+      <div class="vui-line" data-product-category style="${hasCategory ? '' : 'display:none;'}">
+        <span data-product-category-label>${categoryLabelMarkup}</span>
+        <b data-product-category-value>${hasCategory ? esc(data.product.category) : ''}</b>
+      </div>`;
+
+    const hasCreated = !isEmptyVal(data.product.created_at);
+    const createdLine = `
+      <div class="vui-line" data-product-created style="${hasCreated ? '' : 'display:none;'}">
+        <span>Создан</span>
+        <b data-product-created-value>${hasCreated ? esc(data.product.created_at) : ''}</b>
+      </div>`;
 
     const productDescriptionBlock = data.product.link_admin
       ? `<div class="vui-productDescription" data-product-description>
@@ -1219,11 +1462,10 @@ body.vui-lightboxOpen{overflow:hidden;}
       : '';
 
     const productTitleValue = safe(data.product.title);
-    const productTitleMarkup = productTitleValue
-      ? (data.product.link_admin
-        ? `<a class="vui-productTitle" data-product-title data-public-link="${esc(data.product.link_public || '')}" href="${esc(data.product.link_admin)}" title="Клик — открыть товар, Alt+клик — на GGSel">${esc(productTitleValue)}</a>`
-        : esc(productTitleValue))
-      : 'Товар';
+    const productTitleText = productTitleValue || 'Товар';
+    const productTitleMarkup = data.product.link_admin
+      ? `<a class="vui-productTitle" data-product-title data-public-link="${esc(data.product.link_public || '')}" href="${esc(data.product.link_admin)}" title="Клик — открыть товар, Alt+клик — на GGSel">${esc(productTitleText)}</a>`
+      : `<span class="vui-productTitleText" data-product-title-text>${esc(productTitleText)}</span>`;
 
     const orderUuidAttr = orderUuidValue ? ` data-uuid="${esc(orderUuidValue)}"` : '';
     const orderTitleMarkup = orderNumberValue
@@ -1269,6 +1511,7 @@ body.vui-lightboxOpen{overflow:hidden;}
             </header>
             <div class="vui-card__body">
               ${categoryLine}
+              ${createdLine}
               ${safe(data.product.delivery_type) ? `<div class="vui-line"><span>Тип выдачи</span><b>${data.product.delivery_type}</b></div>` : ''}
               ${issuedItemBlock}
               ${Array.isArray(data.product.options) && data.product.options.length ? `
@@ -1462,6 +1705,7 @@ body.vui-lightboxOpen{overflow:hidden;}
       loadProfileSections(data, wrap);
       loadChatSection(data, wrap);
       loadProductSection(data, wrap);
+      loadRefundSummary(data, wrap);
       log('Overlay ready (namespaced styles).');
     } catch (error) {
       console.error('[VIBE-UI] Failed to initialize overlay', error);
