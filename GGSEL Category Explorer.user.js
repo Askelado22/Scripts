@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
 // @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.16
-// @match        https://back-office.staging.ggsel.com/admin/categories*
+// @version      1.3.0
+// @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      back-office.staging.ggsel.com
@@ -36,6 +36,36 @@
     const POPOVER_HIDE_DELAY_MS = 220;
     const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
+    const CSRF_TOKEN_TTL_MS = 15 * 60 * 1000;
+    const ADMIN_ORIGIN = 'https://back-office.staging.ggsel.com';
+    const ADMIN_HOST = (() => {
+        try {
+            return new URL(ADMIN_ORIGIN).host;
+        } catch (err) {
+            console.warn(LOG_PREFIX, 'Не удалось определить хост админки', { error: err && err.message });
+            return 'back-office.staging.ggsel.com';
+        }
+    })();
+    const isAdminContext = typeof location !== 'undefined' && location.host === ADMIN_HOST;
+
+    const normalizeAdminUrl = (rawUrl) => {
+        if (!rawUrl) {
+            return ADMIN_ORIGIN;
+        }
+        try {
+            if (rawUrl instanceof URL) {
+                return rawUrl.toString();
+            }
+            const asString = String(rawUrl);
+            if (/^https?:/i.test(asString)) {
+                return asString;
+            }
+            return new URL(asString, ADMIN_ORIGIN).toString();
+        } catch (err) {
+            console.warn(LOG_PREFIX, 'normalizeAdminUrl: не удалось нормализовать URL', { rawUrl, error: err && err.message });
+            return ADMIN_ORIGIN;
+        }
+    };
 
     // --- Вспомогательные функции ---
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -133,6 +163,37 @@
             parts.shift();
         }
         return parts.length >= 2 ? parts : null;
+    };
+
+    const normalizeHeaders = (headersInit) => {
+        const normalized = {};
+        if (!headersInit) return normalized;
+        try {
+            if (typeof Headers !== 'undefined' && headersInit instanceof Headers) {
+                headersInit.forEach((value, key) => {
+                    if (key) normalized[key] = String(value);
+                });
+                return normalized;
+            }
+        } catch (err) {
+            console.warn(LOG_PREFIX, 'normalizeHeaders: Headers обработчик завершился ошибкой', { error: err && err.message });
+        }
+        if (Array.isArray(headersInit)) {
+            for (const entry of headersInit) {
+                if (!entry) continue;
+                const [key, value] = entry;
+                if (!key || value == null) continue;
+                normalized[String(key)] = String(value);
+            }
+            return normalized;
+        }
+        if (typeof headersInit === 'object') {
+            for (const [key, value] of Object.entries(headersInit)) {
+                if (!key || value == null) continue;
+                normalized[String(key)] = String(value);
+            }
+        }
+        return normalized;
     };
 
     const waitFor = (conditionFn, { timeout = WAIT_FOR_TIMEOUT_MS, interval = WAIT_FOR_INTERVAL_MS } = {}) => {
@@ -287,7 +348,8 @@
     class UrlBuilder {
         // Собираем URL с параметрами поиска
         static buildSearchUrl(baseUrl, queryInfo, page = 1) {
-            const url = new URL(baseUrl, location.origin);
+            const normalizedBase = normalizeAdminUrl(baseUrl);
+            const url = new URL(normalizedBase);
             const params = url.searchParams;
             params.set('page', String(page));
             params.set('search[id]', queryInfo.type === 'id' ? queryInfo.value : '');
@@ -307,19 +369,27 @@
 
     // --- Реализация очереди запросов с ограничением параллелизма ---
     class Fetcher {
-        constructor(maxParallel = PARALLEL_REQUESTS) {
+        constructor({ maxParallel = PARALLEL_REQUESTS } = {}) {
             this.maxParallel = maxParallel;
             this.queue = [];
             this.activeCount = 0;
+            this.csrfProvider = null;
+        }
+
+        setCsrfProvider(provider) {
+            this.csrfProvider = provider || null;
         }
 
         // Добавляем задачу в очередь
         enqueue(task) {
             return new Promise((resolve, reject) => {
-                const wrappedTask = () => task().then(resolve, reject).finally(() => {
-                    this.activeCount--;
-                    this._next();
-                });
+                const wrappedTask = () => Promise.resolve()
+                    .then(task)
+                    .then(resolve, reject)
+                    .finally(() => {
+                        this.activeCount--;
+                        this._next();
+                    });
                 this.queue.push(wrappedTask);
                 logger.debug('Постановка запроса в очередь', { active: this.activeCount, queued: this.queue.length });
                 this._next();
@@ -338,7 +408,44 @@
 
         // Выполняем HTTP-запрос с таймаутом и повторами
         fetchText(url, options = {}) {
-            return this.enqueue(() => this._fetchWithRetry(url, options, RETRY_COUNT));
+            const absoluteUrl = normalizeAdminUrl(url);
+            const normalizedOptions = this._normalizeOptions(options);
+            return this.enqueue(async () => {
+                if (normalizedOptions.requireCsrf && !normalizedOptions.skipCsrf && this.csrfProvider) {
+                    try {
+                        const token = await this.csrfProvider.ensureToken({ forceRefresh: normalizedOptions.forceRefreshCsrf });
+                        if (token) {
+                            normalizedOptions.headers['X-CSRF-Token'] = token;
+                            if (!normalizedOptions.headers['X-Requested-With']) {
+                                normalizedOptions.headers['X-Requested-With'] = 'XMLHttpRequest';
+                            }
+                        }
+                    } catch (err) {
+                        logger.warn('Не удалось получить CSRF-токен', { error: err && err.message });
+                    }
+                }
+                try {
+                    return await this._fetchWithRetry(absoluteUrl, normalizedOptions, RETRY_COUNT);
+                } catch (err) {
+                    if (normalizedOptions.requireCsrf && this.csrfProvider && this.csrfProvider.shouldInvalidateOnError(err)) {
+                        this.csrfProvider.invalidate();
+                    }
+                    throw err;
+                }
+            });
+        }
+
+        _normalizeOptions(options) {
+            const normalized = { ...options };
+            normalized.method = (options.method || 'GET').toUpperCase();
+            normalized.headers = normalizeHeaders(options.headers);
+            normalized.body = options.body != null ? options.body : undefined;
+            normalized.requireCsrf = Boolean(options.requireCsrf);
+            normalized.skipCsrf = Boolean(options.skipCsrf);
+            normalized.forceFallback = Boolean(options.forceFallback);
+            normalized.forceRefreshCsrf = Boolean(options.forceRefreshCsrf);
+            normalized.responseType = options.responseType || 'text';
+            return normalized;
         }
 
         async _fetchWithRetry(url, options, retries) {
@@ -357,41 +464,75 @@
         }
 
         _fetchWithTimeout(url, options) {
+            const useNativeFetch = isAdminContext && !options.forceFallback && typeof fetch === 'function';
+            if (!useNativeFetch) {
+                if (typeof GM_xmlhttpRequest === 'function') {
+                    return this._fallbackRequest(url, options);
+                }
+                if (!isAdminContext && typeof fetch !== 'function') {
+                    throw new Error('no-transport');
+                }
+            }
             return new Promise((resolve, reject) => {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     controller.abort();
                     reject(new Error('timeout'));
                 }, REQUEST_TIMEOUT_MS);
-                const requestOptions = { ...options, signal: controller.signal, credentials: 'same-origin' };
-                fetch(url, requestOptions).then(resp => {
-                    clearTimeout(timeoutId);
-                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                    return resp.text();
-                }).then(resolve).catch(err => {
-                    clearTimeout(timeoutId);
-                    if (typeof GM_xmlhttpRequest === 'function') {
-                        logger.warn('Переход на GM_xmlhttpRequest', { url, error: err && err.message });
-                        this._fallbackRequest(url, options).then(resolve).catch(reject);
-                    } else {
-                        logger.error('Запрос не удался', { url, error: err && err.message });
-                        reject(err);
-                    }
-                });
+                const requestOptions = {
+                    method: options.method,
+                    headers: options.headers,
+                    body: options.body,
+                    signal: controller.signal,
+                    credentials: 'include',
+                    mode: 'cors',
+                };
+                fetch(url, requestOptions)
+                    .then((resp) => {
+                        clearTimeout(timeoutId);
+                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                        if (options.responseType === 'json') {
+                            return resp.json();
+                        }
+                        return resp.text();
+                    })
+                    .then(resolve)
+                    .catch((err) => {
+                        clearTimeout(timeoutId);
+                        if (typeof GM_xmlhttpRequest === 'function' && !options.forceFallback) {
+                            logger.warn('Переход на GM_xmlhttpRequest', { url, error: err && err.message });
+                            this._fallbackRequest(url, options).then(resolve).catch(reject);
+                        } else {
+                            logger.error('Запрос не удался', { url, error: err && err.message });
+                            reject(err);
+                        }
+                    });
             });
         }
 
         // Фоллбек через GM_xmlhttpRequest
         _fallbackRequest(url, options) {
+            if (typeof GM_xmlhttpRequest !== 'function') {
+                return Promise.reject(new Error('gm-not-available'));
+            }
+            const headers = { Accept: 'text/html,application/xhtml+xml,application/json', ...options.headers };
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: options.method || 'GET',
                     url,
-                    headers: options.headers || {},
+                    headers,
                     data: options.body,
                     timeout: REQUEST_TIMEOUT_MS,
                     onload: (response) => {
                         if (response.status >= 200 && response.status < 300) {
+                            if (options.responseType === 'json') {
+                                try {
+                                    resolve(JSON.parse(response.responseText));
+                                } catch (err) {
+                                    reject(err);
+                                }
+                                return;
+                            }
                             resolve(response.responseText);
                         } else {
                             reject(new Error('HTTP ' + response.status));
@@ -407,6 +548,354 @@
     }
 
     const fetcher = new Fetcher();
+
+    class CsrfManager {
+        constructor(fetcherInstance) {
+            this.fetcher = fetcherInstance || null;
+            this.token = null;
+            this.tokenTimestamp = 0;
+            this.refreshPromise = null;
+            this.parser = typeof DOMParser !== 'undefined' ? new DOMParser() : null;
+            this.lastSource = null;
+        }
+
+        ensureToken({ forceRefresh = false } = {}) {
+            const fresh = this.token && (Date.now() - this.tokenTimestamp) < CSRF_TOKEN_TTL_MS;
+            if (fresh && !forceRefresh) {
+                return Promise.resolve(this.token);
+            }
+            if (this.refreshPromise) {
+                return this.refreshPromise;
+            }
+            this.refreshPromise = this._fetchToken()
+                .then((token) => {
+                    this.token = token;
+                    this.tokenTimestamp = Date.now();
+                    return token;
+                })
+                .catch((err) => {
+                    this.invalidate();
+                    throw err;
+                })
+                .finally(() => {
+                    this.refreshPromise = null;
+                });
+            return this.refreshPromise;
+        }
+
+        invalidate() {
+            this.token = null;
+            this.tokenTimestamp = 0;
+            this.lastSource = null;
+        }
+
+        shouldInvalidateOnError(err) {
+            if (!err) return false;
+            const message = err && err.message ? String(err.message) : String(err);
+            return /403|419|csrf|token/i.test(message);
+        }
+
+        async _fetchToken() {
+            const candidates = [
+                '/admin/categories/new',
+                '/admin/categories',
+                '/admin/dashboard',
+                '/admin',
+            ];
+            let lastError = null;
+            for (const path of candidates) {
+                const url = normalizeAdminUrl(path);
+                try {
+                    const html = await this._requestHtml(url);
+                    const token = this._extractToken(html);
+                    if (token) {
+                        logger.info('Получен CSRF-токен', { source: path });
+                        this.lastSource = path;
+                        return token;
+                    }
+                } catch (err) {
+                    lastError = err;
+                    logger.debug('CSRF: не удалось получить токен', { url, error: err && err.message });
+                }
+            }
+            if (lastError) {
+                throw lastError;
+            }
+            throw new Error('csrf-token-not-found');
+        }
+
+        async _requestHtml(url) {
+            if (this.fetcher) {
+                try {
+                    return await this.fetcher.fetchText(url, {
+                        skipCsrf: true,
+                        forceFallback: !isAdminContext,
+                    });
+                } catch (err) {
+                    if (isAdminContext) {
+                        throw err;
+                    }
+                    logger.debug('CSRF: попытка через fetcher не удалась, пробуем прямой запрос', { url, error: err && err.message });
+                }
+            }
+            if (isAdminContext && typeof fetch === 'function') {
+                const resp = await fetch(url, { credentials: 'include' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.text();
+            }
+            if (typeof GM_xmlhttpRequest === 'function') {
+                return new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url,
+                        headers: { Accept: 'text/html,application/xhtml+xml' },
+                        timeout: REQUEST_TIMEOUT_MS,
+                        onload: (response) => {
+                            if (response.status >= 200 && response.status < 300) {
+                                resolve(response.responseText);
+                            } else {
+                                reject(new Error('HTTP ' + response.status));
+                            }
+                        },
+                        onerror: () => reject(new Error('network error')),
+                        ontimeout: () => reject(new Error('timeout')),
+                        anonymous: false,
+                        withCredentials: true,
+                    });
+                });
+            }
+            throw new Error('csrf-no-transport');
+        }
+
+        _extractToken(html) {
+            if (!html) return null;
+            if (this.parser) {
+                try {
+                    const doc = this.parser.parseFromString(html, 'text/html');
+                    const meta = doc.querySelector('meta[name="csrf-token" i]');
+                    if (meta && typeof meta.content === 'string' && meta.content.trim()) {
+                        return meta.content.trim();
+                    }
+                    const input = doc.querySelector('input[name="authenticity_token" i], input[name="_csrf" i], input[name="csrf-token" i]');
+                    if (input && typeof input.value === 'string' && input.value.trim()) {
+                        return input.value.trim();
+                    }
+                } catch (err) {
+                    logger.debug('CSRF: DOMParser не смог распарсить ответ', { error: err && err.message });
+                }
+            }
+            const metaMatch = html.match(/<meta[^>]+name=['"]csrf-token['"][^>]*content=['"]([^'"]+)['"]/i);
+            if (metaMatch && metaMatch[1]) {
+                return metaMatch[1].trim();
+            }
+            const inputMatch = html.match(/<input[^>]+name=['"](?:authenticity_token|_csrf|csrf-token)['"][^>]*value=['"]([^'"]+)['"]/i);
+            if (inputMatch && inputMatch[1]) {
+                return inputMatch[1].trim();
+            }
+            return null;
+        }
+    }
+
+    const csrfManager = new CsrfManager(fetcher);
+    fetcher.setCsrfProvider(csrfManager);
+
+    const Bridge = (() => {
+        const prefix = 'ggsel-explorer:';
+        let panelRef = null;
+        let ready = false;
+        const pending = [];
+
+        const dispatch = (type, detail) => {
+            if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
+            const eventName = `${prefix}${type}`;
+            try {
+                const event = new CustomEvent(eventName, { detail });
+                window.dispatchEvent(event);
+            } catch (err) {
+                logger.warn('Bridge: не удалось отправить событие', { type, error: err && err.message });
+            }
+        };
+
+        const flush = () => {
+            if (!panelRef || !pending.length) return;
+            while (pending.length) {
+                const { fn, resolve, reject } = pending.shift();
+                Promise.resolve()
+                    .then(() => fn(panelRef))
+                    .then(resolve)
+                    .catch(reject);
+            }
+        };
+
+        const withPanel = (fn) => {
+            if (panelRef) {
+                return Promise.resolve().then(() => fn(panelRef));
+            }
+            return new Promise((resolve, reject) => {
+                pending.push({ fn, resolve, reject });
+            });
+        };
+
+        const setPanel = (panel) => {
+            panelRef = panel || null;
+            ready = Boolean(panelRef);
+            if (ready) {
+                flush();
+                dispatch('ready', { adminOrigin: ADMIN_ORIGIN, adminHost: ADMIN_HOST });
+            }
+        };
+
+        const on = (type, handler) => {
+            if (typeof window === 'undefined') return () => {};
+            const eventName = `${prefix}${type}`;
+            const wrapped = (event) => {
+                try {
+                    handler(event.detail, event);
+                } catch (err) {
+                    logger.warn('Bridge: обработчик события завершился ошибкой', { type, error: err && err.message });
+                }
+            };
+            window.addEventListener(eventName, wrapped);
+            return () => window.removeEventListener(eventName, wrapped);
+        };
+
+        const registerCommand = (type, executor) => {
+            if (typeof window === 'undefined') return () => {};
+            const eventName = `${prefix}${type}`;
+            const handler = (event) => {
+                const detail = event.detail || {};
+                withPanel((panel) => executor({ panel, detail, event }))
+                    .catch((err) => {
+                        logger.warn('Bridge: команда завершилась ошибкой', { type, error: err && err.message });
+                    });
+            };
+            window.addEventListener(eventName, handler);
+            return () => window.removeEventListener(eventName, handler);
+        };
+
+        return {
+            dispatch,
+            on,
+            registerCommand,
+            withPanel,
+            setPanel,
+            isReady: () => ready,
+        };
+    })();
+
+    const exposeBridgeApi = () => {
+        if (typeof window === 'undefined') return;
+        const api = {
+            adminOrigin: ADMIN_ORIGIN,
+            adminHost: ADMIN_HOST,
+            isReady: () => Bridge.isReady(),
+            ensureCsrf: (options = {}) => csrfManager.ensureToken({ forceRefresh: Boolean(options && options.forceRefresh) }),
+            fetch: (url, options = {}) => {
+                const requestOptions = { ...options };
+                if (!requestOptions.method) {
+                    requestOptions.method = 'GET';
+                }
+                if (requestOptions.requireCsrf == null && requestOptions.method && requestOptions.method.toUpperCase() !== 'GET') {
+                    requestOptions.requireCsrf = true;
+                }
+                return fetcher.fetchText(url, requestOptions);
+            },
+            search: (query, options = {}) => Bridge.withPanel((panel) => panel.startSearch(query || '', options)),
+            getSelection: () => Bridge.withPanel((panel) => Array.from(panel.selectedIds || [])),
+            collapse: () => Bridge.withPanel((panel) => panel._collapseSearchToFab({ preserveQuery: true })),
+            expand: () => Bridge.withPanel((panel) => panel._setSearchExpanded(true, { focus: true })),
+            on: (type, handler) => Bridge.on(type, handler),
+            emit: (type, detail) => Bridge.dispatch(type, detail),
+        };
+        if (window.GGSELCategoryExplorerBridge) {
+            Object.assign(window.GGSELCategoryExplorerBridge, api);
+        } else {
+            Object.defineProperty(window, 'GGSELCategoryExplorerBridge', {
+                value: api,
+                configurable: true,
+                enumerable: false,
+                writable: false,
+            });
+        }
+    };
+
+    exposeBridgeApi();
+
+    Bridge.registerCommand('search', ({ panel, detail }) => {
+        const query = detail && typeof detail.query !== 'undefined' ? detail.query : '';
+        const options = {
+            preserveSelection: Boolean(detail && detail.preserveSelection),
+            requestId: detail && detail.requestId != null ? detail.requestId : null,
+        };
+        return panel.startSearch(query, options);
+    });
+
+    Bridge.registerCommand('collapse', ({ panel, detail }) => {
+        const preserveQuery = !detail || detail.preserveQuery !== false;
+        panel._collapseSearchToFab({ preserveQuery });
+    });
+
+    Bridge.registerCommand('expand', ({ panel }) => {
+        panel._setSearchExpanded(true, { focus: true });
+    });
+
+    Bridge.registerCommand('ensure-csrf', ({ detail }) => {
+        const requestId = detail && detail.requestId != null ? detail.requestId : null;
+        const responseEvent = detail && detail.responseEvent ? String(detail.responseEvent) : null;
+        return csrfManager.ensureToken({ forceRefresh: Boolean(detail && detail.forceRefresh) }).then((token) => {
+            if (responseEvent) {
+                Bridge.dispatch(responseEvent, { token, requestId });
+            }
+            return token;
+        }).catch((err) => {
+            if (responseEvent) {
+                Bridge.dispatch(responseEvent, {
+                    error: err && err.message ? err.message : String(err),
+                    requestId,
+                });
+            }
+            throw err;
+        });
+    });
+
+    Bridge.registerCommand('fetch', ({ detail }) => {
+        if (!detail || !detail.url) return;
+        const requestId = detail.requestId != null ? detail.requestId : null;
+        const responseEvent = detail.responseEvent ? String(detail.responseEvent) : null;
+        const options = detail.options && typeof detail.options === 'object' ? { ...detail.options } : {};
+        return fetcher.fetchText(detail.url, options).then((payload) => {
+            if (responseEvent) {
+                Bridge.dispatch(responseEvent, { payload, requestId });
+            }
+            return payload;
+        }).catch((err) => {
+            if (responseEvent) {
+                Bridge.dispatch(responseEvent, {
+                    error: err && err.message ? err.message : String(err),
+                    requestId,
+                });
+            }
+            throw err;
+        });
+    });
+
+    Bridge.registerCommand('load-more', ({ panel, detail }) => {
+        if (!SearchState.nextPage) {
+            Bridge.dispatch('search-progress', {
+                requestId: SearchState.bridgeRequestId,
+                mode: 'append',
+                stage: 'idle',
+                hasNext: false,
+            });
+            return;
+        }
+        if (detail && detail.requestId != null) {
+            SearchState.bridgeRequestId = detail.requestId;
+        }
+        SearchState.loading = true;
+        panel.render();
+        return panel._performSearch(true);
+    });
     const domParser = new DOMParser();
 
     // --- Простая LRU-кэш ---
@@ -577,7 +1066,7 @@
                     return !Number.isNaN(num) && num === currentPage + 1;
                 });
                 if (candidates.length) {
-                    nextPage = new URL(candidates[0].getAttribute('href'), location.origin).toString();
+                    nextPage = normalizeAdminUrl(candidates[0].getAttribute('href'));
                     logger.debug('Обнаружена ссылка на следующую страницу', { nextPage });
                 }
             }
@@ -915,6 +1404,35 @@
         return chain.filter(Boolean);
     };
 
+    const mapNodeForBridge = (node) => {
+        if (!node) return null;
+        const segments = getNodePathSegments(node).map(part => collapseSpaces(part)).filter(Boolean);
+        const href = node.href ? normalizeAdminUrl(node.href) : null;
+        const hasChildren = node.childrenLoaded ? node.children.length > 0 : node.hasChildren !== false;
+        const isLeaf = node.childrenLoaded ? node.children.length === 0 : node.hasChildren === false;
+        const percent = node.commissionPercent;
+        const percentValue = percent != null && !Number.isNaN(Number(percent)) ? Number(percent) : null;
+        const autoHours = node.autoFinishHours;
+        const autoHoursValue = autoHours != null && !Number.isNaN(Number(autoHours)) ? Number(autoHours) : null;
+        return {
+            id: node.id,
+            name: node.name,
+            path: segments.join(' › '),
+            segments,
+            status: node.status || null,
+            kind: node.kind || null,
+            digi: node.digi || null,
+            href,
+            parentId: node.parentId || null,
+            hasChildren,
+            isLeaf,
+            commissionPercent: percentValue,
+            commissionRaw: node.commissionRaw != null ? String(node.commissionRaw) : null,
+            autoFinishHours: autoHoursValue,
+            autoFinishRaw: node.autoFinishRaw != null ? String(node.autoFinishRaw) : null,
+        };
+    };
+
     const updateNodePathFromParent = (node, parentNode) => {
         const parentPath = getNodePathSegments(parentNode);
         const newPath = parentPath.concat(node.name).filter(Boolean);
@@ -994,6 +1512,7 @@
         pageCount: 0,
         loading: false,
         error: null,
+        bridgeRequestId: null,
     };
 
     function reorderSiblingsForNode(node) {
@@ -1738,6 +2257,7 @@
 
         const ui = new UIPanel(shadow, panel, input, resultsEl, selectionActionsEl, copyDigiBtn, copyPathsBtn, toastStackEl, searchControlEl, searchToggleEl);
         ui.init();
+        Bridge.setPanel(ui);
     }
 
     // --- Управление UI ---
@@ -2704,8 +3224,9 @@
             }
         }
 
-        startSearch(query, { preserveSelection = false } = {}) {
+        startSearch(query, { preserveSelection = false, requestId = null } = {}) {
             const info = QueryParser.parse(query);
+            SearchState.bridgeRequestId = requestId;
             if (info.type === 'empty') {
                 SearchState.queryInfo = null;
                 SearchState.results = [];
@@ -2713,6 +3234,12 @@
                 SearchState.pageCount = 0;
                 SearchState.loading = false;
                 SearchState.error = null;
+                Bridge.dispatch('search-reset', {
+                    requestId,
+                    query: '',
+                    results: [],
+                    total: 0,
+                });
                 nodesMap.clear();
                 if (!preserveSelection) {
                     this._clearSelection();
@@ -2730,6 +3257,12 @@
             SearchState.loading = true;
             SearchState.error = null;
             nodesMap.clear();
+            Bridge.dispatch('search-start', {
+                requestId,
+                query: info.value,
+                type: info.type,
+                raw: query,
+            });
             if (!preserveSelection) {
                 this._clearSelection();
                 this.lastFocusedId = null;
@@ -2752,6 +3285,12 @@
             let nextPageUrl = null;
 
             logger.info('Запуск поиска страниц', { loadMore, startUrl: url, alreadyFetched: SearchState.pageCount });
+
+            Bridge.dispatch('search-progress', {
+                requestId: SearchState.bridgeRequestId,
+                mode: loadMore ? 'append' : 'initial',
+                stage: 'loading',
+            });
 
             try {
                 while (url && pagesFetched < maxPages) {
@@ -2789,6 +3328,22 @@
                     nextPage: SearchState.nextPage,
                     pagesFetched,
                 });
+                const payload = SearchState.results.map(mapNodeForBridge).filter(Boolean);
+                Bridge.dispatch('search-complete', {
+                    requestId: SearchState.bridgeRequestId,
+                    mode: loadMore ? 'append' : 'initial',
+                    total: SearchState.results.length,
+                    pageCount: SearchState.pageCount,
+                    hasNext: Boolean(SearchState.nextPage),
+                    query: SearchState.queryInfo,
+                    results: payload,
+                });
+                Bridge.dispatch('search-progress', {
+                    requestId: SearchState.bridgeRequestId,
+                    mode: loadMore ? 'append' : 'initial',
+                    stage: 'done',
+                    hasNext: Boolean(SearchState.nextPage),
+                });
                 if (!SearchState.results.length) {
                     logger.warn('Поиск не дал результатов', { query: SearchState.queryInfo, pagesFetched: SearchState.pageCount });
                 }
@@ -2798,6 +3353,17 @@
                 SearchState.loading = false;
                 this.render();
                 this._schedulePersist();
+                Bridge.dispatch('search-error', {
+                    requestId: SearchState.bridgeRequestId,
+                    error: err && err.message ? err.message : 'Не удалось загрузить результаты',
+                    mode: loadMore ? 'append' : 'initial',
+                });
+                Bridge.dispatch('search-progress', {
+                    requestId: SearchState.bridgeRequestId,
+                    mode: loadMore ? 'append' : 'initial',
+                    stage: 'error',
+                    hasNext: Boolean(SearchState.nextPage),
+                });
             }
         }
 
@@ -2890,7 +3456,7 @@
             } else {
                 row.classList.add('CATologies-type-category');
             }
-            const nodeHref = new URL(node.href, location.origin).toString();
+            const nodeHref = normalizeAdminUrl(node.href);
             row.dataset.href = nodeHref;
             const pathTitle = this._buildPathForNode(node);
             row.title = pathTitle;
@@ -3068,6 +3634,7 @@
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
             this._schedulePersist();
+            this._emitSelectionChange();
         }
 
         _selectRange(node, row) {
@@ -3101,6 +3668,7 @@
             this.lastFocusedId = node.id;
             this._updateSelectionUI();
             this._schedulePersist();
+            this._emitSelectionChange();
         }
 
         _clearSelection() {
@@ -3111,6 +3679,7 @@
             }
             this._updateSelectionUI();
             this._schedulePersist();
+            this._emitSelectionChange();
         }
 
         _updateSelectionUI() {
@@ -3124,6 +3693,16 @@
                 }
             }
             this._updatePanelLayout();
+        }
+
+        _emitSelectionChange() {
+            const ids = Array.from(this.selectedIds);
+            const nodes = ids.map(id => nodesMap.get(id)).map(mapNodeForBridge).filter(Boolean);
+            Bridge.dispatch('selection-change', {
+                ids,
+                count: ids.length,
+                nodes,
+            });
         }
 
         async _copySelectedDigis() {
@@ -3667,6 +4246,12 @@
     }
 
     // --- Запуск ---
-    initPanel();
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => initPanel(), { once: true });
+        } else {
+            initPanel();
+        }
+    }
 })();
 
