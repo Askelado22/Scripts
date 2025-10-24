@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.3
-// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: добавлен разбор типа возврата и уточнённый сбор данных товара.
+// @version      1.1.4
+// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: ссылка на тип возврата в сводке ведёт к детальной карточке возврата.
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
@@ -1331,7 +1331,12 @@ body.vui-lightboxOpen{overflow:hidden;}
 
         const refundType = entry.detail?.refundType ? entry.detail.refundType.trim() : '';
         if (refundType) {
-          parts.push(`<span class="vui-refundInfo__part">${esc(`Тип: ${refundType}`)}</span>`);
+          const refundTypeLink = entry.detail?.href || entry.detail?.url || '';
+          const refundTypeLabel = `Тип: ${refundType}`;
+          const refundTypeMarkup = refundTypeLink
+            ? `<a class="vui-linkAction" href="${esc(refundTypeLink)}">${esc(refundTypeLabel)}</a>`
+            : esc(refundTypeLabel);
+          parts.push(`<span class="vui-refundInfo__part">${refundTypeMarkup}</span>`);
         }
 
         const statusLabel = entry.status ? entry.status.trim() : '';
