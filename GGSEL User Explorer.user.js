@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL User Explorer
-// @description  Быстрый поиск и просмотр данных пользователей в админке GGSEL
-// @version      1.3.0
+// @description  Плавающая панель быстрого поиска пользователей и заказов GGSEL с умными фильтрами, кешированием и контекстными действиями. Последние изменения: автосворачивание после открытия заказа, сохранение выдачи между страницами и новые настройки.
+// @version      1.4.0
 // @match        https://back-office.ggsel.net/admin
 // @match        https://back-office.ggsel.net/admin/*
 // @grant        GM_addStyle
@@ -14,6 +14,7 @@
     const STORAGE_MODE_KEY = 'ggsel-user-explorer:last-mode';
     const PANEL_STATE_KEY = 'ggsel-user-explorer:panel-open';
     const SETTINGS_KEY = 'ggsel-user-explorer:settings';
+    const RESULTS_CACHE_KEY = 'ggsel-user-explorer:last-results';
     const ANCHOR_POSITION_KEY = 'ggsel-user-explorer:anchor-position';
     const DEBOUNCE_MS = 600;
     const FAB_SIZE = 56;
@@ -30,6 +31,8 @@
     const ORDERS_MODE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M14.5 3a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5zm-13-1A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2z"/><path d="M7 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m-1.496-.854a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708l.146.147 1.146-1.147a.5.5 0 0 1 .708 0M7 9.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m-1.496-.854a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0l-.5-.5a.5.5 0 1 1 .708-.708l.146.147 1.146-1.147a.5.5 0 0 1 .708 0"/></svg>';
     const HISTORY_KEY = 'ggsel-user-explorer:history';
     const HISTORY_LIMIT = 5;
+    const POSITION_RATIO_MIN = 0;
+    const POSITION_RATIO_MAX = 1;
 
     const DEFAULT_SHORTCUT = Object.freeze({
         ctrl: true,
@@ -254,6 +257,8 @@
 
     const getDefaultSettings = () => ({
         extraActions: false,
+        autoCollapseOrders: true,
+        parallelIdSearch: true,
         shortcut: cloneShortcut(DEFAULT_SHORTCUT),
         userFields: normalizeUserFieldSettings(),
         orderFields: normalizeOrderFieldSettings()
@@ -273,6 +278,7 @@
         offerCache: new Map(),
         searchPlan: null,
         settings: getDefaultSettings(),
+        pendingCachedResults: null,
         anchorPosition: null,
         anchorPositionManual: false,
         anchorDragActive: false,
@@ -389,10 +395,23 @@
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return null;
-            const left = Number(parsed.left);
-            const top = Number(parsed.top);
-            if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
-            return { left, top };
+            const result = {};
+            if (Number.isFinite(Number(parsed.left))) {
+                result.left = Number(parsed.left);
+            }
+            if (Number.isFinite(Number(parsed.top))) {
+                result.top = Number(parsed.top);
+            }
+            if (Number.isFinite(Number(parsed.leftRatio))) {
+                result.leftRatio = Math.min(Math.max(Number(parsed.leftRatio), POSITION_RATIO_MIN), POSITION_RATIO_MAX);
+            }
+            if (Number.isFinite(Number(parsed.topRatio))) {
+                result.topRatio = Math.min(Math.max(Number(parsed.topRatio), POSITION_RATIO_MIN), POSITION_RATIO_MAX);
+            }
+            if (!Object.keys(result).length) {
+                return null;
+            }
+            return result;
         } catch (error) {
             console.warn('[GGSEL User Explorer] Не удалось загрузить позицию', error);
             return null;
@@ -402,24 +421,51 @@
     const savePosition = (key, position) => {
         if (!position || typeof position !== 'object') return;
         try {
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            const anchorRect = state.anchor?.getBoundingClientRect();
+            const width = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.width || FAB_SIZE)) : FAB_SIZE;
+            const height = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.height || FAB_SIZE)) : FAB_SIZE;
+            const availableWidth = Math.max(0, viewportWidth - width);
+            const availableHeight = Math.max(0, viewportHeight - height);
+            const left = Math.min(Math.max(Number(position.left), 0), availableWidth);
+            const top = Math.min(Math.max(Number(position.top), 0), availableHeight);
+            const leftRatio = availableWidth > 0
+                ? Math.min(Math.max(left / availableWidth, POSITION_RATIO_MIN), POSITION_RATIO_MAX)
+                : 0;
+            const topRatio = availableHeight > 0
+                ? Math.min(Math.max(top / availableHeight, POSITION_RATIO_MIN), POSITION_RATIO_MAX)
+                : 0;
             localStorage.setItem(key, JSON.stringify({
-                left: Math.round(position.left),
-                top: Math.round(position.top)
+                left: Math.round(left),
+                top: Math.round(top),
+                leftRatio,
+                topRatio
             }));
         } catch (error) {
             console.warn('[GGSEL User Explorer] Не удалось сохранить позицию', error);
         }
     };
 
+    const getAnchorDimensions = () => {
+        const rect = state.anchor?.getBoundingClientRect();
+        return {
+            width: rect ? Math.max(FAB_SIZE, Math.round(rect.width || FAB_SIZE)) : FAB_SIZE,
+            height: rect ? Math.max(FAB_SIZE, Math.round(rect.height || FAB_SIZE)) : FAB_SIZE
+        };
+    };
+
     const clampPositionToViewport = (position) => {
         if (!position) return position;
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        const anchorRect = state.anchor?.getBoundingClientRect();
-        const width = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.width || FAB_SIZE)) : FAB_SIZE;
-        const height = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.height || FAB_SIZE)) : FAB_SIZE;
+        const { width, height } = getAnchorDimensions();
         const maxLeft = Math.max(0, Math.round(viewportWidth - width));
         const maxTop = Math.max(0, Math.round(viewportHeight - height));
+        const availableWidth = maxLeft;
+        const availableHeight = maxTop;
+        const resolveRatio = (value) => Math.min(Math.max(value, POSITION_RATIO_MIN), POSITION_RATIO_MAX);
+
         const applyMargin = (value, size, viewport) => {
             if (viewport <= size + VIEWPORT_MARGIN * 2) {
                 return Math.min(Math.max(value, 0), Math.max(0, viewport - size));
@@ -432,8 +478,25 @@
             return Math.min(Math.max(value, min), max);
         };
 
-        let left = Math.min(Math.max(Math.round(position.left), 0), maxLeft);
-        let top = Math.min(Math.max(Math.round(position.top), 0), maxTop);
+        let left = Number(position.left);
+        let top = Number(position.top);
+
+        if (!Number.isFinite(left) && Number.isFinite(Number(position.leftRatio))) {
+            left = Math.round(resolveRatio(Number(position.leftRatio)) * availableWidth);
+        }
+        if (!Number.isFinite(top) && Number.isFinite(Number(position.topRatio))) {
+            top = Math.round(resolveRatio(Number(position.topRatio)) * availableHeight);
+        }
+
+        if (!Number.isFinite(left)) {
+            left = maxLeft > 0 ? Math.round(maxLeft / 2) : 0;
+        }
+        if (!Number.isFinite(top)) {
+            top = maxTop > 0 ? Math.round(maxTop / 2) : 0;
+        }
+
+        left = Math.min(Math.max(Math.round(left), 0), maxLeft);
+        top = Math.min(Math.max(Math.round(top), 0), maxTop);
 
         left = applyMargin(left, width, viewportWidth);
         top = applyMargin(top, height, viewportHeight);
@@ -461,7 +524,14 @@
             top = Math.min(Math.max(top, minTop), maxTopPanel);
         }
 
-        return { left, top };
+        const leftRatio = availableWidth > 0
+            ? Math.min(Math.max(left / availableWidth, POSITION_RATIO_MIN), POSITION_RATIO_MAX)
+            : 0;
+        const topRatio = availableHeight > 0
+            ? Math.min(Math.max(top / availableHeight, POSITION_RATIO_MIN), POSITION_RATIO_MAX)
+            : 0;
+
+        return { left, top, leftRatio, topRatio };
     };
 
     const applyAnchorPositionStyles = (position) => {
@@ -747,8 +817,15 @@
             }
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
+                const defaults = getDefaultSettings();
                 state.settings = {
                     extraActions: Boolean(parsed.extraActions),
+                    autoCollapseOrders: Object.prototype.hasOwnProperty.call(parsed, 'autoCollapseOrders')
+                        ? Boolean(parsed.autoCollapseOrders)
+                        : defaults.autoCollapseOrders,
+                    parallelIdSearch: Object.prototype.hasOwnProperty.call(parsed, 'parallelIdSearch')
+                        ? Boolean(parsed.parallelIdSearch)
+                        : defaults.parallelIdSearch,
                     shortcut: normalizeShortcut(parsed.shortcut),
                     userFields: normalizeUserFieldSettings(parsed.userFields),
                     orderFields: normalizeOrderFieldSettings(parsed.orderFields)
@@ -764,6 +841,8 @@
         try {
             localStorage.setItem(SETTINGS_KEY, JSON.stringify({
                 extraActions: Boolean(state.settings?.extraActions),
+                autoCollapseOrders: Boolean(state.settings?.autoCollapseOrders),
+                parallelIdSearch: Boolean(state.settings?.parallelIdSearch),
                 shortcut: normalizeShortcut(state.settings?.shortcut),
                 userFields: normalizeUserFieldSettings(state.settings?.userFields),
                 orderFields: normalizeOrderFieldSettings(state.settings?.orderFields)
@@ -817,6 +896,149 @@
         if (state.historyVisible) {
             renderHistoryPopover();
         }
+    };
+
+    const serializeResultItem = (item, mode) => {
+        if (!item || typeof item !== 'object') {
+            return null;
+        }
+        const copy = {};
+        Object.keys(item).forEach((key) => {
+            const value = item[key];
+            if (typeof value === 'function') {
+                return;
+            }
+            if (key === 'matchTags') {
+                if (value instanceof Set) {
+                    copy.matchTags = Array.from(value);
+                } else if (Array.isArray(value)) {
+                    copy.matchTags = [...value];
+                }
+                return;
+            }
+            copy[key] = value;
+        });
+        copy.mode = mode;
+        return copy;
+    };
+
+    const deserializeResultsFromCache = (items, mode) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+        return items.map((raw) => {
+            const item = { ...raw };
+            if (Array.isArray(item.matchTags)) {
+                item.matchTags = new Set(item.matchTags);
+            }
+            normalizeMatchMetadata(item, mode);
+            return item;
+        });
+    };
+
+    const clearResultsCache = () => {
+        try {
+            localStorage.removeItem(RESULTS_CACHE_KEY);
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось очистить кеш результатов', error);
+        }
+    };
+
+    const saveResultsCacheState = () => {
+        if (!state.query) {
+            clearResultsCache();
+            return;
+        }
+        const mode = state.mode === MODE_ORDERS ? MODE_ORDERS : MODE_USERS;
+        const serialized = (Array.isArray(state.results) ? state.results : [])
+            .map((item) => serializeResultItem(item, mode))
+            .filter(Boolean);
+        const payload = {
+            mode,
+            query: state.query,
+            page: state.page || 1,
+            hasMore: Boolean(state.hasMore),
+            params: state.params || null,
+            timestamp: Date.now(),
+            results: serialized
+        };
+        try {
+            localStorage.setItem(RESULTS_CACHE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось сохранить кеш результатов', error);
+        }
+    };
+
+    const loadResultsCacheState = () => {
+        state.pendingCachedResults = null;
+        try {
+            const raw = localStorage.getItem(RESULTS_CACHE_KEY);
+            if (!raw) {
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') {
+                return;
+            }
+            const cachedMode = parsed.mode === MODE_ORDERS ? MODE_ORDERS : MODE_USERS;
+            const cachedQuery = collapseSpaces(parsed.query || '');
+            if (!cachedQuery) {
+                return;
+            }
+            if (cachedQuery !== collapseSpaces(state.query || '')) {
+                return;
+            }
+            const results = deserializeResultsFromCache(parsed.results, cachedMode);
+            state.pendingCachedResults = {
+                mode: cachedMode,
+                query: cachedQuery,
+                page: Number.isFinite(Number(parsed.page)) ? Number(parsed.page) : 1,
+                hasMore: Boolean(parsed.hasMore),
+                params: parsed.params && typeof parsed.params === 'object' ? parsed.params : null,
+                results
+            };
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось загрузить кеш результатов', error);
+            state.pendingCachedResults = null;
+        }
+    };
+
+    const applyPendingCachedResultsIfPossible = () => {
+        const cached = state.pendingCachedResults;
+        if (!cached) {
+            return false;
+        }
+        const mode = state.mode === MODE_ORDERS ? MODE_ORDERS : MODE_USERS;
+        const query = collapseSpaces(state.query || '');
+        if (mode !== cached.mode || query !== collapseSpaces(cached.query || '')) {
+            return false;
+        }
+        const results = Array.isArray(cached.results) ? cached.results : [];
+        state.results = results.slice();
+        state.page = cached.page || 1;
+        state.hasMore = Boolean(cached.hasMore);
+        if (cached.params && typeof cached.params === 'object') {
+            state.params = { ...getDefaultParams(mode), ...cached.params };
+        }
+        updateResults(state.results, false);
+        if (state.loadMoreButton) {
+            state.loadMoreButton.hidden = !state.hasMore;
+            state.loadMoreButton.disabled = !state.hasMore;
+        }
+        updateResultsVisibility();
+        if (results.length) {
+            if (mode === MODE_USERS) {
+                prefetchUserDetails(results).catch((error) => {
+                    console.warn('[GGSEL User Explorer] Не удалось предзагрузить пользователей из кеша', error);
+                });
+            } else {
+                prefetchOrderOffers(results).catch((error) => {
+                    console.warn('[GGSEL User Explorer] Не удалось предзагрузить заказы из кеша', error);
+                });
+            }
+        }
+        state.pendingCachedResults = null;
+        return true;
     };
 
     const renderHistoryPopover = () => {
@@ -1104,30 +1326,52 @@
             const options = document.createElement('div');
             options.className = 'ggsel-user-window__options';
 
-            const label = document.createElement('label');
-            label.className = 'ggsel-user-window__option';
+            const createToggleOption = ({ key, title, description }) => {
+                const option = document.createElement('label');
+                option.className = 'ggsel-user-window__option';
 
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.name = 'extraActions';
+                const inputEl = document.createElement('input');
+                inputEl.type = 'checkbox';
+                inputEl.name = key;
 
-            const textWrap = document.createElement('div');
-            textWrap.className = 'ggsel-user-window__option-label';
+                const textWrap = document.createElement('div');
+                textWrap.className = 'ggsel-user-window__option-label';
 
-            const title = document.createElement('span');
-            title.className = 'ggsel-user-window__option-title';
-            title.textContent = 'Доп. действия в контекстное меню';
+                const titleEl = document.createElement('span');
+                titleEl.className = 'ggsel-user-window__option-title';
+                titleEl.textContent = title;
 
-            const desc = document.createElement('span');
-            desc.className = 'ggsel-user-window__option-desc';
-            desc.textContent = 'Показывать дополнительные действия из карточки пользователя.';
+                const descEl = document.createElement('span');
+                descEl.className = 'ggsel-user-window__option-desc';
+                descEl.textContent = description;
 
-            textWrap.appendChild(title);
-            textWrap.appendChild(desc);
+                textWrap.appendChild(titleEl);
+                textWrap.appendChild(descEl);
 
-            label.appendChild(checkbox);
-            label.appendChild(textWrap);
-            options.appendChild(label);
+                option.appendChild(inputEl);
+                option.appendChild(textWrap);
+                options.appendChild(option);
+
+                return { option, inputEl };
+            };
+
+            const extraActionsToggle = createToggleOption({
+                key: 'extraActions',
+                title: 'Доп. действия в контекстное меню',
+                description: 'Показывать дополнительные действия из карточки пользователя.'
+            });
+
+            const autoCollapseToggle = createToggleOption({
+                key: 'autoCollapseOrders',
+                title: 'Сворачивать окно после открытия заказа',
+                description: 'Автоматически прятать панель в FAB при переходе к заказу в текущей вкладке.'
+            });
+
+            const parallelToggle = createToggleOption({
+                key: 'parallelIdSearch',
+                title: 'Параллельный поиск по ID заказа и пользователя',
+                description: 'Одновременно искать по номеру заказа, ID продавца и покупателя.'
+            });
 
             const fieldsContainer = document.createElement('div');
             fieldsContainer.className = 'ggsel-user-window__field-groups';
@@ -1258,15 +1502,27 @@
             options.appendChild(shortcutWrap);
             win.content.appendChild(options);
 
-            checkbox.addEventListener('change', () => {
-                state.settings.extraActions = checkbox.checked;
+            extraActionsToggle.inputEl.addEventListener('change', () => {
+                state.settings.extraActions = extraActionsToggle.inputEl.checked;
                 saveSettings();
                 closeContextMenu();
             });
 
+            autoCollapseToggle.inputEl.addEventListener('change', () => {
+                state.settings.autoCollapseOrders = autoCollapseToggle.inputEl.checked;
+                saveSettings();
+            });
+
+            parallelToggle.inputEl.addEventListener('change', () => {
+                state.settings.parallelIdSearch = parallelToggle.inputEl.checked;
+                saveSettings();
+            });
+
             win.initialized = true;
             win.controls = {
-                checkbox,
+                extraActions: extraActionsToggle.inputEl,
+                autoCollapse: autoCollapseToggle.inputEl,
+                parallelSearch: parallelToggle.inputEl,
                 shortcutDisplay,
                 shortcutAssign: assignBtn,
                 shortcutReset: resetBtn,
@@ -1274,8 +1530,14 @@
             };
         }
 
-        if (win.controls?.checkbox) {
-            win.controls.checkbox.checked = Boolean(state.settings.extraActions);
+        if (win.controls?.extraActions) {
+            win.controls.extraActions.checked = Boolean(state.settings.extraActions);
+        }
+        if (win.controls?.autoCollapse) {
+            win.controls.autoCollapse.checked = Boolean(state.settings.autoCollapseOrders);
+        }
+        if (win.controls?.parallelSearch) {
+            win.controls.parallelSearch.checked = state.settings.parallelIdSearch !== false;
         }
 
         if (win.controls?.fieldCheckboxes) {
@@ -2080,11 +2342,30 @@
                 border-color: rgba(188, 235, 255, 0.95);
             }
             .ggsel-user-card.order-match-email {
-                border-color: rgba(142, 214, 255, 0.82);
-                box-shadow: 0 0 0 1px rgba(142, 214, 255, 0.28), 0 10px 28px rgba(0, 0, 0, 0.32);
+                border-color: rgba(118, 206, 255, 0.82);
+                box-shadow: 0 0 0 1px rgba(118, 206, 255, 0.28), 0 10px 28px rgba(0, 0, 0, 0.32);
             }
             .ggsel-user-card.order-match-email:hover {
-                border-color: rgba(162, 224, 255, 0.95);
+                border-color: rgba(148, 216, 255, 0.95);
+            }
+            .ggsel-user-card.order-match-seller::before {
+                border-color: rgba(190, 162, 255, 0.7);
+                box-shadow: 0 0 18px rgba(190, 162, 255, 0.28);
+                opacity: 1;
+            }
+            .ggsel-user-card.order-match-seller {
+                border-color: rgba(190, 162, 255, 0.85);
+                box-shadow: 0 0 0 1px rgba(190, 162, 255, 0.32), 0 10px 28px rgba(0, 0, 0, 0.32);
+            }
+            .ggsel-user-card.order-match-seller:hover {
+                border-color: rgba(210, 182, 255, 0.95);
+            }
+            .ggsel-user-card.order-match-user {
+                border-color: rgba(255, 190, 122, 0.85);
+                box-shadow: 0 0 0 1px rgba(255, 190, 122, 0.32), 0 10px 28px rgba(0, 0, 0, 0.3);
+            }
+            .ggsel-user-card.order-match-user:hover {
+                border-color: rgba(255, 206, 148, 0.95);
             }
             .ggsel-order-card {
                 cursor: pointer;
@@ -2135,6 +2416,33 @@
                 text-transform: uppercase;
                 max-width: 100%;
                 align-self: flex-start;
+            }
+            .ggsel-order-card-badge--order-id {
+                border-color: rgba(240, 240, 240, 0.8);
+                background: rgba(240, 240, 240, 0.16);
+                color: #f4f4f4;
+            }
+            .ggsel-order-card-badge--order-uuid {
+                border-color: rgba(168, 225, 255, 0.82);
+                background: rgba(168, 225, 255, 0.2);
+                color: #d2f1ff;
+            }
+            .ggsel-order-card-badge--order-email {
+                border-color: rgba(118, 206, 255, 0.8);
+                background: rgba(118, 206, 255, 0.18);
+                color: #c9ecff;
+            }
+            .ggsel-order-card-badge--seller-id,
+            .ggsel-order-card-badge--order-seller {
+                border-color: rgba(190, 162, 255, 0.82);
+                background: rgba(190, 162, 255, 0.2);
+                color: #ede1ff;
+            }
+            .ggsel-order-card-badge--user-id,
+            .ggsel-order-card-badge--order-username {
+                border-color: rgba(255, 190, 122, 0.82);
+                background: rgba(255, 190, 122, 0.18);
+                color: #ffe6c9;
             }
             .ggsel-order-card-id {
                 font-size: 13px;
@@ -2675,6 +2983,19 @@
             const userParams = { ...ORDER_DEFAULT_PARAMS, 'search[user_id]': digitsCandidate };
             params = orderParams;
             summary.push(`id: ${digitsCandidate}`);
+            const parallelEnabled = state.settings?.parallelIdSearch !== false;
+            if (!parallelEnabled) {
+                return {
+                    params,
+                    summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
+                    plan: {
+                        type: 'single',
+                        queries: [
+                            { key: 'order-id', params: orderParams, highlight: 'order-id', label: `ID заказа: ${digitsCandidate}` }
+                        ]
+                    }
+                };
+            }
             const queries = [
                 { key: 'order-id', params: orderParams, highlight: 'order-id', label: `ID заказа: ${digitsCandidate}` },
                 { key: 'seller-id', params: sellerParams, highlight: 'seller-id', label: `ID продавца: ${digitsCandidate}` },
@@ -2883,8 +3204,13 @@
         updateResultsVisibility();
 
         if (state.query) {
-            performSearch({ append: false });
+            const usedCache = applyPendingCachedResultsIfPossible();
+            if (!usedCache) {
+                performSearch({ append: false });
+            }
         } else {
+            state.pendingCachedResults = null;
+            clearResultsCache();
             if (state.loadMoreButton) {
                 state.loadMoreButton.hidden = true;
                 state.loadMoreButton.disabled = true;
@@ -3583,11 +3909,24 @@
             ['user-id', 'Совпадение ID пользователя'],
             ['order-username', 'Совпадение покупателя']
         ];
+        const badgeClassMap = {
+            'order-id': 'ggsel-order-card-badge--order-id',
+            'order-uuid': 'ggsel-order-card-badge--order-uuid',
+            'order-email': 'ggsel-order-card-badge--order-email',
+            'seller-id': 'ggsel-order-card-badge--seller-id',
+            'order-seller': 'ggsel-order-card-badge--order-seller',
+            'user-id': 'ggsel-order-card-badge--user-id',
+            'order-username': 'ggsel-order-card-badge--order-username'
+        };
         const badgeEntry = badgePriority.find(([tag]) => matchTags.has(tag));
         if (badgeEntry) {
             const badge = document.createElement('span');
             badge.className = 'ggsel-order-card-badge';
             badge.textContent = badgeEntry[1];
+            const badgeClass = badgeClassMap[badgeEntry[0]];
+            if (badgeClass) {
+                badge.classList.add(badgeClass);
+            }
             titleGroup.appendChild(badge);
         }
 
@@ -3688,6 +4027,7 @@
 
         const openOrder = () => {
             if (order.orderUrl) {
+                collapsePanelForOrderNavigation();
                 window.location.href = order.orderUrl;
             }
         };
@@ -4033,6 +4373,7 @@
                     type: 'action',
                     label: 'Перейти к заказу',
                     handler: () => {
+                        collapsePanelForOrderNavigation();
                         window.location.href = order.orderUrl;
                     }
                 });
@@ -4344,6 +4685,8 @@
             state.loadMoreButton.disabled = true;
             state.hasMore = false;
             state.loading = false;
+            state.pendingCachedResults = null;
+            clearResultsCache();
             updateResultsVisibility();
             return;
         }
@@ -4352,6 +4695,8 @@
             type: 'single',
             queries: [{ key: 'default', params: state.params, highlight: null }]
         };
+
+        state.pendingCachedResults = null;
 
         if (plan.type !== 'single' && append) {
             return;
@@ -4404,6 +4749,7 @@
                 } else {
                     updateResults(items, true);
                 }
+                saveResultsCacheState();
                 if (mode === MODE_USERS) {
                     await prefetchUserDetails(append ? items : state.results);
                 } else if (mode === MODE_ORDERS) {
@@ -4495,12 +4841,14 @@
                         console.warn('[GGSEL User Explorer] Не удалось предзагрузить товары заказов', error);
                     });
                 }
+                saveResultsCacheState();
             } else if (!errors.length) {
                 const placeholder = document.createElement('div');
                 placeholder.className = 'ggsel-user-explorer-placeholder';
                 placeholder.textContent = 'По вашему запросу ничего не найдено';
                 state.resultsContainer.appendChild(placeholder);
                 updateResultsVisibility();
+                saveResultsCacheState();
             }
 
             if (errors.length) {
@@ -4543,6 +4891,7 @@
         state.page = 1;
         state.hasMore = false;
         state.detailCache.clear();
+        state.pendingCachedResults = null;
         updateSearchControlValueState();
         closeContextMenu();
         performSearch({ append: false });
@@ -4599,6 +4948,12 @@
         requestAnimationFrame(() => {
             applyAnchorPosition();
         });
+    };
+
+    const collapsePanelForOrderNavigation = () => {
+        if (state.settings?.autoCollapseOrders && state.open) {
+            closePanel();
+        }
     };
 
     const togglePanel = () => {
@@ -4837,6 +5192,7 @@
             };
         }
         updateModeButton();
+        loadResultsCacheState();
         state.anchorPosition = loadPosition(ANCHOR_POSITION_KEY);
         state.anchorPositionManual = Boolean(state.anchorPosition);
         applyAnchorPosition();
