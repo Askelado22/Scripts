@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: расширили панель до 400px и добавили контекстные действия из карточки категории с подтверждениями для критичных операций.
-// @version      1.2.18
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: добавили кеш результатов с быстрым восстановлением, цветные чипы совпадений, автоскрытие панели после перехода к заказу и настройки параллельного поиска прямо в окне настроек.
+// @version      1.3.1
 // @match        https://back-office.ggsel.net/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -32,7 +32,11 @@
     const STORAGE_KEY = 'ggsel-category-explorer:last-state';
     const STORAGE_SCHEMA_VERSION = 1;
     const PANEL_STORAGE_KEY = 'ggsel-category-explorer:panel-placement';
-    const PANEL_STORAGE_SCHEMA_VERSION = 1;
+    const PANEL_STORAGE_SCHEMA_VERSION = 2;
+    const SETTINGS_STORAGE_KEY = 'ggsel-category-explorer:settings';
+    const SETTINGS_STORAGE_SCHEMA_VERSION = 1;
+    const RESULT_CACHE_KEY = 'ggsel-category-explorer:last-results';
+    const RESULT_CACHE_SCHEMA_VERSION = 1;
     const POPOVER_HIDE_DELAY_MS = 220;
     const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
@@ -107,10 +111,36 @@
                 const raw = localStorage.getItem(PANEL_STORAGE_KEY);
                 if (!raw) return null;
                 const parsed = JSON.parse(raw);
-                if (!parsed || parsed.version !== PANEL_STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                if (!parsed || typeof parsed.payload !== 'object') {
                     return null;
                 }
-                return parsed.payload;
+                if (parsed.version === PANEL_STORAGE_SCHEMA_VERSION) {
+                    return parsed.payload;
+                }
+                if (parsed.version === 1) {
+                    const legacy = parsed.payload;
+                    const anchorX = legacy.anchorX === 'left' ? 'left' : 'right';
+                    const anchorY = legacy.anchorY === 'bottom' ? 'bottom' : 'top';
+                    const offsetX = Number.isFinite(legacy.offsetX) ? Math.max(0, Number(legacy.offsetX)) : 16;
+                    const offsetY = Number.isFinite(legacy.offsetY) ? Math.max(0, Number(legacy.offsetY)) : 16;
+                    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                    const estimatedWidth = 400;
+                    const estimatedHeight = 420;
+                    const maxOffsetX = Math.max(0, viewportWidth - estimatedWidth);
+                    const maxOffsetY = Math.max(0, viewportHeight - estimatedHeight);
+                    const offsetXPct = maxOffsetX > 0 ? Math.min(Math.max(offsetX / maxOffsetX, 0), 1) : 0;
+                    const offsetYPct = maxOffsetY > 0 ? Math.min(Math.max(offsetY / maxOffsetY, 0), 1) : 0;
+                    return {
+                        anchorX,
+                        anchorY,
+                        offsetX,
+                        offsetY,
+                        offsetXPct,
+                        offsetYPct,
+                    };
+                }
+                return null;
             } catch (err) {
                 logger.warn('Не удалось прочитать позицию панели', { error: err && err.message });
                 return null;
@@ -130,11 +160,108 @@
         },
     };
 
+    const defaultSettings = {
+        autoCollapseAfterOrder: true,
+        parallelIdSearch: true,
+    };
+
+    const SETTINGS_UI_DESCRIPTORS = {
+        autoCollapseAfterOrder: {
+            title: 'Авто-скрывать панель после открытия заказа',
+            description: 'Скрывать панель быстрого поиска после перехода к заказу.',
+        },
+        parallelIdSearch: {
+            title: 'Параллельный поиск по ID',
+            description: 'Одновременно искать пользователя и заказ по введённому ID.',
+        },
+    };
+
+    const settingsStorage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+                if (!raw) return { ...defaultSettings };
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== SETTINGS_STORAGE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return { ...defaultSettings };
+                }
+                return { ...defaultSettings, ...parsed.payload };
+            } catch (err) {
+                logger.warn('Не удалось прочитать настройки', { error: err && err.message });
+                return { ...defaultSettings };
+            }
+        },
+        save(payload) {
+            try {
+                const data = {
+                    version: SETTINGS_STORAGE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить настройки', { error: err && err.message });
+            }
+        },
+    };
+
+    const resultCacheStorage = {
+        load() {
+            try {
+                const raw = localStorage.getItem(RESULT_CACHE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (!parsed || parsed.version !== RESULT_CACHE_SCHEMA_VERSION || typeof parsed.payload !== 'object') {
+                    return null;
+                }
+                return parsed.payload;
+            } catch (err) {
+                logger.warn('Не удалось прочитать кеш результатов', { error: err && err.message });
+                return null;
+            }
+        },
+        save(payload) {
+            try {
+                const data = {
+                    version: RESULT_CACHE_SCHEMA_VERSION,
+                    payload,
+                };
+                localStorage.setItem(RESULT_CACHE_KEY, JSON.stringify(data));
+            } catch (err) {
+                logger.warn('Не удалось сохранить кеш результатов', { error: err && err.message });
+            }
+        },
+        clear() {
+            try {
+                localStorage.removeItem(RESULT_CACHE_KEY);
+            } catch (err) {
+                logger.warn('Не удалось очистить кеш результатов', { error: err && err.message });
+            }
+        },
+    };
+
+    const MATCH_REASON_CONFIG = {
+        'category-id': { label: 'Совпадение по ID категории', color: '#3B82F6' },
+        'name': { label: 'Совпадение по названию', color: '#22C55E' },
+        'path': { label: 'Совпадение по пути', color: '#A855F7' },
+        'catalog': { label: 'Совпадение по каталогу', color: '#F59E0B' },
+        'status': { label: 'Совпадение по статусу', color: '#EC4899' },
+        'order': { label: 'Совпадение по заказу', color: '#F97316' },
+        'user': { label: 'Совпадение по пользователю', color: '#38BDF8' },
+        'default': { label: 'Совпадение по запросу', color: '#64748B' },
+    };
+
     const PATH_SEPARATOR_RE = /[>›→]/;
 
     const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
 
     const normalizeText = (value) => collapseSpaces(value).toLowerCase();
+
+    const clamp01 = (value) => {
+        if (!Number.isFinite(value)) return 0;
+        if (value <= 0) return 0;
+        if (value >= 1) return 1;
+        return value;
+    };
 
     const slugifyActionLabel = (label) => {
         if (!label) return '';
@@ -1095,6 +1222,7 @@
         pageCount: 0,
         loading: false,
         error: null,
+        specialItems: [],
     };
 
     function reorderSiblingsForNode(node) {
@@ -1269,6 +1397,34 @@
             }
             .search-control.manual-collapse .search-toggle svg {
                 transform: none !important;
+            }
+            .settings-button {
+                flex: 0 0 auto;
+                width: 36px;
+                height: 36px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 12px;
+                border: 1px solid rgba(148,163,184,.35);
+                background: rgba(12,14,22,.92);
+                color: rgba(203,213,225,.92);
+                cursor: pointer;
+                transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1), box-shadow var(--dur-2);
+            }
+            .settings-button:hover {
+                background: rgba(30,41,59,.86);
+                border-color: rgba(148,163,184,.6);
+                color: #e2e8f0;
+                box-shadow: 0 8px 18px rgba(15,23,42,.32);
+            }
+            .settings-button:focus-visible {
+                outline: none;
+                border-color: var(--rose);
+                box-shadow: 0 0 0 3px rgba(244,63,94,.35);
+            }
+            .panel.compact .settings-button {
+                display: none;
             }
             .panel.flush-left .search-control.collapsed .search-toggle,
             .panel.flush-left .search-control.manual-collapse .search-toggle {
@@ -1487,7 +1643,7 @@
             .row {
                 position: relative;
                 display: flex;
-                align-items: center;
+                align-items: flex-start;
                 gap: var(--row-gap);
                 padding: 0 var(--row-pad-x);
                 border-radius: var(--radius-sm);
@@ -1523,8 +1679,87 @@
                 padding: 4px 12px;
                 white-space: nowrap;
             }
+            .row .name-block {
+                flex: 1 1 auto;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                min-width: 0;
+            }
+            .row .name-block .name {
+                flex: 0 0 auto;
+            }
+            .match-chips {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            .match-chips:empty {
+                display: none;
+            }
+            .match-chip {
+                flex: 0 0 auto;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: .03em;
+                border-radius: 999px;
+                border: 1px solid rgba(148,163,184,.42);
+                padding: 2px 8px;
+                background: rgba(100,116,139,.12);
+                color: rgba(226,232,240,.9);
+                white-space: nowrap;
+            }
+            .special-result {
+                --special-border: rgba(148,163,184,.32);
+                --special-shadow: rgba(15,23,42,.32);
+                --special-hover-border: rgba(59,130,246,.42);
+                --special-hover-bg: rgba(59,130,246,.16);
+                display: block;
+                border-radius: var(--radius-sm);
+                border: 1px solid var(--special-border);
+                background: rgba(15,23,42,.45);
+                padding: 12px 14px;
+                color: inherit;
+                text-decoration: none;
+                margin-bottom: 6px;
+                box-shadow: 0 12px 28px var(--special-shadow);
+                transition: background var(--dur-1), border-color var(--dur-1), box-shadow var(--dur-2), transform var(--dur-1);
+            }
+            .special-result:hover {
+                background: var(--special-hover-bg);
+                border-color: var(--special-hover-border);
+                box-shadow: 0 12px 28px var(--special-shadow);
+                transform: translateY(-1px);
+            }
+            .special-result:active {
+                transform: translateY(0);
+            }
+            .special-result__title {
+                font-weight: 600;
+                font-size: 13px;
+                letter-spacing: .02em;
+            }
+            .special-result__meta {
+                font-size: 12px;
+                color: rgba(226,232,240,.72);
+                margin-top: 4px;
+            }
+            .special-result .match-chips {
+                margin-top: 8px;
+            }
+            .row[data-match-accent="true"] {
+                border-color: var(--row-match-border, rgba(59,130,246,.35));
+                box-shadow: inset 0 0 0 1px var(--row-match-border-strong, rgba(59,130,246,.28));
+                background: var(--row-match-bg, rgba(59,130,246,.12));
+            }
+            .row[data-match-accent="true"]:hover,
+            .row[data-match-accent="true"].active {
+                border-color: var(--row-match-border-strong, rgba(59,130,246,.38));
+                box-shadow: inset 0 0 0 1px var(--row-match-border-strong, rgba(59,130,246,.32));
+                background: var(--row-match-bg-strong, rgba(59,130,246,.18));
+            }
             .row .name {
-                flex: 1;
+                flex: 0 1 auto;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
@@ -1822,6 +2057,12 @@
                     </button>
                     <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
                 </div>
+                <button type="button" class="settings-button" aria-label="Настройки">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.89 3.31.876 2.42 2.42a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.89 1.543-.876 3.31-2.42 2.42a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.89-3.31-.876-2.42-2.42a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.89-1.543.876-3.31 2.42-2.42.996.575 2.25.132 2.572-1.065z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                </button>
             </div>
             <div class="results"></div>
             <div class="toast-stack" aria-live="polite"></div>
@@ -1854,6 +2095,11 @@
             this.toastStackEl = toastStackEl;
             this.searchControlEl = searchControlEl;
             this.searchToggleEl = searchToggleEl;
+            this.settings = settingsStorage.load();
+            this.settingsButton = panelEl.querySelector('.settings-button');
+            this.settingsInputs = new Map();
+            this.hostSettingsWindow = null;
+            this._settingsWindowObserver = null;
             this.panelPlacement = this._loadPanelPlacement() || this._getDefaultPanelPlacement();
             this.hoverTimer = null;
             this.currentPopover = null;
@@ -1921,6 +2167,7 @@
             window.addEventListener('resize', this._onWindowResize);
             this._setupScrollIsolation();
             this._setupContextMenu();
+            this._setupSettingsUI();
             this._updateSearchAffordance();
             this.render();
             this._restoreState().catch((err) => {
@@ -1951,6 +2198,7 @@
             const query = this.inputEl ? this.inputEl.value || '' : '';
             if (!query.trim()) {
                 storage.clear();
+                resultCacheStorage.clear();
                 return;
             }
             const expandedNodes = [];
@@ -1973,29 +2221,154 @@
                 scrollTop: this.resultsContainer ? this.resultsContainer.scrollTop : 0,
             };
             storage.save(payload);
+            this._persistSearchCache();
+        }
+
+        _persistSearchCache() {
+            if (!SearchState || !SearchState.queryInfo || !SearchState.queryInfo.value) {
+                resultCacheStorage.clear();
+                return;
+            }
+            const nodes = [];
+            for (const node of nodesMap.values()) {
+                const serialized = this._serializeNode(node);
+                if (serialized) {
+                    nodes.push(serialized);
+                }
+            }
+            const payload = {
+                queryInfo: SearchState.queryInfo,
+                queryText: this.inputEl ? this.inputEl.value || '' : '',
+                nextPage: SearchState.nextPage || null,
+                pageCount: SearchState.pageCount,
+                rootIds: Array.isArray(SearchState.results) ? SearchState.results.map(node => node.id) : [],
+                nodes,
+                specialItems: Array.isArray(SearchState.specialItems) ? SearchState.specialItems : [],
+            };
+            resultCacheStorage.save(payload);
+        }
+
+        _serializeNode(node) {
+            if (!node) return null;
+            return {
+                id: node.id,
+                name: node.name,
+                href: node.href,
+                parentId: node.parentId,
+                childrenIds: Array.isArray(node.children) ? node.children.map(child => child.id) : [],
+                childrenLoaded: Boolean(node.childrenLoaded),
+                expanded: Boolean(node.expanded),
+                status: node.status || '',
+                kind: node.kind || '',
+                digi: node.digi || '',
+                commissionPercent: node.commissionPercent != null ? node.commissionPercent : null,
+                commissionRaw: node.commissionRaw != null ? node.commissionRaw : null,
+                autoFinishHours: node.autoFinishHours != null ? node.autoFinishHours : null,
+                autoFinishRaw: node.autoFinishRaw != null ? node.autoFinishRaw : null,
+                hasChildren: node.hasChildren,
+                pathSegments: Array.isArray(node.pathSegments) ? node.pathSegments.slice() : [],
+                actions: Array.isArray(node.actions) ? node.actions.map(action => ({ ...action })) : [],
+            };
+        }
+
+        _restoreFromCache(cache) {
+            if (!cache || !cache.queryInfo || !Array.isArray(cache.nodes)) {
+                return false;
+            }
+            nodesMap.clear();
+            const map = new Map();
+            for (const data of cache.nodes) {
+                if (!data || data.id == null) continue;
+                const nodeData = {
+                    id: data.id,
+                    name: data.name,
+                    href: data.href,
+                    status: data.status,
+                    kind: data.kind,
+                    digi: data.digi,
+                    commissionPercent: data.commissionPercent,
+                    commissionRaw: data.commissionRaw,
+                    autoFinishHours: data.autoFinishHours,
+                    autoFinishRaw: data.autoFinishRaw,
+                    hasChildren: typeof data.hasChildren === 'boolean' ? data.hasChildren : null,
+                    pathSegments: Array.isArray(data.pathSegments) ? data.pathSegments.slice() : [],
+                };
+                const node = new CategoryNode(nodeData, data.parentId || null);
+                node.childrenLoaded = Boolean(data.childrenLoaded);
+                node.expanded = Boolean(data.expanded);
+                if (Array.isArray(data.actions)) {
+                    node.actions = data.actions.map(action => ({ ...action }));
+                    node.actionsLoaded = true;
+                    node.actionsLoading = null;
+                }
+                nodesMap.set(node.id, node);
+                map.set(node.id, {
+                    node,
+                    childrenIds: Array.isArray(data.childrenIds) ? data.childrenIds.slice() : [],
+                });
+            }
+            for (const entry of map.values()) {
+                const { node, childrenIds } = entry;
+                node.children = childrenIds.map((childId) => {
+                    const childEntry = map.get(childId);
+                    if (!childEntry) return null;
+                    childEntry.node.parentId = node.id;
+                    return childEntry.node;
+                }).filter(Boolean);
+            }
+            SearchState.queryInfo = cache.queryInfo;
+            SearchState.results = Array.isArray(cache.rootIds)
+                ? cache.rootIds.map((id) => {
+                    const entry = map.get(id);
+                    return entry ? entry.node : null;
+                }).filter(Boolean)
+                : [];
+            SearchState.nextPage = cache.nextPage || null;
+            SearchState.pageCount = typeof cache.pageCount === 'number' ? cache.pageCount : 0;
+            SearchState.loading = false;
+            SearchState.error = null;
+            SearchState.specialItems = Array.isArray(cache.specialItems) ? cache.specialItems : this._buildSpecialResults(cache.queryInfo);
+            this._refreshMatchReasons(SearchState.results);
+            this.render();
+            this._prefetchVisible();
+            return true;
         }
 
         async _restoreState() {
             const saved = storage.load();
-            if (!saved || !saved.query || !saved.query.trim()) {
+            const cached = resultCacheStorage.load();
+            const savedQuery = saved && typeof saved.query === 'string' ? saved.query.trim() : '';
+            const cachedQueryText = cached && typeof cached.queryText === 'string' ? cached.queryText.trim() : '';
+            const queryText = savedQuery || cachedQueryText;
+            if (this.inputEl) {
+                this.inputEl.value = queryText;
+                this._updateSearchAffordance();
+            }
+            if (!queryText) {
+                if (cached && cached.queryInfo) {
+                    SearchState.specialItems = this._buildSpecialResults(cached.queryInfo);
+                }
                 return;
             }
             this.restoring = true;
             this.pendingRestoreState = {
-                expandedIds: Array.isArray(saved.expandedIds) ? saved.expandedIds.slice() : [],
-                selectedIds: Array.isArray(saved.selectedIds) ? saved.selectedIds.slice() : [],
-                lastFocusedId: saved.lastFocusedId || null,
-                scrollTop: typeof saved.scrollTop === 'number' ? saved.scrollTop : 0,
+                expandedIds: Array.isArray(saved && saved.expandedIds) ? saved.expandedIds.slice() : [],
+                selectedIds: Array.isArray(saved && saved.selectedIds) ? saved.selectedIds.slice() : [],
+                lastFocusedId: saved ? saved.lastFocusedId || null : null,
+                scrollTop: saved && typeof saved.scrollTop === 'number' ? saved.scrollTop : 0,
             };
             this.selectedIds = new Set(this.pendingRestoreState.selectedIds);
             this.lastFocusedId = this.pendingRestoreState.lastFocusedId;
-            if (this.inputEl) {
-                this.inputEl.value = saved.query;
-                this._updateSearchAffordance();
+
+            let restoredFromCache = false;
+            if (cached && cached.queryInfo) {
+                restoredFromCache = this._restoreFromCache(cached);
             }
-            const result = this.startSearch(saved.query, { preserveSelection: true });
-            if (result && typeof result.then === 'function') {
-                await result;
+            if (!restoredFromCache) {
+                const result = this.startSearch(queryText, { preserveSelection: true });
+                if (result && typeof result.then === 'function') {
+                    await result;
+                }
             }
             await this._applyPendingRestore();
             this.restoring = false;
@@ -2208,6 +2581,309 @@
                 }
             };
             this.contextMenuEl.addEventListener('pointerover', this._onContextMenuPointerOver);
+        }
+
+        _setupSettingsUI() {
+            this._observeHostSettingsWindow();
+            if (this.settingsButton) {
+                this.settingsButton.addEventListener('click', () => {
+                    this._openHostSettingsWindow();
+                });
+            }
+            this._syncSettingsInputs();
+        }
+
+        _observeHostSettingsWindow() {
+            const ensureSetup = (root) => {
+                if (!root || typeof root.querySelector !== 'function') return;
+                const settingsWindow = root.querySelector('.ggsel-user-window[data-window="settings"]');
+                if (settingsWindow instanceof HTMLElement) {
+                    this._enhanceHostSettingsWindow(settingsWindow);
+                }
+            };
+            ensureSetup(document);
+            if (this._settingsWindowObserver || !document.body) {
+                return;
+            }
+            this._settingsWindowObserver = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (!(node instanceof Element)) continue;
+                        if (node.matches('.ggsel-user-window[data-window="settings"]')) {
+                            this._enhanceHostSettingsWindow(node);
+                        } else {
+                            const nested = node.querySelector('.ggsel-user-window[data-window="settings"]');
+                            if (nested instanceof HTMLElement) {
+                                this._enhanceHostSettingsWindow(nested);
+                            }
+                        }
+                    }
+                }
+            });
+            this._settingsWindowObserver.observe(document.body, { childList: true, subtree: true });
+        }
+
+        _enhanceHostSettingsWindow(windowEl) {
+            if (!(windowEl instanceof HTMLElement)) return;
+            this.hostSettingsWindow = windowEl;
+            const optionsContainer = windowEl.querySelector('.ggsel-user-window__options');
+            if (!(optionsContainer instanceof HTMLElement)) {
+                return;
+            }
+            for (const [key, descriptor] of Object.entries(SETTINGS_UI_DESCRIPTORS)) {
+                const optionEl = this._ensureHostSettingsOption(optionsContainer, key, descriptor);
+                if (!(optionEl instanceof HTMLElement)) continue;
+                const input = optionEl.querySelector('input[type="checkbox"]');
+                if (!(input instanceof HTMLInputElement)) continue;
+                input.dataset.gceSetting = key;
+                if (!input.dataset.gceBound) {
+                    input.addEventListener('change', () => {
+                        this._handleSettingChange(key, input.checked);
+                    });
+                    input.dataset.gceBound = 'true';
+                }
+                this._registerSettingInput(key, input);
+            }
+            this._syncSettingsInputs();
+        }
+
+        _ensureHostSettingsOption(container, key, descriptor) {
+            if (!(container instanceof HTMLElement)) return null;
+            const existing = container.querySelector(`[data-gce-setting-container="${key}"]`);
+            if (existing instanceof HTMLElement) {
+                const titleEl = existing.querySelector('.ggsel-user-window__option-title');
+                const descEl = existing.querySelector('.ggsel-user-window__option-desc');
+                if (titleEl) {
+                    titleEl.textContent = descriptor && descriptor.title ? descriptor.title : '';
+                }
+                if (descEl) {
+                    descEl.textContent = descriptor && descriptor.description ? descriptor.description : '';
+                } else if (descriptor && descriptor.description) {
+                    const desc = document.createElement('span');
+                    desc.className = 'ggsel-user-window__option-desc';
+                    desc.textContent = descriptor.description;
+                    const labelWrap = existing.querySelector('.ggsel-user-window__option-label');
+                    if (labelWrap) {
+                        labelWrap.appendChild(desc);
+                    }
+                }
+                return existing;
+            }
+            const label = document.createElement('label');
+            label.className = 'ggsel-user-window__option';
+            label.dataset.gceSettingContainer = key;
+
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+
+            const textWrap = document.createElement('div');
+            textWrap.className = 'ggsel-user-window__option-label';
+
+            const title = document.createElement('span');
+            title.className = 'ggsel-user-window__option-title';
+            title.textContent = descriptor && descriptor.title ? descriptor.title : '';
+
+            const description = document.createElement('span');
+            description.className = 'ggsel-user-window__option-desc';
+            description.textContent = descriptor && descriptor.description ? descriptor.description : '';
+
+            textWrap.appendChild(title);
+            textWrap.appendChild(description);
+            label.appendChild(input);
+            label.appendChild(textWrap);
+            container.appendChild(label);
+            return label;
+        }
+
+        _registerSettingInput(key, input) {
+            if (!key || !(input instanceof HTMLInputElement)) return;
+            let inputs = this.settingsInputs.get(key);
+            if (!inputs) {
+                inputs = new Set();
+                this.settingsInputs.set(key, inputs);
+            }
+            inputs.add(input);
+            input.checked = Boolean(this.settings && this.settings[key]);
+        }
+
+        _openHostSettingsWindow() {
+            let opened = false;
+            const globalWindow = typeof window !== 'undefined' ? window : null;
+            try {
+                if (globalWindow && globalWindow.GGSEL && globalWindow.GGSEL.userWindows && typeof globalWindow.GGSEL.userWindows.open === 'function') {
+                    globalWindow.GGSEL.userWindows.open('settings');
+                    opened = true;
+                }
+            } catch (err) {
+                logger.debug('Не удалось открыть окно настроек через GGSEL.userWindows', { error: err && err.message });
+            }
+            if (!opened) {
+                const triggers = document.querySelectorAll('[data-window-open="settings"], [data-user-window-open="settings"], [data-window-target="settings"]');
+                for (const trigger of triggers) {
+                    if (trigger instanceof HTMLElement) {
+                        trigger.click();
+                        opened = true;
+                        break;
+                    }
+                }
+            }
+            if (!opened) {
+                const detail = { window: 'settings' };
+                try {
+                    window.dispatchEvent(new CustomEvent('ggsel:user-window:open', { detail }));
+                } catch (err) {
+                    logger.debug('Не удалось отправить событие открытия окна настроек (window)', { error: err && err.message });
+                }
+                try {
+                    document.dispatchEvent(new CustomEvent('ggsel:user-window:open', { detail, bubbles: true }));
+                } catch (err) {
+                    logger.debug('Не удалось отправить событие открытия окна настроек (document)', { error: err && err.message });
+                }
+                const existingWindow = document.querySelector('.ggsel-user-window[data-window="settings"]');
+                if (existingWindow instanceof HTMLElement && typeof existingWindow.focus === 'function') {
+                    existingWindow.focus({ preventScroll: true });
+                }
+            }
+        }
+
+        _syncSettingsInputs() {
+            if (!(this.settingsInputs instanceof Map)) return;
+            for (const [key, inputs] of this.settingsInputs.entries()) {
+                const checked = Boolean(this.settings && this.settings[key]);
+                for (const input of inputs) {
+                    if (input instanceof HTMLInputElement) {
+                        input.checked = checked;
+                    }
+                }
+            }
+        }
+
+        _handleSettingChange(key, value) {
+            if (!key) return;
+            this.settings = { ...this.settings, [key]: value };
+            settingsStorage.save(this.settings);
+            this._syncSettingsInputs();
+            if (key === 'parallelIdSearch') {
+                this._updateSpecialResults();
+            }
+        }
+
+        _updateSpecialResults() {
+            if (!SearchState) return;
+            SearchState.specialItems = this._buildSpecialResults(SearchState.queryInfo);
+            this.render();
+            this._persistSearchCache();
+        }
+
+        _buildSpecialResults(queryInfo) {
+            if (!this.settings || !this.settings.parallelIdSearch) {
+                return [];
+            }
+            if (!queryInfo || queryInfo.type !== 'id') {
+                return [];
+            }
+            const value = String(queryInfo.value || '').trim();
+            if (!value) {
+                return [];
+            }
+            const specials = [];
+            specials.push({
+                key: `order-${value}`,
+                type: 'order',
+                title: `Заказ #${value}`,
+                description: 'Открыть карточку заказа в Back Office',
+                href: `/admin/orders/${value}`,
+                target: '_blank',
+                chipKey: 'order',
+            });
+            specials.push({
+                key: `user-${value}`,
+                type: 'user',
+                title: `Пользователь #${value}`,
+                description: 'Перейти в профиль пользователя',
+                href: `/admin/users/${value}`,
+                target: '_blank',
+                chipKey: 'user',
+            });
+            return specials;
+        }
+
+        _renderSpecialResults(target) {
+            if (!target) return false;
+            if (!Array.isArray(SearchState.specialItems) || !SearchState.specialItems.length) {
+                return false;
+            }
+            let rendered = false;
+            for (const item of SearchState.specialItems) {
+                const element = this._renderSpecialResult(item);
+                if (!element) continue;
+                target.appendChild(element);
+                rendered = true;
+            }
+            return rendered;
+        }
+
+        _renderSpecialResult(item) {
+            if (!item || !item.href) return null;
+            const link = document.createElement('a');
+            link.className = 'special-result';
+            link.href = item.href;
+            link.target = item.target || '_blank';
+            if (link.target === '_blank') {
+                link.rel = 'noopener noreferrer';
+            }
+            link.dataset.type = item.type || '';
+
+            const title = document.createElement('div');
+            title.className = 'special-result__title';
+            title.textContent = item.title || item.key || 'Спецрезультат';
+            link.appendChild(title);
+
+            if (item.description) {
+                const meta = document.createElement('div');
+                meta.className = 'special-result__meta';
+                meta.textContent = item.description;
+                link.appendChild(meta);
+            }
+
+            const chips = document.createElement('div');
+            chips.className = 'match-chips';
+            const reason = this._buildMatchReason(item.chipKey || 'default');
+            const chip = document.createElement('span');
+            chip.className = 'match-chip';
+            chip.textContent = reason.label;
+            this._applyChipStyles(chip, reason.color);
+            chips.appendChild(chip);
+            link.appendChild(chips);
+
+            if (reason && reason.color) {
+                link.style.setProperty('--special-border', this._colorToRgba(reason.color, 0.45));
+                link.style.setProperty('--special-shadow', this._colorToRgba(reason.color, 0.22));
+                link.style.setProperty('--special-hover-border', this._colorToRgba(reason.color, 0.55));
+                link.style.setProperty('--special-hover-bg', this._colorToRgba(reason.color, 0.18));
+            }
+
+            link.addEventListener('click', (event) => {
+                if (event.button !== 0) return;
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+                this._handlePostNavigation(item.href);
+            });
+
+            return link;
+        }
+
+        _handlePostNavigation(url) {
+            if (!this.settings || !this.settings.autoCollapseAfterOrder) return;
+            try {
+                const resolved = new URL(url, location.origin);
+                if (/\/orders\//i.test(resolved.pathname)) {
+                    this._collapseSearchToFab({ preserveQuery: true });
+                }
+            } catch (err) {
+                logger.debug('Не удалось обработать URL для автоскрытия', { url, error: err && err.message });
+            }
         }
 
         _showContextMenu({ x, y, node, editableTarget }) {
@@ -2517,6 +3193,7 @@
                 if (!opened && finalTarget !== '_self') {
                     window.location.href = url;
                 }
+                this._handlePostNavigation(url);
                 this._showToast(`Открываем «${label}»`, 'success');
                 return;
             }
@@ -2716,11 +3393,22 @@
         }
 
         _getDefaultPanelPlacement() {
+            const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            const defaultOffset = 16;
+            const estimatedWidth = 400;
+            const estimatedHeight = 420;
+            const maxOffsetX = Math.max(0, viewportWidth - estimatedWidth);
+            const maxOffsetY = Math.max(0, viewportHeight - estimatedHeight);
+            const offsetXPct = maxOffsetX > 0 ? clamp01(defaultOffset / maxOffsetX) : 0;
+            const offsetYPct = maxOffsetY > 0 ? clamp01(defaultOffset / maxOffsetY) : 0;
             return {
                 anchorX: 'right',
                 anchorY: 'top',
-                offsetX: 16,
-                offsetY: 16,
+                offsetX: defaultOffset,
+                offsetY: defaultOffset,
+                offsetXPct,
+                offsetYPct,
             };
         }
 
@@ -2729,9 +3417,18 @@
             if (!saved) return null;
             const anchorX = saved.anchorX === 'left' ? 'left' : 'right';
             const anchorY = saved.anchorY === 'bottom' ? 'bottom' : 'top';
+            const offsetXPct = Number.isFinite(saved.offsetXPct) ? clamp01(Number(saved.offsetXPct)) : null;
+            const offsetYPct = Number.isFinite(saved.offsetYPct) ? clamp01(Number(saved.offsetYPct)) : null;
             const offsetX = Number.isFinite(saved.offsetX) ? Math.max(0, Number(saved.offsetX)) : 16;
             const offsetY = Number.isFinite(saved.offsetY) ? Math.max(0, Number(saved.offsetY)) : 16;
-            return { anchorX, anchorY, offsetX, offsetY };
+            return {
+                anchorX,
+                anchorY,
+                offsetX,
+                offsetY,
+                offsetXPct,
+                offsetYPct,
+            };
         }
 
         _savePanelPlacement() {
@@ -2741,6 +3438,8 @@
                 anchorY: this.panelPlacement.anchorY,
                 offsetX: this.panelPlacement.offsetX,
                 offsetY: this.panelPlacement.offsetY,
+                offsetXPct: this.panelPlacement.offsetXPct,
+                offsetYPct: this.panelPlacement.offsetYPct,
             });
         }
 
@@ -2757,8 +3456,14 @@
             const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
             const maxOffsetX = Math.max(0, Math.round(viewportWidth - width));
             const maxOffsetY = Math.max(0, Math.round(viewportHeight - height));
-            let offsetX = Math.min(Math.max(Math.round(placement.offsetX), 0), maxOffsetX);
-            let offsetY = Math.min(Math.max(Math.round(placement.offsetY), 0), maxOffsetY);
+            let offsetX = placement.offsetXPct != null
+                ? Math.round(clamp01(placement.offsetXPct) * maxOffsetX)
+                : Math.round(placement.offsetX);
+            let offsetY = placement.offsetYPct != null
+                ? Math.round(clamp01(placement.offsetYPct) * maxOffsetY)
+                : Math.round(placement.offsetY);
+            offsetX = Math.min(Math.max(offsetX, 0), maxOffsetX);
+            offsetY = Math.min(Math.max(offsetY, 0), maxOffsetY);
             if (!Number.isFinite(offsetX)) offsetX = 0;
             if (!Number.isFinite(offsetY)) offsetY = 0;
             if (placement.anchorX === 'left') {
@@ -2787,11 +3492,15 @@
             this.panelEl.classList.toggle('flush-right', flushRight);
             this.panelEl.classList.toggle('flush-top', flushTop);
             this.panelEl.classList.toggle('flush-bottom', flushBottom);
+            const offsetXPct = maxOffsetX > 0 ? clamp01(offsetX / maxOffsetX) : 0;
+            const offsetYPct = maxOffsetY > 0 ? clamp01(offsetY / maxOffsetY) : 0;
             const nextPlacement = {
                 anchorX: placement.anchorX,
                 anchorY: placement.anchorY,
                 offsetX,
                 offsetY,
+                offsetXPct,
+                offsetYPct,
             };
             this.panelPlacement = nextPlacement;
             if (persist) {
@@ -2850,7 +3559,11 @@
                 const anchorY = distTop <= distBottom ? 'top' : 'bottom';
                 const offsetX = anchorX === 'left' ? Math.max(0, Math.round(distLeft)) : Math.max(0, Math.round(distRight));
                 const offsetY = anchorY === 'top' ? Math.max(0, Math.round(distTop)) : Math.max(0, Math.round(distBottom));
-                this.panelPlacement = { anchorX, anchorY, offsetX, offsetY };
+                const maxOffsetX = Math.max(0, Math.round(viewportWidth - rect.width));
+                const maxOffsetY = Math.max(0, Math.round(viewportHeight - rect.height));
+                const offsetXPct = maxOffsetX > 0 ? clamp01(offsetX / maxOffsetX) : 0;
+                const offsetYPct = maxOffsetY > 0 ? clamp01(offsetY / maxOffsetY) : 0;
+                this.panelPlacement = { anchorX, anchorY, offsetX, offsetY, offsetXPct, offsetYPct };
                 this._applyPanelPosition({ persist: true });
                 if (event && typeof event.pointerId === 'number') {
                     try {
@@ -3066,7 +3779,9 @@
                 SearchState.pageCount = 0;
                 SearchState.loading = false;
                 SearchState.error = null;
+                SearchState.specialItems = [];
                 nodesMap.clear();
+                resultCacheStorage.clear();
                 if (!preserveSelection) {
                     this._clearSelection();
                     this.lastFocusedId = null;
@@ -3082,6 +3797,7 @@
             SearchState.pageCount = 0;
             SearchState.loading = true;
             SearchState.error = null;
+            SearchState.specialItems = this._buildSpecialResults(SearchState.queryInfo);
             nodesMap.clear();
             if (!preserveSelection) {
                 this._clearSelection();
@@ -3121,6 +3837,7 @@
                     for (const item of items) {
                         if (!nodesMap.has(item.id)) {
                             const node = new CategoryNode(item);
+                            this._applyMatchReasonsToNode(node);
                             nodesMap.set(node.id, node);
                             gathered.push(node);
                         }
@@ -3133,9 +3850,11 @@
                 SearchState.pageCount += pagesFetched;
                 const combined = loadMore ? SearchState.results.concat(gathered) : gathered;
                 SearchState.results = applyDisplayOrder(combined);
+                this._refreshMatchReasons(SearchState.results);
                 SearchState.loading = false;
                 this.render();
                 this._prefetchVisible();
+                this._persistSearchCache();
                 this._schedulePersist();
                 logger.info('Обновление результатов', {
                     total: SearchState.results.length,
@@ -3161,30 +3880,60 @@
             this.visibleNodes = [];
             this._setResultsVisibility(false);
 
+            const fragment = document.createDocumentFragment();
+            const specialsRendered = this._renderSpecialResults(fragment);
+
             if (!SearchState.queryInfo) {
+                if (specialsRendered) {
+                    container.appendChild(fragment);
+                    this._setResultsVisibility(true);
+                }
                 this._updateSelectionUI();
                 return;
             }
             if (SearchState.loading && SearchState.results.length === 0) {
-                container.innerHTML = `<div class="loading-state">Загрузка...</div>`;
+                if (specialsRendered) {
+                    const status = document.createElement('div');
+                    status.className = 'loading-state';
+                    status.textContent = 'Загрузка категорий…';
+                    fragment.appendChild(status);
+                    container.appendChild(fragment);
+                } else {
+                    container.innerHTML = `<div class="loading-state">Загрузка...</div>`;
+                }
                 this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (SearchState.error) {
-                container.innerHTML = `<div class="error-state">${SearchState.error}</div>`;
+                if (specialsRendered) {
+                    const status = document.createElement('div');
+                    status.className = 'error-state';
+                    status.textContent = SearchState.error;
+                    fragment.appendChild(status);
+                    container.appendChild(fragment);
+                } else {
+                    container.innerHTML = `<div class="error-state">${SearchState.error}</div>`;
+                }
                 this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
             if (!SearchState.results.length) {
-                container.innerHTML = `<div class="empty-state">Ничего не найдено.</div>`;
+                if (specialsRendered) {
+                    const status = document.createElement('div');
+                    status.className = 'empty-state';
+                    status.textContent = 'Ничего не найдено среди категорий.';
+                    fragment.appendChild(status);
+                    container.appendChild(fragment);
+                } else {
+                    container.innerHTML = `<div class="empty-state">Ничего не найдено.</div>`;
+                }
                 this._setResultsVisibility(true);
                 this._updateSelectionUI();
                 return;
             }
 
-            const fragment = document.createDocumentFragment();
             for (const node of SearchState.results) {
                 this._renderNode(fragment, node, 0);
             }
@@ -3258,14 +4007,23 @@
             const nameEl = document.createElement('span');
             nameEl.className = 'name';
             nameEl.textContent = node.name;
+            const nameBlock = document.createElement('div');
+            nameBlock.className = 'name-block';
+            nameBlock.appendChild(nameEl);
+            const chipsEl = document.createElement('div');
+            chipsEl.className = 'match-chips';
+            nameBlock.appendChild(chipsEl);
 
             row.appendChild(digiBadge);
-            row.appendChild(nameEl);
+            row.appendChild(nameBlock);
 
             const commissionEl = document.createElement('span');
             commissionEl.className = 'commission';
             row.appendChild(commissionEl);
             this._updateRowCommission(row, node);
+
+            this._renderMatchChips(chipsEl, node);
+            this._applyMatchHighlight(row, node.matchReasons);
 
             if (row.dataset.state === 'leaf') {
                 row.classList.add('leaf');
@@ -3357,6 +4115,162 @@
             commissionEl.hidden = false;
             commissionEl.textContent = hasValue ? text : '—';
             commissionEl.classList.toggle('muted', !hasValue);
+        }
+
+        _renderMatchChips(container, node) {
+            if (!container) return;
+            container.innerHTML = '';
+            const reasons = Array.isArray(node && node.matchReasons) ? node.matchReasons : [];
+            if (!reasons.length) {
+                container.hidden = true;
+                return;
+            }
+            container.hidden = false;
+            for (const reason of reasons) {
+                if (!reason || !reason.label) continue;
+                const chip = document.createElement('span');
+                chip.className = 'match-chip';
+                chip.textContent = reason.label;
+                this._applyChipStyles(chip, reason.color);
+                container.appendChild(chip);
+            }
+        }
+
+        _applyChipStyles(element, color) {
+            if (!element) return;
+            const fallback = MATCH_REASON_CONFIG.default.color;
+            const base = color || fallback;
+            element.style.color = base;
+            element.style.borderColor = this._colorToRgba(base, 0.55);
+            element.style.background = this._colorToRgba(base, 0.16);
+        }
+
+        _applyMatchHighlight(row, reasons) {
+            if (!row) return;
+            if (!Array.isArray(reasons) || !reasons.length) {
+                row.dataset.matchAccent = 'false';
+                row.style.removeProperty('--row-match-border');
+                row.style.removeProperty('--row-match-border-strong');
+                row.style.removeProperty('--row-match-bg');
+                row.style.removeProperty('--row-match-bg-strong');
+                row.style.removeProperty('border-color');
+                row.style.removeProperty('box-shadow');
+                row.style.removeProperty('background');
+                return;
+            }
+            const primary = reasons[0];
+            const color = primary && primary.color ? primary.color : MATCH_REASON_CONFIG.default.color;
+            row.dataset.matchAccent = 'true';
+            const border = this._colorToRgba(color, 0.46);
+            const borderStrong = this._colorToRgba(color, 0.62);
+            const bg = this._colorToRgba(color, 0.14);
+            const bgStrong = this._colorToRgba(color, 0.2);
+            row.style.setProperty('--row-match-border', border);
+            row.style.setProperty('--row-match-border-strong', borderStrong);
+            row.style.setProperty('--row-match-bg', bg);
+            row.style.setProperty('--row-match-bg-strong', bgStrong);
+            row.style.borderColor = border;
+            row.style.boxShadow = `inset 0 0 0 1px ${this._colorToRgba(color, 0.32)}`;
+            row.style.background = bg;
+        }
+
+        _colorToRgba(color, alpha = 1) {
+            if (!color) return '';
+            const normalized = color.trim();
+            if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(normalized)) {
+                let hex = normalized.slice(1);
+                if (hex.length === 3) {
+                    hex = hex.split('').map((ch) => ch + ch).join('');
+                }
+                const intVal = parseInt(hex, 16);
+                const r = (intVal >> 16) & 255;
+                const g = (intVal >> 8) & 255;
+                const b = intVal & 255;
+                return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+            }
+            if (/^rgba?\(/i.test(normalized)) {
+                const parts = normalized.replace(/rgba?\(|\)/gi, '').split(',').map(part => Number(part.trim()));
+                if (parts.length >= 3) {
+                    const [r, g, b] = parts;
+                    return `rgba(${r || 0}, ${g || 0}, ${b || 0}, ${alpha})`;
+                }
+            }
+            return normalized;
+        }
+
+        _buildMatchReason(key) {
+            const config = MATCH_REASON_CONFIG[key] || MATCH_REASON_CONFIG.default;
+            return {
+                key,
+                label: config.label,
+                color: config.color,
+            };
+        }
+
+        _calculateMatchReasons(node, queryInfo = SearchState.queryInfo) {
+            const reasons = [];
+            if (!node || !queryInfo || !queryInfo.value) {
+                return reasons;
+            }
+            const rawValue = String(queryInfo.value || '').trim();
+            if (!rawValue) {
+                return reasons;
+            }
+            const normalizedQuery = normalizeText(rawValue);
+            if (queryInfo.type === 'id') {
+                if (String(node.id) === rawValue) {
+                    reasons.push(this._buildMatchReason('category-id'));
+                }
+                if (node.digi && normalizeText(node.digi).includes(normalizedQuery)) {
+                    reasons.push(this._buildMatchReason('catalog'));
+                }
+                if (node.name && normalizeText(node.name).includes(normalizedQuery)) {
+                    reasons.push(this._buildMatchReason('name'));
+                }
+                if (Array.isArray(node.pathSegments) && node.pathSegments.some(seg => normalizeText(seg).includes(normalizedQuery))) {
+                    reasons.push(this._buildMatchReason('path'));
+                }
+                if (!reasons.length && String(node.id).startsWith(rawValue)) {
+                    reasons.push(this._buildMatchReason('category-id'));
+                }
+            } else {
+                if (node.name && normalizeText(node.name).includes(normalizedQuery)) {
+                    reasons.push(this._buildMatchReason('name'));
+                }
+                if (Array.isArray(node.pathSegments) && node.pathSegments.some(seg => normalizeText(seg).includes(normalizedQuery))) {
+                    reasons.push(this._buildMatchReason('path'));
+                }
+                if (node.digi && normalizeText(node.digi).includes(normalizedQuery)) {
+                    reasons.push(this._buildMatchReason('catalog'));
+                }
+                if (node.status && normalizeText(node.status).includes(normalizedQuery)) {
+                    reasons.push(this._buildMatchReason('status'));
+                }
+            }
+            if (!reasons.length) {
+                reasons.push(this._buildMatchReason('default'));
+            }
+            return reasons;
+        }
+
+        _applyMatchReasonsToNode(node) {
+            if (!node) return;
+            node.matchReasons = this._calculateMatchReasons(node);
+        }
+
+        _refreshMatchReasons(nodes) {
+            if (!Array.isArray(nodes)) return;
+            const stack = [...nodes];
+            const visited = new Set();
+            while (stack.length) {
+                const current = stack.pop();
+                if (!current || visited.has(current.id)) continue;
+                visited.add(current.id);
+                this._applyMatchReasonsToNode(current);
+                if (Array.isArray(current.children) && current.children.length) {
+                    stack.push(...current.children);
+                }
+            }
         }
 
         _applyStatsToNode(node, stats) {
@@ -3588,6 +4502,9 @@
                 const children = await loadChildren(node.id);
                 logger.debug('Получены дочерние категории', { id: node.id, count: children.length });
                 const mappedChildren = assignChildrenToNode(node, children);
+                for (const child of mappedChildren) {
+                    this._applyMatchReasonsToNode(child);
+                }
                 node.childrenLoaded = true;
                 node.hasChildren = mappedChildren.length > 0;
                 reorderSiblingsForNode(node);
