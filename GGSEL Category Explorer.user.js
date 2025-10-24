@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: добавили кеш результатов с быстрым восстановлением, цветные чипы совпадений и быстрые переходы к заказу и пользователю с автоскрытием панели.
-// @version      1.3.0
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: добавили кеш результатов с быстрым восстановлением, цветные чипы совпадений, автоскрытие панели после перехода к заказу и настройки параллельного поиска прямо в окне настроек.
+// @version      1.3.1
 // @match        https://back-office.ggsel.net/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -163,6 +163,17 @@
     const defaultSettings = {
         autoCollapseAfterOrder: true,
         parallelIdSearch: true,
+    };
+
+    const SETTINGS_UI_DESCRIPTORS = {
+        autoCollapseAfterOrder: {
+            title: 'Авто-скрывать панель после открытия заказа',
+            description: 'Скрывать панель быстрого поиска после перехода к заказу.',
+        },
+        parallelIdSearch: {
+            title: 'Параллельный поиск по ID',
+            description: 'Одновременно искать пользователя и заказ по введённому ID.',
+        },
     };
 
     const settingsStorage = {
@@ -1415,68 +1426,6 @@
             .panel.compact .settings-button {
                 display: none;
             }
-            .settings-popover {
-                position: absolute;
-                top: 64px;
-                right: 18px;
-                width: 280px;
-                padding: 16px;
-                border-radius: var(--radius-sm);
-                border: 1px solid rgba(59,130,246,.26);
-                background: rgba(10,12,18,.98);
-                box-shadow: var(--shadow-2);
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-                z-index: 1000000;
-            }
-            .settings-popover[hidden] {
-                display: none !important;
-            }
-            .settings-popover__header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-            }
-            .settings-popover__title {
-                font-weight: 600;
-                font-size: 14px;
-                letter-spacing: .02em;
-            }
-            .settings-popover__close {
-                width: 28px;
-                height: 28px;
-                border-radius: 8px;
-                border: 1px solid rgba(148,163,184,.35);
-                background: rgba(10,12,18,.92);
-                color: rgba(203,213,225,.92);
-                cursor: pointer;
-                font-size: 18px;
-                line-height: 1;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
-            }
-            .settings-popover__close:hover {
-                background: rgba(30,41,59,.86);
-                border-color: rgba(148,163,184,.6);
-                color: #f8fafc;
-            }
-            .settings-option {
-                display: flex;
-                align-items: flex-start;
-                gap: 10px;
-                font-size: 13px;
-                line-height: 1.45;
-                color: rgba(226,232,240,.9);
-            }
-            .settings-option input[type="checkbox"] {
-                margin-top: 2px;
-                width: 16px;
-                height: 16px;
-            }
             .panel.flush-left .search-control.collapsed .search-toggle,
             .panel.flush-left .search-control.manual-collapse .search-toggle {
                 border-top-left-radius: 0;
@@ -2108,28 +2057,12 @@
                     </button>
                     <input type="text" class="search-input" placeholder="Искать по ID или по q…" />
                 </div>
-                <button type="button" class="settings-button" aria-label="Настройки" aria-expanded="false">
+                <button type="button" class="settings-button" aria-label="Настройки">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.89 3.31.876 2.42 2.42a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.89 1.543-.876 3.31-2.42 2.42a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.89-3.31-.876-2.42-2.42a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.89-1.543.876-3.31 2.42-2.42.996.575 2.25.132 2.572-1.065z" />
                         <circle cx="12" cy="12" r="3" />
                     </svg>
                 </button>
-            </div>
-            <div class="settings-popover" hidden>
-                <div class="settings-popover__header">
-                    <span class="settings-popover__title">Настройки</span>
-                    <button type="button" class="settings-popover__close" aria-label="Закрыть">×</button>
-                </div>
-                <div class="settings-popover__content">
-                    <label class="settings-option">
-                        <input type="checkbox" data-setting="autoCollapseAfterOrder" />
-                        <span>Авто-скрывать панель после открытия заказа</span>
-                    </label>
-                    <label class="settings-option">
-                        <input type="checkbox" data-setting="parallelIdSearch" />
-                        <span>Параллельный поиск по ID пользователя и заказа</span>
-                    </label>
-                </div>
             </div>
             <div class="results"></div>
             <div class="toast-stack" aria-live="polite"></div>
@@ -2164,10 +2097,9 @@
             this.searchToggleEl = searchToggleEl;
             this.settings = settingsStorage.load();
             this.settingsButton = panelEl.querySelector('.settings-button');
-            this.settingsPopoverEl = panelEl.querySelector('.settings-popover');
-            this.settingsCloseEl = this.settingsPopoverEl ? this.settingsPopoverEl.querySelector('.settings-popover__close') : null;
-            this.settingsInputs = this.settingsPopoverEl ? Array.from(this.settingsPopoverEl.querySelectorAll('input[data-setting]')) : [];
-            this.settingsOpen = false;
+            this.settingsInputs = new Map();
+            this.hostSettingsWindow = null;
+            this._settingsWindowObserver = null;
             this.panelPlacement = this._loadPanelPlacement() || this._getDefaultPanelPlacement();
             this.hoverTimer = null;
             this.currentPopover = null;
@@ -2652,71 +2584,177 @@
         }
 
         _setupSettingsUI() {
-            if (!this.settingsButton) return;
-            const updateState = () => {
-                if (this.settingsButton) {
-                    this.settingsButton.setAttribute('aria-expanded', this.settingsOpen ? 'true' : 'false');
-                }
-                if (this.settingsPopoverEl) {
-                    this.settingsPopoverEl.hidden = !this.settingsOpen;
-                }
-                if (this.settingsOpen) {
-                    this._syncSettingsInputs();
-                }
-            };
-            this.settingsButton.addEventListener('click', () => {
-                this.settingsOpen = !this.settingsOpen;
-                updateState();
-            });
-            if (this.settingsCloseEl) {
-                this.settingsCloseEl.addEventListener('click', () => {
-                    this._closeSettingsPopover();
+            this._observeHostSettingsWindow();
+            if (this.settingsButton) {
+                this.settingsButton.addEventListener('click', () => {
+                    this._openHostSettingsWindow();
                 });
             }
             this._syncSettingsInputs();
-            for (const input of this.settingsInputs) {
-                const key = input.dataset.setting;
-                input.checked = Boolean(this.settings[key]);
-                input.addEventListener('change', () => {
-                    this._handleSettingChange(key, input.checked);
-                });
-            }
-            this._onDocumentSettingsPointerDown = (event) => {
-                if (!this.settingsOpen) return;
-                const target = event.target instanceof Element ? event.target : null;
-                if (!target) return;
-                if (this.settingsPopoverEl && this.settingsPopoverEl.contains(target)) return;
-                if (target === this.settingsButton || this.settingsButton.contains(target)) return;
-                this._closeSettingsPopover();
-            };
-            document.addEventListener('pointerdown', this._onDocumentSettingsPointerDown, true);
-            this._onSettingsKeyDown = (event) => {
-                if (event.key === 'Escape' && this.settingsOpen) {
-                    this._closeSettingsPopover();
-                }
-            };
-            if (this.shadowRoot) {
-                this.shadowRoot.addEventListener('keydown', this._onSettingsKeyDown);
-            }
         }
 
-        _closeSettingsPopover() {
-            if (!this.settingsOpen) return;
-            this.settingsOpen = false;
-            if (this.settingsButton) {
-                this.settingsButton.setAttribute('aria-expanded', 'false');
-                this.settingsButton.focus({ preventScroll: true });
+        _observeHostSettingsWindow() {
+            const ensureSetup = (root) => {
+                if (!root || typeof root.querySelector !== 'function') return;
+                const settingsWindow = root.querySelector('.ggsel-user-window[data-window="settings"]');
+                if (settingsWindow instanceof HTMLElement) {
+                    this._enhanceHostSettingsWindow(settingsWindow);
+                }
+            };
+            ensureSetup(document);
+            if (this._settingsWindowObserver || !document.body) {
+                return;
             }
-            if (this.settingsPopoverEl) {
-                this.settingsPopoverEl.hidden = true;
+            this._settingsWindowObserver = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (!(node instanceof Element)) continue;
+                        if (node.matches('.ggsel-user-window[data-window="settings"]')) {
+                            this._enhanceHostSettingsWindow(node);
+                        } else {
+                            const nested = node.querySelector('.ggsel-user-window[data-window="settings"]');
+                            if (nested instanceof HTMLElement) {
+                                this._enhanceHostSettingsWindow(nested);
+                            }
+                        }
+                    }
+                }
+            });
+            this._settingsWindowObserver.observe(document.body, { childList: true, subtree: true });
+        }
+
+        _enhanceHostSettingsWindow(windowEl) {
+            if (!(windowEl instanceof HTMLElement)) return;
+            this.hostSettingsWindow = windowEl;
+            const optionsContainer = windowEl.querySelector('.ggsel-user-window__options');
+            if (!(optionsContainer instanceof HTMLElement)) {
+                return;
+            }
+            for (const [key, descriptor] of Object.entries(SETTINGS_UI_DESCRIPTORS)) {
+                const optionEl = this._ensureHostSettingsOption(optionsContainer, key, descriptor);
+                if (!(optionEl instanceof HTMLElement)) continue;
+                const input = optionEl.querySelector('input[type="checkbox"]');
+                if (!(input instanceof HTMLInputElement)) continue;
+                input.dataset.gceSetting = key;
+                if (!input.dataset.gceBound) {
+                    input.addEventListener('change', () => {
+                        this._handleSettingChange(key, input.checked);
+                    });
+                    input.dataset.gceBound = 'true';
+                }
+                this._registerSettingInput(key, input);
+            }
+            this._syncSettingsInputs();
+        }
+
+        _ensureHostSettingsOption(container, key, descriptor) {
+            if (!(container instanceof HTMLElement)) return null;
+            const existing = container.querySelector(`[data-gce-setting-container="${key}"]`);
+            if (existing instanceof HTMLElement) {
+                const titleEl = existing.querySelector('.ggsel-user-window__option-title');
+                const descEl = existing.querySelector('.ggsel-user-window__option-desc');
+                if (titleEl) {
+                    titleEl.textContent = descriptor && descriptor.title ? descriptor.title : '';
+                }
+                if (descEl) {
+                    descEl.textContent = descriptor && descriptor.description ? descriptor.description : '';
+                } else if (descriptor && descriptor.description) {
+                    const desc = document.createElement('span');
+                    desc.className = 'ggsel-user-window__option-desc';
+                    desc.textContent = descriptor.description;
+                    const labelWrap = existing.querySelector('.ggsel-user-window__option-label');
+                    if (labelWrap) {
+                        labelWrap.appendChild(desc);
+                    }
+                }
+                return existing;
+            }
+            const label = document.createElement('label');
+            label.className = 'ggsel-user-window__option';
+            label.dataset.gceSettingContainer = key;
+
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+
+            const textWrap = document.createElement('div');
+            textWrap.className = 'ggsel-user-window__option-label';
+
+            const title = document.createElement('span');
+            title.className = 'ggsel-user-window__option-title';
+            title.textContent = descriptor && descriptor.title ? descriptor.title : '';
+
+            const description = document.createElement('span');
+            description.className = 'ggsel-user-window__option-desc';
+            description.textContent = descriptor && descriptor.description ? descriptor.description : '';
+
+            textWrap.appendChild(title);
+            textWrap.appendChild(description);
+            label.appendChild(input);
+            label.appendChild(textWrap);
+            container.appendChild(label);
+            return label;
+        }
+
+        _registerSettingInput(key, input) {
+            if (!key || !(input instanceof HTMLInputElement)) return;
+            let inputs = this.settingsInputs.get(key);
+            if (!inputs) {
+                inputs = new Set();
+                this.settingsInputs.set(key, inputs);
+            }
+            inputs.add(input);
+            input.checked = Boolean(this.settings && this.settings[key]);
+        }
+
+        _openHostSettingsWindow() {
+            let opened = false;
+            const globalWindow = typeof window !== 'undefined' ? window : null;
+            try {
+                if (globalWindow && globalWindow.GGSEL && globalWindow.GGSEL.userWindows && typeof globalWindow.GGSEL.userWindows.open === 'function') {
+                    globalWindow.GGSEL.userWindows.open('settings');
+                    opened = true;
+                }
+            } catch (err) {
+                logger.debug('Не удалось открыть окно настроек через GGSEL.userWindows', { error: err && err.message });
+            }
+            if (!opened) {
+                const triggers = document.querySelectorAll('[data-window-open="settings"], [data-user-window-open="settings"], [data-window-target="settings"]');
+                for (const trigger of triggers) {
+                    if (trigger instanceof HTMLElement) {
+                        trigger.click();
+                        opened = true;
+                        break;
+                    }
+                }
+            }
+            if (!opened) {
+                const detail = { window: 'settings' };
+                try {
+                    window.dispatchEvent(new CustomEvent('ggsel:user-window:open', { detail }));
+                } catch (err) {
+                    logger.debug('Не удалось отправить событие открытия окна настроек (window)', { error: err && err.message });
+                }
+                try {
+                    document.dispatchEvent(new CustomEvent('ggsel:user-window:open', { detail, bubbles: true }));
+                } catch (err) {
+                    logger.debug('Не удалось отправить событие открытия окна настроек (document)', { error: err && err.message });
+                }
+                const existingWindow = document.querySelector('.ggsel-user-window[data-window="settings"]');
+                if (existingWindow instanceof HTMLElement && typeof existingWindow.focus === 'function') {
+                    existingWindow.focus({ preventScroll: true });
+                }
             }
         }
 
         _syncSettingsInputs() {
-            if (!Array.isArray(this.settingsInputs)) return;
-            for (const input of this.settingsInputs) {
-                const key = input.dataset.setting;
-                input.checked = Boolean(this.settings[key]);
+            if (!(this.settingsInputs instanceof Map)) return;
+            for (const [key, inputs] of this.settingsInputs.entries()) {
+                const checked = Boolean(this.settings && this.settings[key]);
+                for (const input of inputs) {
+                    if (input instanceof HTMLInputElement) {
+                        input.checked = checked;
+                    }
+                }
             }
         }
 
@@ -2724,6 +2762,7 @@
             if (!key) return;
             this.settings = { ...this.settings, [key]: value };
             settingsStorage.save(this.settings);
+            this._syncSettingsInputs();
             if (key === 'parallelIdSearch') {
                 this._updateSpecialResults();
             }
