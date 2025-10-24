@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         GGSEL Category Explorer
-// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL
-// @version      1.2.16
-// @match        https://back-office.staging.ggsel.com/admin/categories*
+// @description  Компактный омнибокс для поиска и просмотра категорий в админке GGSEL. Флоу: открывайте панель навигации, ищите категории и проваливайтесь в карточки с помощью быстрых переходов. Последние изменения: расширили панель до 400px и добавили контекстные действия из карточки категории с подтверждениями для критичных операций.
+// @version      1.2.18
+// @match        https://back-office.ggsel.net/admin/categories*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
-// @connect      back-office.staging.ggsel.com
+// @connect      back-office.ggsel.net
 // ==/UserScript==
 
 (function() {
@@ -36,6 +36,20 @@
     const POPOVER_HIDE_DELAY_MS = 220;
     const EDGE_FLUSH_EPSILON = 2;
     const LOG_PREFIX = '[GGSEL Explorer]';
+    const ACTION_CONFIRM_KEYS = new Set([
+        'toggle-card',
+        'toggle-sbp',
+        'pause',
+        'move',
+    ]);
+    const ACTION_KEY_ALIASES = new Map([
+        ['редактирование', 'edit'],
+        ['переместить-категорию', 'move'],
+        ['поставить-на-паузу', 'pause'],
+        ['товары-по-категории', 'offers'],
+        ['вкл-cardlink-card-выкл-radarax-card', 'toggle-card'],
+        ['вкл-radarax-sbp-выкл-cardlink-sbp', 'toggle-sbp'],
+    ]);
 
     // --- Вспомогательные функции ---
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -121,6 +135,32 @@
     const collapseSpaces = (value) => (value || '').replace(/\s+/g, ' ').trim();
 
     const normalizeText = (value) => collapseSpaces(value).toLowerCase();
+
+    const slugifyActionLabel = (label) => {
+        if (!label) return '';
+        const normalized = collapseSpaces(label).toLowerCase();
+        if (!normalized) return '';
+        return normalized
+            .replace(/[()]/g, ' ')
+            .replace(/[^a-z0-9а-яё]+/gi, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
+    };
+
+    const resolveActionKey = (label) => {
+        const slug = slugifyActionLabel(label);
+        if (!slug) return '';
+        return ACTION_KEY_ALIASES.get(slug) || slug;
+    };
+
+    const toAbsoluteUrl = (href) => {
+        if (!href) return null;
+        try {
+            return new URL(href, location.origin).toString();
+        } catch (err) {
+            return null;
+        }
+    };
 
     const parsePathSegments = (rawInput) => {
         if (!rawInput || !PATH_SEPARATOR_RE.test(rawInput)) return null;
@@ -639,6 +679,51 @@
                     return text.includes('category') || text.includes('категор');
                 });
 
+            const collectFooterActions = () => {
+                const scopes = [];
+                if (categoryBox) scopes.push(categoryBox);
+                scopes.push(doc);
+                const seen = new Set();
+                const result = [];
+                let order = 0;
+                for (const scope of scopes) {
+                    if (!scope) continue;
+                    const footers = scope.querySelectorAll('.box-footer');
+                    for (const footer of Array.from(footers)) {
+                        const anchors = footer.querySelectorAll('a[href]');
+                        for (const anchor of Array.from(anchors)) {
+                            const label = collapseSpaces(anchor.textContent || '');
+                            if (!label) continue;
+                            const rawHref = anchor.getAttribute('href');
+                            if (!rawHref) continue;
+                            const absoluteHref = toAbsoluteUrl(rawHref);
+                            if (!absoluteHref) {
+                                logger.debug('Пропуск действия из-за некорректного href', { href: rawHref });
+                                continue;
+                            }
+                            const key = resolveActionKey(label);
+                            if (!key || seen.has(key)) continue;
+                            const rawMethod = anchor.getAttribute('data-method') || anchor.dataset && anchor.dataset.method;
+                            const method = rawMethod ? rawMethod.toString().trim().toUpperCase() : 'GET';
+                            const confirmMessage = collapseSpaces(anchor.getAttribute('data-confirm') || '');
+                            const requiresConfirm = ACTION_CONFIRM_KEYS.has(key);
+                            result.push({
+                                key,
+                                label,
+                                href: absoluteHref,
+                                method: method || 'GET',
+                                requiresConfirm,
+                                confirmMessage: requiresConfirm && confirmMessage ? confirmMessage : '',
+                                target: anchor.getAttribute('target') || '',
+                                order: order++,
+                            });
+                            seen.add(key);
+                        }
+                    }
+                }
+                return result;
+            };
+
             const collectFromTables = (scope) => {
                 const tables = scope ? scope.querySelectorAll('table') : doc.querySelectorAll('table');
                 for (const table of tables) {
@@ -754,6 +839,8 @@
                 extractAutoFinishFromTables();
             }
 
+            stats.actions = collectFooterActions();
+
             const setIfEmpty = (key, value) => {
                 if (value == null || value === '') return;
                 if (stats[key] == null || stats[key] === '') {
@@ -868,6 +955,12 @@
                 rawSegments.push(this.name);
             }
             this.pathSegments = rawSegments.filter(Boolean);
+            this.actions = Array.isArray(data.actions) ? data.actions.map((action, index) => ({
+                ...action,
+                order: typeof action.order === 'number' ? action.order : index,
+            })) : [];
+            this.actionsLoaded = Array.isArray(data.actions);
+            this.actionsLoading = null;
         }
     }
 
@@ -895,6 +988,14 @@
             node.autoFinishRaw = null;
         } else if (stats.autoFinishRaw != null && stats.autoFinishRaw !== '' && node.autoFinishHours == null) {
             node.autoFinishRaw = String(stats.autoFinishRaw).trim();
+        }
+        if (Array.isArray(stats.actions)) {
+            node.actions = stats.actions.map((action, index) => ({
+                ...action,
+                order: typeof action.order === 'number' ? action.order : index,
+            }));
+            node.actionsLoaded = true;
+            node.actionsLoading = null;
         }
     };
 
@@ -1061,7 +1162,7 @@
                 --shadow-2:0 10px 34px rgba(0,0,0,.34);
                 --dur-1:.12s;
                 --dur-2:.18s;
-                --panel-width: 348px;
+                --panel-width: 400px;
                 position: fixed;
                 top: 0;
                 left: 0;
@@ -2156,26 +2257,40 @@
             if (!this.contextMenuEl) return;
             this.contextMenuEl.innerHTML = '';
             const fragment = document.createDocumentFragment();
-            const actions = [];
+            const groups = [];
+
             if (editableTarget) {
-                actions.push(
+                groups.push([
                     { key: 'copy', label: 'Копировать', contextNode: null, editableTarget },
                     { key: 'paste', label: 'Вставить', contextNode: null, editableTarget },
-                    { key: 'separator' }
-                );
+                ]);
             }
+
             if (node) {
-                actions.push(
-                    { key: 'create', label: 'Создать', contextNode: node },
-                    { key: 'edit', label: 'Редактировать', contextNode: node },
-                    { key: 'move', label: 'Переместить', contextNode: node },
-                    { key: 'separator' }
-                );
+                const nodeActions = this._collectNodeActions(node);
+                if (nodeActions.length) {
+                    groups.push(nodeActions.map((action) => ({
+                        key: action.key,
+                        label: action.label,
+                        contextNode: node,
+                        nodeAction: action,
+                    })));
+                }
             }
-            actions.push(
+
+            groups.push([
                 { key: 'settings', label: 'Настройки', contextNode: null },
-                { key: 'help', label: 'Справка', contextNode: null }
-            );
+                { key: 'help', label: 'Справка', contextNode: null },
+            ]);
+
+            const actions = [];
+            for (const group of groups) {
+                if (!group || !group.length) continue;
+                if (actions.length) {
+                    actions.push({ key: 'separator' });
+                }
+                actions.push(...group);
+            }
 
             for (const action of actions) {
                 if (action.key === 'separator') {
@@ -2195,6 +2310,7 @@
                         node: action.contextNode || null,
                         editable: action.editableTarget || null,
                         selection: selectionSnapshot,
+                        nodeAction: action.nodeAction || null,
                     })).catch((err) => {
                         logger.warn('Ошибка обработки пункта контекстного меню', { error: err && err.message, action: action.key });
                     });
@@ -2202,10 +2318,239 @@
                 fragment.appendChild(button);
             }
             this.contextMenuEl.appendChild(fragment);
+
+            if (node && !node.actionsLoaded) {
+                this._ensureNodeActionsLoaded(node)
+                    .then(() => {
+                        if (!this._contextMenuVisible) return;
+                        if (!this.contextMenuEl) return;
+                        if (this._contextMenuNodeId !== node.id) return;
+                        this._buildContextMenuItems(node, editableTarget);
+                    })
+                    .catch((err) => {
+                        logger.debug('Не удалось загрузить действия для контекстного меню', { id: node.id, error: err && err.message });
+                    });
+            }
+        }
+
+        _collectNodeActions(node) {
+            if (!node) return [];
+            const normalized = [];
+            const seen = new Set();
+            const source = Array.isArray(node.actions) ? node.actions.slice() : [];
+            source.sort((a, b) => {
+                const orderA = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER;
+                const orderB = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER;
+                if (orderA !== orderB) return orderA - orderB;
+                const labelA = collapseSpaces(a.label || '');
+                const labelB = collapseSpaces(b.label || '');
+                return labelA.localeCompare(labelB, 'ru', { sensitivity: 'base' });
+            });
+
+            source.forEach((action, index) => {
+                const normalizedAction = this._normalizeNodeAction(action, index);
+                if (!normalizedAction) return;
+                if (seen.has(normalizedAction.key)) return;
+                normalized.push(normalizedAction);
+                seen.add(normalizedAction.key);
+            });
+
+            const ensureAction = (key, builder) => {
+                if (seen.has(key)) return;
+                const fallback = builder();
+                if (!fallback) return;
+                normalized.push(fallback);
+                seen.add(fallback.key);
+            };
+
+            ensureAction('edit', () => this._buildDefaultNodeAction('edit', node));
+            ensureAction('move', () => this._buildDefaultNodeAction('move', node));
+            ensureAction('offers', () => this._buildDefaultNodeAction('offers', node));
+
+            const priorityMap = new Map([
+                ['edit', 0],
+                ['move', 1],
+                ['pause', 2],
+                ['toggle-card', 3],
+                ['toggle-sbp', 4],
+                ['offers', 5],
+            ]);
+
+            normalized.sort((a, b) => {
+                const prA = priorityMap.has(a.key) ? priorityMap.get(a.key) : Number.MAX_SAFE_INTEGER;
+                const prB = priorityMap.has(b.key) ? priorityMap.get(b.key) : Number.MAX_SAFE_INTEGER;
+                if (prA !== prB) return prA - prB;
+                const orderA = typeof a.order === 'number' ? a.order : Number.MAX_SAFE_INTEGER;
+                const orderB = typeof b.order === 'number' ? b.order : Number.MAX_SAFE_INTEGER;
+                if (orderA !== orderB) return orderA - orderB;
+                return a.label.localeCompare(b.label, 'ru', { sensitivity: 'base' });
+            });
+
+            return normalized;
+        }
+
+        _normalizeNodeAction(rawAction, fallbackOrder = 0) {
+            if (!rawAction) return null;
+            const label = collapseSpaces(rawAction.label || rawAction.title || '');
+            if (!label) return null;
+            const href = rawAction.href || rawAction.url;
+            const absoluteHref = toAbsoluteUrl(href);
+            if (!absoluteHref) return null;
+            const key = rawAction.key || resolveActionKey(label);
+            if (!key) return null;
+            const rawMethod = rawAction.method || rawAction.httpMethod || 'GET';
+            const method = rawMethod ? String(rawMethod).trim().toUpperCase() : 'GET';
+            const requiresConfirm = rawAction.requiresConfirm != null
+                ? Boolean(rawAction.requiresConfirm)
+                : ACTION_CONFIRM_KEYS.has(key);
+            const confirmMessageRaw = rawAction.confirmMessage || rawAction.confirm || rawAction.confirmation;
+            const confirmMessage = requiresConfirm ? collapseSpaces(confirmMessageRaw || '') : '';
+            const target = rawAction.target || '_blank';
+            const order = typeof rawAction.order === 'number' ? rawAction.order : fallbackOrder;
+            return {
+                key,
+                label,
+                href: absoluteHref,
+                method: method || 'GET',
+                requiresConfirm,
+                confirmMessage,
+                target,
+                order,
+            };
+        }
+
+        _buildDefaultNodeAction(type, node) {
+            if (!node) return null;
+            const baseUrl = toAbsoluteUrl(node.href || `/admin/categories/${node.id}`)
+                || new URL(`/admin/categories/${node.id}`, location.origin).toString();
+            if (type === 'edit') {
+                const editUrl = new URL('./edit', baseUrl).toString();
+                return {
+                    key: 'edit',
+                    label: 'Редактировать',
+                    href: editUrl,
+                    method: 'GET',
+                    requiresConfirm: false,
+                    confirmMessage: '',
+                    target: '_blank',
+                    order: -10,
+                };
+            }
+            if (type === 'move') {
+                const moveUrl = new URL('./reassign/edit', baseUrl).toString();
+                return {
+                    key: 'move',
+                    label: 'Переместить категорию',
+                    href: moveUrl,
+                    method: 'GET',
+                    requiresConfirm: true,
+                    confirmMessage: '',
+                    target: '_blank',
+                    order: 25,
+                };
+            }
+            if (type === 'offers') {
+                const offersUrl = new URL(`/admin/offers?search%5Bcategory_id%5D=${encodeURIComponent(node.id)}`, location.origin).toString();
+                return {
+                    key: 'offers',
+                    label: 'Товары по категории',
+                    href: offersUrl,
+                    method: 'GET',
+                    requiresConfirm: false,
+                    confirmMessage: '',
+                    target: '_blank',
+                    order: 50,
+                };
+            }
+            return null;
+        }
+
+        _ensureNodeActionsLoaded(node) {
+            if (!node) return Promise.resolve([]);
+            if (node.actionsLoaded && Array.isArray(node.actions)) {
+                return Promise.resolve(node.actions);
+            }
+            if (node.actionsLoading) {
+                return node.actionsLoading;
+            }
+            node.actionsLoading = loadStats(node.id)
+                .then(() => {
+                    if (!Array.isArray(node.actions)) {
+                        node.actions = [];
+                        node.actionsLoaded = true;
+                    }
+                    return node.actions;
+                })
+                .catch((err) => {
+                    node.actionsLoaded = false;
+                    throw err;
+                })
+                .finally(() => {
+                    node.actionsLoading = null;
+                });
+            return node.actionsLoading;
+        }
+
+        async _executeNodeAction(action, node) {
+            if (!action || !action.href) {
+                this._showToast('Действие недоступно', 'error');
+                return;
+            }
+            const label = action.label || action.key || 'Действие';
+            if (action.requiresConfirm) {
+                const message = action.confirmMessage || `Подтвердите действие «${label}»`;
+                const confirmed = window.confirm(message);
+                if (!confirmed) {
+                    this._showToast('Действие отменено', 'info');
+                    return;
+                }
+            }
+            const method = (action.method || 'GET').toUpperCase();
+            const url = action.href;
+            if (method === 'GET') {
+                const target = action.target && typeof action.target === 'string' && action.target.trim()
+                    ? action.target.trim()
+                    : '_blank';
+                const finalTarget = target === '_self' ? '_self' : target;
+                const features = finalTarget === '_self' ? undefined : 'noopener';
+                const opened = window.open(url, finalTarget, features);
+                if (!opened && finalTarget !== '_self') {
+                    window.location.href = url;
+                }
+                this._showToast(`Открываем «${label}»`, 'success');
+                return;
+            }
+            try {
+                const headers = {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'X-Requested-With': 'XMLHttpRequest',
+                };
+                const tokenMeta = document.querySelector('meta[name="csrf-token"]');
+                const token = tokenMeta ? tokenMeta.getAttribute('content') : null;
+                if (token) {
+                    headers['X-CSRF-Token'] = token;
+                }
+                const response = await fetch(url, {
+                    method,
+                    headers,
+                    credentials: 'include',
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                this._showToast(`Действие «${label}» выполнено`, 'success');
+            } catch (err) {
+                logger.error('Не удалось выполнить действие категории', {
+                    id: node ? node.id : null,
+                    action: action.key,
+                    error: err && err.message,
+                });
+                this._showToast(`Не удалось выполнить «${label}»`, 'error');
+            }
         }
 
         async _handleContextMenuAction(actionKey, context = {}) {
-            const { node, editable, selection } = context || {};
+            const { node, editable, selection, nodeAction } = context || {};
             if (actionKey === 'copy') {
                 if (!editable) {
                     this._showToast('Поле ввода не найдено', 'error');
@@ -2248,6 +2593,10 @@
                 }
                 return;
             }
+            if (nodeAction) {
+                await this._executeNodeAction(nodeAction, node || null);
+                return;
+            }
             const labelMap = {
                 create: 'Создать',
                 edit: 'Редактировать',
@@ -2256,6 +2605,10 @@
                 help: 'Справка',
                 copy: 'Копировать',
                 paste: 'Вставить',
+                pause: 'Поставить на паузу',
+                offers: 'Товары по категории',
+                'toggle-card': 'Переключить CARD',
+                'toggle-sbp': 'Переключить СБП',
             };
             const label = labelMap[actionKey] || actionKey;
             logger.info('Контекстное действие (stub)', {
@@ -3589,6 +3942,7 @@
                     || (stats.commissionRaw != null && String(stats.commissionRaw).trim() !== '')
                     || stats.autoFinishHours != null
                     || (stats.autoFinishRaw != null && String(stats.autoFinishRaw).trim() !== '')
+                    || Array.isArray(stats.actions)
                 );
                 if (hasMeaningfulStats) {
                     const existing = statsCache.get(categoryId);
