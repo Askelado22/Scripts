@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GGSEL User Explorer
 // @description  Быстрый поиск и просмотр данных пользователей в админке GGSEL
-// @version      1.3.0
+// @version      1.5.0
 // @match        https://back-office.ggsel.net/admin
 // @match        https://back-office.ggsel.net/admin/*
 // @grant        GM_addStyle
@@ -10,11 +10,19 @@
 (function() {
     'use strict';
 
+    // Flow: плавающая панель с быстрым поиском пользователей и заказов в back-office GGSEL, история запросов,
+    // фильтры, контекстные действия и предпросмотр деталей.
+    // Последние изменения (v1.5.0): автосворачивание панели после перехода к заказу (переключатель в настройках),
+    // кэширование результатов между страницами, относительное сохранение позиции кнопки, разноцветные бейджи совпадений
+    // и переключатель параллельного поиска по ID.
+
     const STORAGE_KEY = 'ggsel-user-explorer:last-query';
     const STORAGE_MODE_KEY = 'ggsel-user-explorer:last-mode';
     const PANEL_STATE_KEY = 'ggsel-user-explorer:panel-open';
     const SETTINGS_KEY = 'ggsel-user-explorer:settings';
     const ANCHOR_POSITION_KEY = 'ggsel-user-explorer:anchor-position';
+    const RESULTS_CACHE_KEY = 'ggsel-user-explorer:last-results';
+    const RESULTS_CACHE_VERSION = 1;
     const DEBOUNCE_MS = 600;
     const FAB_SIZE = 56;
     const VIEWPORT_MARGIN = 16;
@@ -256,7 +264,9 @@
         extraActions: false,
         shortcut: cloneShortcut(DEFAULT_SHORTCUT),
         userFields: normalizeUserFieldSettings(),
-        orderFields: normalizeOrderFieldSettings()
+        orderFields: normalizeOrderFieldSettings(),
+        autoCollapseOnOrderOpen: true,
+        parallelIdSearch: true
     });
 
     const state = {
@@ -308,7 +318,9 @@
         historyList: null,
         historyVisible: false,
         queryHistory: [],
-        lastPanelHeight: FAB_SIZE
+        lastPanelHeight: FAB_SIZE,
+        cacheHydrated: false,
+        resultsCacheSignature: null
     };
 
     const formatShortcut = (shortcut) => {
@@ -383,16 +395,70 @@
         return collapseSpaces(String(value));
     };
 
+    const clampRatio = (value) => {
+        if (!Number.isFinite(value)) return null;
+        if (value <= 0) return 0;
+        if (value >= 1) return 1;
+        return value;
+    };
+
+    const computeRatio = (value, size) => {
+        if (!Number.isFinite(value) || size <= 0) {
+            return 0;
+        }
+        const ratio = value / size;
+        const clamped = ratio <= 0 ? 0 : ratio >= 1 ? 1 : ratio;
+        return Math.round(clamped * 10000) / 10000;
+    };
+
+    const getViewportSize = () => ({
+        width: window.innerWidth || document.documentElement.clientWidth || 0,
+        height: window.innerHeight || document.documentElement.clientHeight || 0
+    });
+
+    const buildAnchorPosition = (position = {}) => {
+        if (!position || typeof position !== 'object') {
+            return null;
+        }
+        const { width, height } = getViewportSize();
+        const safeWidth = width > 0 ? width : 1;
+        const safeHeight = height > 0 ? height : 1;
+        const ratioLeft = clampRatio(Number(position.leftRatio ?? position.relLeft));
+        const ratioTop = clampRatio(Number(position.topRatio ?? position.relTop));
+        let left = Number(position.left);
+        let top = Number(position.top);
+        if (ratioLeft !== null) {
+            left = Math.round(ratioLeft * safeWidth);
+        }
+        if (ratioTop !== null) {
+            top = Math.round(ratioTop * safeHeight);
+        }
+        if (!Number.isFinite(left) || !Number.isFinite(top)) {
+            return null;
+        }
+        const normalizedLeft = Math.round(left);
+        const normalizedTop = Math.round(top);
+        return {
+            left: normalizedLeft,
+            top: normalizedTop,
+            leftRatio: computeRatio(normalizedLeft, safeWidth),
+            topRatio: computeRatio(normalizedTop, safeHeight)
+        };
+    };
+
     const loadPosition = (key) => {
         try {
             const raw = localStorage.getItem(key);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return null;
-            const left = Number(parsed.left);
-            const top = Number(parsed.top);
-            if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
-            return { left, top };
+            const position = buildAnchorPosition({
+                left: parsed.left,
+                top: parsed.top,
+                leftRatio: parsed.leftRatio ?? parsed.relLeft,
+                topRatio: parsed.topRatio ?? parsed.relTop
+            });
+            return position;
         } catch (error) {
             console.warn('[GGSEL User Explorer] Не удалось загрузить позицию', error);
             return null;
@@ -401,10 +467,15 @@
 
     const savePosition = (key, position) => {
         if (!position || typeof position !== 'object') return;
+        const normalized = buildAnchorPosition(position);
+        if (!normalized) return;
         try {
             localStorage.setItem(key, JSON.stringify({
-                left: Math.round(position.left),
-                top: Math.round(position.top)
+                left: normalized.left,
+                top: normalized.top,
+                leftRatio: normalized.leftRatio,
+                topRatio: normalized.topRatio,
+                version: 2
             }));
         } catch (error) {
             console.warn('[GGSEL User Explorer] Не удалось сохранить позицию', error);
@@ -413,8 +484,9 @@
 
     const clampPositionToViewport = (position) => {
         if (!position) return position;
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const resolved = buildAnchorPosition(position);
+        if (!resolved) return null;
+        const { width: viewportWidth, height: viewportHeight } = getViewportSize();
         const anchorRect = state.anchor?.getBoundingClientRect();
         const width = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.width || FAB_SIZE)) : FAB_SIZE;
         const height = anchorRect ? Math.max(FAB_SIZE, Math.round(anchorRect.height || FAB_SIZE)) : FAB_SIZE;
@@ -432,8 +504,8 @@
             return Math.min(Math.max(value, min), max);
         };
 
-        let left = Math.min(Math.max(Math.round(position.left), 0), maxLeft);
-        let top = Math.min(Math.max(Math.round(position.top), 0), maxTop);
+        let left = Math.min(Math.max(Math.round(resolved.left), 0), maxLeft);
+        let top = Math.min(Math.max(Math.round(resolved.top), 0), maxTop);
 
         left = applyMargin(left, width, viewportWidth);
         top = applyMargin(top, height, viewportHeight);
@@ -461,7 +533,7 @@
             top = Math.min(Math.max(top, minTop), maxTopPanel);
         }
 
-        return { left, top };
+        return buildAnchorPosition({ left, top });
     };
 
     const applyAnchorPositionStyles = (position) => {
@@ -474,22 +546,24 @@
         } else {
             state.anchor.style.right = 'auto';
             state.anchor.style.bottom = 'auto';
-            state.anchor.style.left = `${position.left}px`;
-            state.anchor.style.top = `${position.top}px`;
+            state.anchor.style.left = `${Math.round(position.left)}px`;
+            state.anchor.style.top = `${Math.round(position.top)}px`;
         }
     };
 
     const getAnchorBasePosition = () => {
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const { width: viewportWidth, height: viewportHeight } = getViewportSize();
         const margin = VIEWPORT_MARGIN;
         if (state.anchorPosition) {
-            return { ...state.anchorPosition };
+            const resolved = buildAnchorPosition(state.anchorPosition);
+            if (resolved) {
+                return resolved;
+            }
         }
-        return {
+        return buildAnchorPosition({
             left: Math.max(0, viewportWidth - FAB_SIZE - margin),
             top: Math.max(0, viewportHeight - FAB_SIZE - margin)
-        };
+        });
     };
 
     const getCurrentInputValue = () => {
@@ -567,7 +641,7 @@
             nextLeft = Math.min(Math.max(Math.round(nextLeft), 0), maxLeft);
             nextTop = Math.min(Math.max(Math.round(nextTop), 0), maxTop);
             state.anchorDragMoved = state.anchorDragMoved || (Math.abs(nextLeft - baseLeft) > 1 || Math.abs(nextTop - baseTop) > 1);
-            state.anchorPosition = { left: nextLeft, top: nextTop };
+            state.anchorPosition = buildAnchorPosition({ left: nextLeft, top: nextTop });
             state.anchorPositionManual = true;
             applyAnchorPosition();
         };
@@ -739,7 +813,8 @@
     };
 
     const loadSettings = () => {
-        state.settings = getDefaultSettings();
+        const defaults = getDefaultSettings();
+        state.settings = defaults;
         try {
             const raw = localStorage.getItem(SETTINGS_KEY);
             if (!raw) {
@@ -748,15 +823,22 @@
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
                 state.settings = {
+                    ...defaults,
                     extraActions: Boolean(parsed.extraActions),
                     shortcut: normalizeShortcut(parsed.shortcut),
                     userFields: normalizeUserFieldSettings(parsed.userFields),
-                    orderFields: normalizeOrderFieldSettings(parsed.orderFields)
+                    orderFields: normalizeOrderFieldSettings(parsed.orderFields),
+                    autoCollapseOnOrderOpen: parsed.autoCollapseOnOrderOpen == null
+                        ? defaults.autoCollapseOnOrderOpen
+                        : Boolean(parsed.autoCollapseOnOrderOpen),
+                    parallelIdSearch: parsed.parallelIdSearch == null
+                        ? defaults.parallelIdSearch
+                        : Boolean(parsed.parallelIdSearch)
                 };
             }
         } catch (error) {
             console.warn('Не удалось загрузить настройки GGSEL User Explorer', error);
-            state.settings = getDefaultSettings();
+            state.settings = defaults;
         }
     };
 
@@ -766,7 +848,9 @@
                 extraActions: Boolean(state.settings?.extraActions),
                 shortcut: normalizeShortcut(state.settings?.shortcut),
                 userFields: normalizeUserFieldSettings(state.settings?.userFields),
-                orderFields: normalizeOrderFieldSettings(state.settings?.orderFields)
+                orderFields: normalizeOrderFieldSettings(state.settings?.orderFields),
+                autoCollapseOnOrderOpen: Boolean(state.settings?.autoCollapseOnOrderOpen),
+                parallelIdSearch: Boolean(state.settings?.parallelIdSearch)
             }));
         } catch (error) {
             console.warn('Не удалось сохранить настройки GGSEL User Explorer', error);
@@ -1129,6 +1213,56 @@
             label.appendChild(textWrap);
             options.appendChild(label);
 
+            const autoCollapseLabel = document.createElement('label');
+            autoCollapseLabel.className = 'ggsel-user-window__option';
+
+            const autoCollapseCheckbox = document.createElement('input');
+            autoCollapseCheckbox.type = 'checkbox';
+            autoCollapseCheckbox.name = 'autoCollapseOnOrderOpen';
+
+            const autoCollapseText = document.createElement('div');
+            autoCollapseText.className = 'ggsel-user-window__option-label';
+
+            const autoCollapseTitle = document.createElement('span');
+            autoCollapseTitle.className = 'ggsel-user-window__option-title';
+            autoCollapseTitle.textContent = 'Сворачивать панель после открытия заказа';
+
+            const autoCollapseDesc = document.createElement('span');
+            autoCollapseDesc.className = 'ggsel-user-window__option-desc';
+            autoCollapseDesc.textContent = 'Автоматически убирать окно поиска в кнопку после перехода к заказу.';
+
+            autoCollapseText.appendChild(autoCollapseTitle);
+            autoCollapseText.appendChild(autoCollapseDesc);
+
+            autoCollapseLabel.appendChild(autoCollapseCheckbox);
+            autoCollapseLabel.appendChild(autoCollapseText);
+            options.appendChild(autoCollapseLabel);
+
+            const parallelLabel = document.createElement('label');
+            parallelLabel.className = 'ggsel-user-window__option';
+
+            const parallelCheckbox = document.createElement('input');
+            parallelCheckbox.type = 'checkbox';
+            parallelCheckbox.name = 'parallelIdSearch';
+
+            const parallelText = document.createElement('div');
+            parallelText.className = 'ggsel-user-window__option-label';
+
+            const parallelTitle = document.createElement('span');
+            parallelTitle.className = 'ggsel-user-window__option-title';
+            parallelTitle.textContent = 'Параллельный поиск по ID';
+
+            const parallelDesc = document.createElement('span');
+            parallelDesc.className = 'ggsel-user-window__option-desc';
+            parallelDesc.textContent = 'Одновременно проверять ID пользователя и заказа при числовом запросе.';
+
+            parallelText.appendChild(parallelTitle);
+            parallelText.appendChild(parallelDesc);
+
+            parallelLabel.appendChild(parallelCheckbox);
+            parallelLabel.appendChild(parallelText);
+            options.appendChild(parallelLabel);
+
             const fieldsContainer = document.createElement('div');
             fieldsContainer.className = 'ggsel-user-window__field-groups';
 
@@ -1264,9 +1398,35 @@
                 closeContextMenu();
             });
 
+            autoCollapseCheckbox.addEventListener('change', () => {
+                state.settings.autoCollapseOnOrderOpen = autoCollapseCheckbox.checked;
+                saveSettings();
+            });
+
+            parallelCheckbox.addEventListener('change', () => {
+                state.settings.parallelIdSearch = parallelCheckbox.checked;
+                saveSettings();
+                invalidateCacheHydration();
+                const { params, plan } = parseSearchInput(state.query, state.mode);
+                state.params = params;
+                state.searchPlan = plan;
+                state.page = 1;
+                state.hasMore = false;
+                state.detailCache.clear();
+                if (state.resultsContainer) {
+                    state.resultsContainer.innerHTML = '';
+                }
+                updateResultsVisibility();
+                if (state.query) {
+                    performSearch({ append: false, force: true });
+                }
+            });
+
             win.initialized = true;
             win.controls = {
                 checkbox,
+                autoCollapseCheckbox,
+                parallelCheckbox,
                 shortcutDisplay,
                 shortcutAssign: assignBtn,
                 shortcutReset: resetBtn,
@@ -1276,6 +1436,14 @@
 
         if (win.controls?.checkbox) {
             win.controls.checkbox.checked = Boolean(state.settings.extraActions);
+        }
+
+        if (win.controls?.autoCollapseCheckbox) {
+            win.controls.autoCollapseCheckbox.checked = Boolean(state.settings.autoCollapseOnOrderOpen);
+        }
+
+        if (win.controls?.parallelCheckbox) {
+            win.controls.parallelCheckbox.checked = Boolean(state.settings.parallelIdSearch);
         }
 
         if (win.controls?.fieldCheckboxes) {
@@ -1887,6 +2055,11 @@
                 box-shadow: 0 0 18px rgba(138, 180, 255, 0.2);
                 opacity: 1;
             }
+            .ggsel-user-card.ggsel-order-card.order-match-seller::before {
+                border-color: rgba(255, 210, 102, 0.5);
+                box-shadow: 0 0 18px rgba(255, 210, 102, 0.22);
+                opacity: 1;
+            }
             .ggsel-user-card:hover {
                 border-color: #8ab4ff;
                 box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
@@ -2066,25 +2239,39 @@
                 border-color: rgba(188, 220, 255, 0.98);
             }
             .ggsel-user-card.order-match-id {
-                border-color: rgba(245, 245, 245, 0.85);
-                box-shadow: 0 0 0 1px rgba(245, 245, 245, 0.35), 0 10px 28px rgba(0, 0, 0, 0.35);
+                border-color: rgba(138, 180, 255, 0.88);
+                box-shadow: 0 0 0 1px rgba(138, 180, 255, 0.34), 0 10px 28px rgba(0, 0, 0, 0.35);
             }
             .ggsel-user-card.order-match-id:hover {
-                border-color: rgba(255, 255, 255, 0.95);
+                border-color: rgba(158, 196, 255, 0.96);
             }
             .ggsel-user-card.order-match-uuid {
-                border-color: rgba(168, 225, 255, 0.85);
-                box-shadow: 0 0 0 1px rgba(168, 225, 255, 0.32), 0 10px 28px rgba(0, 0, 0, 0.32);
+                border-color: rgba(197, 160, 255, 0.88);
+                box-shadow: 0 0 0 1px rgba(197, 160, 255, 0.32), 0 10px 28px rgba(0, 0, 0, 0.32);
             }
             .ggsel-user-card.order-match-uuid:hover {
-                border-color: rgba(188, 235, 255, 0.95);
+                border-color: rgba(215, 180, 255, 0.96);
             }
             .ggsel-user-card.order-match-email {
-                border-color: rgba(142, 214, 255, 0.82);
-                box-shadow: 0 0 0 1px rgba(142, 214, 255, 0.28), 0 10px 28px rgba(0, 0, 0, 0.32);
+                border-color: rgba(125, 237, 198, 0.85);
+                box-shadow: 0 0 0 1px rgba(125, 237, 198, 0.28), 0 10px 28px rgba(0, 0, 0, 0.32);
             }
             .ggsel-user-card.order-match-email:hover {
-                border-color: rgba(162, 224, 255, 0.95);
+                border-color: rgba(145, 247, 208, 0.95);
+            }
+            .ggsel-user-card.order-match-seller {
+                border-color: rgba(255, 210, 102, 0.88);
+                box-shadow: 0 0 0 1px rgba(255, 210, 102, 0.32), 0 10px 28px rgba(0, 0, 0, 0.35);
+            }
+            .ggsel-user-card.order-match-seller:hover {
+                border-color: rgba(255, 220, 140, 0.96);
+            }
+            .ggsel-user-card.order-match-user {
+                border-color: rgba(255, 154, 154, 0.86);
+                box-shadow: 0 0 0 1px rgba(255, 154, 154, 0.3), 0 10px 28px rgba(0, 0, 0, 0.32);
+            }
+            .ggsel-user-card.order-match-user:hover {
+                border-color: rgba(255, 178, 178, 0.95);
             }
             .ggsel-order-card {
                 cursor: pointer;
@@ -2102,6 +2289,12 @@
                 gap: 4px;
                 min-width: 0;
                 align-items: flex-start;
+            }
+            .ggsel-order-card-badges {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-top: 2px;
             }
             .ggsel-order-card-title {
                 font-size: 14px;
@@ -2135,6 +2328,33 @@
                 text-transform: uppercase;
                 max-width: 100%;
                 align-self: flex-start;
+            }
+            .ggsel-order-card-badge--order-id {
+                border-color: rgba(138, 180, 255, 0.5);
+                background: rgba(138, 180, 255, 0.18);
+                color: #9fc0ff;
+            }
+            .ggsel-order-card-badge--order-uuid {
+                border-color: rgba(197, 160, 255, 0.5);
+                background: rgba(197, 160, 255, 0.2);
+                color: #d5c3ff;
+            }
+            .ggsel-order-card-badge--order-email {
+                border-color: rgba(125, 237, 198, 0.5);
+                background: rgba(125, 237, 198, 0.2);
+                color: #7dedc6;
+            }
+            .ggsel-order-card-badge--seller-id,
+            .ggsel-order-card-badge--order-seller {
+                border-color: rgba(255, 210, 102, 0.5);
+                background: rgba(255, 210, 102, 0.2);
+                color: #ffd166;
+            }
+            .ggsel-order-card-badge--user-id,
+            .ggsel-order-card-badge--order-username {
+                border-color: rgba(255, 154, 154, 0.5);
+                background: rgba(255, 154, 154, 0.22);
+                color: #ff9a9a;
             }
             .ggsel-order-card-id {
                 font-size: 13px;
@@ -2456,6 +2676,7 @@
     const parseUserSearchInput = (rawInput) => {
         let params = getDefaultParams(MODE_USERS);
         const summary = [];
+        let singleQueryHighlight = null;
         const input = (rawInput || '').trim();
         if (!input) {
             return {
@@ -2532,19 +2753,24 @@
         }
 
         let numericPlan = null;
+        const allowParallelIds = Boolean(state.settings?.parallelIdSearch);
         if (!tokens.length && !emailCandidate && !ipCandidate && digitsCandidate) {
             const idParams = { ...USER_DEFAULT_PARAMS, 'search[id]': digitsCandidate };
             const ggselParams = { ...USER_DEFAULT_PARAMS, 'search[ggsel_id_seller]': digitsCandidate };
             params = idParams;
             summary.push(`id: ${digitsCandidate}`);
-            summary.push(`ggsel: ${digitsCandidate}`);
-            numericPlan = {
-                type: 'multi',
-                queries: [
-                    { key: 'id', params: idParams, highlight: 'id', label: `ID: ${digitsCandidate}` },
-                    { key: 'ggsel', params: ggselParams, highlight: 'ggsel', label: `GGSEL ID: ${digitsCandidate}` }
-                ]
-            };
+            if (allowParallelIds) {
+                summary.push(`ggsel: ${digitsCandidate}`);
+                numericPlan = {
+                    type: 'multi',
+                    queries: [
+                        { key: 'id', params: idParams, highlight: 'id', label: `ID: ${digitsCandidate}` },
+                        { key: 'ggsel', params: ggselParams, highlight: 'ggsel', label: `GGSEL ID: ${digitsCandidate}` }
+                    ]
+                };
+            } else {
+                singleQueryHighlight = 'id';
+            }
         }
 
         if (!numericPlan && !emailCandidate && !ipCandidate && residualParts.length && !params['search[username_like]']) {
@@ -2566,7 +2792,7 @@
             summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
             plan: {
                 type: 'single',
-                queries: [{ key: 'default', params, highlight: null }]
+                queries: [{ key: singleQueryHighlight ? `single-${singleQueryHighlight}` : 'default', params, highlight: singleQueryHighlight }]
             }
         };
     };
@@ -2669,23 +2895,35 @@
             singleQueryHighlight = 'order-uuid';
         }
 
+        const allowParallelIds = Boolean(state.settings?.parallelIdSearch);
         if (!tokens.length && !emailCandidate && !uuidCandidate && digitsCandidate) {
             const orderParams = { ...ORDER_DEFAULT_PARAMS, 'search[id]': digitsCandidate };
-            const sellerParams = { ...ORDER_DEFAULT_PARAMS, 'search[seller_id]': digitsCandidate };
-            const userParams = { ...ORDER_DEFAULT_PARAMS, 'search[user_id]': digitsCandidate };
             params = orderParams;
             summary.push(`id: ${digitsCandidate}`);
-            const queries = [
-                { key: 'order-id', params: orderParams, highlight: 'order-id', label: `ID заказа: ${digitsCandidate}` },
-                { key: 'seller-id', params: sellerParams, highlight: 'seller-id', label: `ID продавца: ${digitsCandidate}` },
-                { key: 'user-id', params: userParams, highlight: 'user-id', label: `ID пользователя: ${digitsCandidate}` }
-            ];
+            if (allowParallelIds) {
+                const sellerParams = { ...ORDER_DEFAULT_PARAMS, 'search[seller_id]': digitsCandidate };
+                const userParams = { ...ORDER_DEFAULT_PARAMS, 'search[user_id]': digitsCandidate };
+                const queries = [
+                    { key: 'order-id', params: orderParams, highlight: 'order-id', label: `ID заказа: ${digitsCandidate}` },
+                    { key: 'seller-id', params: sellerParams, highlight: 'seller-id', label: `ID продавца: ${digitsCandidate}` },
+                    { key: 'user-id', params: userParams, highlight: 'user-id', label: `ID пользователя: ${digitsCandidate}` }
+                ];
+                return {
+                    params,
+                    summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
+                    plan: {
+                        type: 'multi',
+                        queries
+                    }
+                };
+            }
+            singleQueryHighlight = 'order-id';
             return {
                 params,
                 summary: summary.length ? summary.join(' · ') : `Поиск: ${input}`,
                 plan: {
-                    type: 'multi',
-                    queries
+                    type: 'single',
+                    queries: [{ key: 'order-id', params: orderParams, highlight: singleQueryHighlight }]
                 }
             };
         }
@@ -2775,6 +3013,161 @@
             }
         }
         return item;
+    };
+
+    const buildPlanSignature = (plan) => {
+        if (!plan || typeof plan !== 'object') {
+            return 'single:';
+        }
+        const type = plan.type === 'multi' ? 'multi' : 'single';
+        const queries = Array.isArray(plan.queries) ? plan.queries : [];
+        const serialized = queries.map((query) => {
+            const key = collapseSpaces(typeof query?.key === 'string' ? query.key : 'default');
+            const highlight = collapseSpaces(typeof query?.highlight === 'string' ? query.highlight : '');
+            const params = query && query.params && typeof query.params === 'object'
+                ? Object.keys(query.params)
+                    .sort()
+                    .map((paramKey) => `${paramKey}=${query.params[paramKey] ?? ''}`)
+                    .join('&')
+                : '';
+            return `${key}|${highlight}|${params}`;
+        }).join('||');
+        return `${type}:${serialized}`;
+    };
+
+    const serializeResultsForCache = (items = []) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+        return items
+            .map((item) => {
+                if (!item || typeof item !== 'object') {
+                    return null;
+                }
+                const plain = { ...item };
+                if (plain.matchTags instanceof Set) {
+                    plain.matchTags = Array.from(plain.matchTags);
+                } else if (plain.matchTags && typeof plain.matchTags === 'object' && !Array.isArray(plain.matchTags)) {
+                    plain.matchTags = Object.values(plain.matchTags);
+                }
+                return plain;
+            })
+            .filter(Boolean);
+    };
+
+    const deserializeResultsFromCache = (items = []) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+        return items.map((item) => {
+            if (!item || typeof item !== 'object') {
+                return {};
+            }
+            const restored = { ...item };
+            if (Array.isArray(restored.matchTags)) {
+                restored.matchTags = new Set(restored.matchTags);
+            }
+            return restored;
+        });
+    };
+
+    const clearResultsCache = () => {
+        try {
+            localStorage.removeItem(RESULTS_CACHE_KEY);
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось очистить кеш результатов', error);
+        }
+        state.resultsCacheSignature = null;
+        state.cacheHydrated = false;
+    };
+
+    const loadResultsCache = () => {
+        try {
+            const raw = localStorage.getItem(RESULTS_CACHE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            if (parsed.version !== RESULTS_CACHE_VERSION) return null;
+            if (!Array.isArray(parsed.results)) return null;
+            return {
+                ...parsed,
+                results: deserializeResultsFromCache(parsed.results)
+            };
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось загрузить кеш результатов', error);
+            return null;
+        }
+    };
+
+    const saveResultsCache = ({ results = state.results, page = state.page, hasMore = state.hasMore } = {}) => {
+        if (!state.query) {
+            clearResultsCache();
+            return;
+        }
+        const payload = {
+            version: RESULTS_CACHE_VERSION,
+            mode: state.mode,
+            query: state.query,
+            planSignature: buildPlanSignature(state.searchPlan),
+            page: Number.isFinite(page) ? page : 1,
+            hasMore: Boolean(hasMore),
+            results: serializeResultsForCache(results),
+            timestamp: Date.now()
+        };
+        try {
+            localStorage.setItem(RESULTS_CACHE_KEY, JSON.stringify(payload));
+            state.cacheHydrated = true;
+            state.resultsCacheSignature = payload.planSignature;
+        } catch (error) {
+            console.warn('[GGSEL User Explorer] Не удалось сохранить кеш результатов', error);
+        }
+    };
+
+    const invalidateCacheHydration = () => {
+        state.cacheHydrated = false;
+        state.resultsCacheSignature = null;
+    };
+
+    const maybeHydrateResultsFromCache = () => {
+        if (state.cacheHydrated) {
+            return false;
+        }
+        const cached = loadResultsCache();
+        if (!cached) {
+            return false;
+        }
+        const signature = buildPlanSignature(state.searchPlan);
+        if (cached.mode !== state.mode || cached.query !== state.query || cached.planSignature !== signature) {
+            return false;
+        }
+        state.cacheHydrated = true;
+        state.resultsCacheSignature = cached.planSignature;
+        state.page = Number.isFinite(cached.page) ? cached.page : 1;
+        state.hasMore = Boolean(cached.hasMore);
+        const restored = cached.results.map((item) => normalizeMatchMetadata({ ...item }, state.mode));
+        state.results = restored;
+        state.loading = false;
+        if (state.resultsContainer) {
+            updateResults(restored, false);
+        }
+        if (state.loadMoreButton) {
+            state.loadMoreButton.hidden = !state.hasMore;
+            state.loadMoreButton.disabled = !state.hasMore;
+            state.loadMoreButton.textContent = LOAD_MORE_LABEL;
+        }
+        updateResultsVisibility();
+        if (restored.length) {
+            if (state.mode === MODE_USERS) {
+                prefetchUserDetails(restored).catch((error) => {
+                    console.warn('[GGSEL User Explorer] Не удалось предзагрузить пользователей из кеша', error);
+                });
+            } else if (state.mode === MODE_ORDERS) {
+                prefetchOrderOffers(restored).catch((error) => {
+                    console.warn('[GGSEL User Explorer] Не удалось предзагрузить товары заказов из кеша', error);
+                });
+            }
+        }
+        return true;
     };
 
     const getOrderStatusClass = (status) => {
@@ -2873,6 +3266,7 @@
         const { params, plan } = parseSearchInput(state.query, normalized);
         state.params = params;
         state.searchPlan = plan;
+        invalidateCacheHydration();
         state.page = 1;
         state.hasMore = false;
         state.results = [];
@@ -3549,6 +3943,24 @@
         return card;
     };
 
+    const shouldAutoCollapseOnOrderOpen = () => Boolean(state.settings?.autoCollapseOnOrderOpen);
+
+    const navigateToOrder = (url, { newTab = false } = {}) => {
+        if (!url) {
+            return;
+        }
+        const autoCollapse = shouldAutoCollapseOnOrderOpen();
+        if (autoCollapse) {
+            saveResultsCache();
+            closePanel();
+        }
+        if (newTab) {
+            window.open(url, '_blank');
+            return;
+        }
+        window.location.href = url;
+    };
+
     const renderOrderCard = (order) => {
         const card = document.createElement('div');
         card.className = 'ggsel-user-card ggsel-order-card';
@@ -3574,21 +3986,29 @@
         title.textContent = collapseSpaces(order.offerTitle || order.offerLabel) || 'Заказ';
         titleGroup.appendChild(title);
 
-        const badgePriority = [
-            ['order-id', 'Совпадение ID заказа'],
-            ['order-uuid', 'Совпадение UUID заказа'],
-            ['order-email', 'Совпадение email'],
-            ['seller-id', 'Совпадение ID продавца'],
-            ['order-seller', 'Совпадение продавца'],
-            ['user-id', 'Совпадение ID пользователя'],
-            ['order-username', 'Совпадение покупателя']
+        const badgeDefinitions = [
+            { tag: 'order-id', label: 'Совпадение ID заказа' },
+            { tag: 'order-uuid', label: 'Совпадение UUID заказа' },
+            { tag: 'order-email', label: 'Совпадение email' },
+            { tag: 'seller-id', label: 'Совпадение ID продавца' },
+            { tag: 'order-seller', label: 'Совпадение продавца' },
+            { tag: 'user-id', label: 'Совпадение ID пользователя' },
+            { tag: 'order-username', label: 'Совпадение покупателя' }
         ];
-        const badgeEntry = badgePriority.find(([tag]) => matchTags.has(tag));
-        if (badgeEntry) {
-            const badge = document.createElement('span');
-            badge.className = 'ggsel-order-card-badge';
-            badge.textContent = badgeEntry[1];
-            titleGroup.appendChild(badge);
+        const activeBadges = badgeDefinitions.filter(({ tag }) => matchTags.has(tag));
+        if (activeBadges.length) {
+            const badgesWrap = document.createElement('div');
+            badgesWrap.className = 'ggsel-order-card-badges';
+            activeBadges.forEach(({ tag, label }) => {
+                const badge = document.createElement('span');
+                badge.className = 'ggsel-order-card-badge';
+                if (tag) {
+                    badge.classList.add(`ggsel-order-card-badge--${tag}`);
+                }
+                badge.textContent = label;
+                badgesWrap.appendChild(badge);
+            });
+            titleGroup.appendChild(badgesWrap);
         }
 
         const idWrap = document.createElement('div');
@@ -3688,7 +4108,7 @@
 
         const openOrder = () => {
             if (order.orderUrl) {
-                window.location.href = order.orderUrl;
+                navigateToOrder(order.orderUrl);
             }
         };
 
@@ -3881,8 +4301,9 @@
                     type: 'action',
                     label: 'Перезагрузить результаты',
                     handler: () => {
+                        invalidateCacheHydration();
                         onQueryChange.flush?.();
-                        performSearch({ append: false });
+                        performSearch({ append: false, force: true });
                     }
                 });
             }
@@ -4033,14 +4454,14 @@
                     type: 'action',
                     label: 'Перейти к заказу',
                     handler: () => {
-                        window.location.href = order.orderUrl;
+                        navigateToOrder(order.orderUrl);
                     }
                 });
                 items.push({
                     type: 'action',
                     label: 'Открыть заказ в новой вкладке',
                     handler: () => {
-                        window.open(order.orderUrl, '_blank');
+                        navigateToOrder(order.orderUrl, { newTab: true });
                     }
                 });
             }
@@ -4336,14 +4757,17 @@
         return url.toString();
     };
 
-    const performSearch = async ({ append = false } = {}) => {
+    const performSearch = async ({ append = false, force = false } = {}) => {
         const mode = state.mode || MODE_USERS;
         if (!state.query) {
+            clearResultsCache();
             state.resultsContainer.innerHTML = '';
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
             state.hasMore = false;
             state.loading = false;
+            state.results = [];
+            state.page = 1;
             updateResultsVisibility();
             return;
         }
@@ -4354,6 +4778,10 @@
         };
 
         if (plan.type !== 'single' && append) {
+            return;
+        }
+
+        if (!append && !force && maybeHydrateResultsFromCache()) {
             return;
         }
 
@@ -4422,6 +4850,7 @@
                     state.loadMoreButton.hidden = true;
                     state.loadMoreButton.disabled = true;
                 }
+                saveResultsCache({ results: state.results, page: state.page, hasMore: state.hasMore });
                 return;
             }
 
@@ -4515,6 +4944,7 @@
 
             state.loadMoreButton.hidden = true;
             state.loadMoreButton.disabled = true;
+            saveResultsCache({ results: state.results, page: state.page, hasMore: state.hasMore });
         } catch (error) {
             state.resultsContainer.innerHTML = '';
             const errorEl = document.createElement('div');
@@ -4539,13 +4969,14 @@
         const { params, plan } = parseSearchInput(state.query, state.mode);
         state.params = params;
         state.searchPlan = plan;
+        invalidateCacheHydration();
         localStorage.setItem(getQueryStorageKey(), state.query);
         state.page = 1;
         state.hasMore = false;
         state.detailCache.clear();
         updateSearchControlValueState();
         closeContextMenu();
-        performSearch({ append: false });
+        performSearch({ append: false, force: true });
     }, DEBOUNCE_MS);
 
     const restoreState = () => {
