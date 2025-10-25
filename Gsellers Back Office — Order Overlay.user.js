@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gsellers Back Office — Order Overlay (smart UI, emails, tech buttons, namespaced)
 // @namespace    vibe.gsellers.order.overlay
-// @version      1.1.3
-// @description  Скрывает старый интерфейс заказа, собирает данные и рисует компактный «умный» оверлей. Последние изменения: добавлен разбор типа возврата и уточнённый сбор данных товара.
+// @version      1.1.4
+// @description  Скрывает старый интерфейс заказа, показывает компактный «умный» оверлей с быстрыми действиями. Последние изменения: увеличено название товара, улучшены кликабельные подписи и добавлено редактирование отзывов.
 // @author       vibe
 // @match        *://back-office.ggsel.net/admin/orders/*
 // @match        *://*/admin/orders/*
@@ -90,11 +90,94 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
       setTimeout(() => target.classList.remove('vui-isCopied'), 900);
     }
   };
+  const getCsrfFromMeta = () => {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : null;
+  };
+  const getCsrfFromAnyForm = () => {
+    const input = document.querySelector('input[name="authenticity_token"]');
+    return input ? input.value : null;
+  };
+  const fetchCsrfFromEditPage = async (userId, reviewId) => {
+    if (!userId || !reviewId) return null;
+    const url = `/admin/users/${encodeURIComponent(userId)}/reviews/${encodeURIComponent(reviewId)}/edit`;
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const match = html.match(/name="authenticity_token"\s+value="([^"]+)"/);
+    return match ? match[1] : null;
+  };
+  const getCsrfToken = async ({ userId, reviewId } = {}) => (
+    getCsrfFromMeta()
+    || getCsrfFromAnyForm()
+    || (userId && reviewId ? await fetchCsrfFromEditPage(userId, reviewId) : null)
+  );
+  const patchReview = async ({ userId, reviewId, text, score, status }) => {
+    if (!userId || !reviewId) throw new Error('userId и reviewId обязательны');
+    const csrf = await getCsrfToken({ userId, reviewId });
+    if (!csrf) throw new Error('Не удалось получить CSRF токен');
+    const url = `/admin/users/${encodeURIComponent(userId)}/reviews/${encodeURIComponent(reviewId)}`;
+    const params = new URLSearchParams();
+    params.set('authenticity_token', csrf);
+    params.set('_method', 'patch');
+    if (typeof text === 'string') params.set('resource[text]', text);
+    if (typeof score !== 'undefined') params.set('resource[score]', String(score));
+    if (typeof status !== 'undefined') params.set('resource[status]', status);
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'X-CSRF-Token': csrf,
+      },
+      body: params.toString(),
+      redirect: 'manual',
+    });
+    if (res.status !== 200 && res.status !== 302) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Patch failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+    reviewDetailCache.delete(`${userId}:${reviewId}`);
+    return true;
+  };
+  const fetchReviewDetails = async ({ userId, reviewId, link }) => {
+    if (!userId || !reviewId) throw new Error('userId и reviewId обязательны');
+    const cacheKey = `${userId}:${reviewId}`;
+    if (reviewDetailCache.has(cacheKey)) return reviewDetailCache.get(cacheKey);
+    const targetUrl = link || `/admin/users/${encodeURIComponent(userId)}/reviews/${encodeURIComponent(reviewId)}`;
+    const res = await fetch(targetUrl, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`Не удалось получить страницу отзыва: ${res.status}`);
+    const html = await res.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    let status = '';
+    let score = '';
+    let text = '';
+    doc.querySelectorAll('tr').forEach((row) => {
+      const th = row.querySelector('th');
+      const td = row.querySelector('td');
+      if (!th || !td) return;
+      const label = th.textContent.trim();
+      const value = td.textContent.trim();
+      if (label === 'Статус') status = value;
+      if (label === 'Оценка' && !score) score = value;
+      if (label === 'Текст отзыва' && !text) text = value;
+    });
+    const textarea = doc.querySelector('textarea[name="resource[text]"]');
+    if (textarea) text = cleanMultiline(textarea.value);
+    const scoreInput = doc.querySelector('input[name="resource[score]"]');
+    if (scoreInput) score = scoreInput.value.trim();
+    const details = { status: status || '', score: score || '', text: text || '' };
+    reviewDetailCache.set(cacheKey, details);
+    return details;
+  };
   const profileCache = new Map();
   const chatCache = new Map();
   const productCache = new Map();
   const refundCache = new Map();
   const refundDetailCache = new Map();
+  const reviewDetailCache = new Map();
 
   let confirmModalInstance = null;
   let imageLightboxInstance = null;
@@ -624,12 +707,17 @@ html.${PREHIDE_CLASS} .wrapper{opacity:0!important;}
     const reviewLink = reviewLinkEl
       ? new URL(reviewLinkEl.getAttribute('href') || reviewLinkEl.href, location.origin).href
       : '';
+    const reviewIds = reviewLink.match(/\/users\/(\d+)\/reviews\/(\d+)/);
+    const reviewUserId = reviewIds ? reviewIds[1] : '';
+    const reviewId = reviewIds ? reviewIds[2] : '';
 
     const review = {
       text: rowValueByLabel(tblRev, 'Текст отзыва'),
       rating: rowValueByLabel(tblRev, 'Оценка'),
       date: rowValueByLabel(tblRev, 'Дата отзыва'),
       link: reviewLink,
+      userId: reviewUserId,
+      reviewId,
     };
     const reviewExists = !isEmptyVal(review.text) || !isEmptyVal(review.rating) || !isEmptyVal(review.date);
 
@@ -768,6 +856,8 @@ body.vui-lightboxOpen{overflow:hidden;}
 .vui-card,.vui-mini{border:1px solid var(--vui-line);border-radius:12px;background:var(--vui-card);color:var(--vui-text);}
 .vui-card__head,.vui-mini__head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px dashed #222;}
 .vui-card__body{padding:12px 14px;}
+.vui-card--review .vui-card__head{align-items:flex-start;gap:12px;}
+.vui-reviewButtons{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
 .vui-title{font-weight:700;}
 .vui-line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #1a1a1a;}
 .vui-line:last-child{border-bottom:0;}
@@ -775,6 +865,21 @@ body.vui-lightboxOpen{overflow:hidden;}
 .vui-mini__head{gap:12px;align-items:flex-start;}
 .vui-mini--seller{border-color:rgba(76,155,255,.6);box-shadow:0 0 0 1px rgba(76,155,255,.35);
 }
+.vui-reviewText{margin:6px 0 0;white-space:pre-wrap;}
+.vui-reviewDate{margin-top:6px;}
+.vui-field{display:flex;flex-direction:column;gap:6px;}
+.vui-fieldLabel{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--vui-muted);}
+.vui-fieldControl{width:100%;border-radius:6px;border:1px solid rgba(255,255,255,.16);background:var(--vui-line);color:var(--vui-text);padding:8px 10px;font:inherit;transition:border-color .2s ease,box-shadow .2s ease;background-clip:padding-box;}
+.vui-fieldControl:focus-visible{outline:none;border-color:rgba(76,155,255,.8);box-shadow:0 0 0 2px rgba(76,155,255,.35);}
+.vui-fieldControl::placeholder{color:rgba(234,234,234,.5);}
+.vui-fieldControl option{color:#000;background:#fff;}
+.vui-reviewForm{display:flex;flex-direction:column;gap:12px;margin-top:12px;}
+.vui-reviewFormGrid{display:flex;gap:12px;flex-wrap:wrap;}
+.vui-reviewFormGrid .vui-field{flex:1 1 160px;}
+.vui-reviewFormActions{display:flex;gap:10px;flex-wrap:wrap;}
+.vui-reviewMessage{min-height:18px;font-size:13px;color:var(--vui-muted);}
+.vui-reviewMessage.is-error{color:var(--vui-danger);}
+.vui-reviewMessage.is-success{color:var(--vui-ok);}
 .vui-avatar{width:40px;height:40px;border-radius:10px;background:#222;display:grid;place-items:center;font-weight:800;color:var(--vui-text);letter-spacing:.04em;}
 .vui-avatar--seller{background:rgba(76,155,255,.18);color:var(--vui-accent);}
 .vui-avatar--client{background:rgba(255,255,255,.05);}
@@ -785,15 +890,14 @@ body.vui-lightboxOpen{overflow:hidden;}
 .vui-copyable{border:none;background:transparent;color:inherit;font:inherit;padding:0;cursor:pointer;text-align:left;position:relative;transition:color .2s ease;}
 .vui-copyable:hover{color:var(--vui-accent);}
 .vui-copyable:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
-.vui-productTitle{color:var(--vui-text);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;display:inline-flex;align-items:center;gap:6px;}
-.vui-productTitleText{color:var(--vui-text);display:inline-flex;align-items:center;gap:6px;font-weight:700;}
+.vui-productTitle,.vui-productTitleText{color:var(--vui-text);display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:20px;line-height:1.3;}
+.vui-productTitle{text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px;transition:color .2s ease,border-color .2s ease;}
 .vui-productTitle:hover{color:var(--vui-accent);border-color:var(--vui-accent);}
 .vui-productTitle:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
-.vui-linkAction{cursor:pointer;color:inherit;text-decoration:none;position:relative;display:inline-flex;align-items:center;gap:4px;padding-bottom:2px;}
-.vui-linkAction::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;background:transparent;transition:background .2s ease;}
-.vui-linkAction:hover{color:var(--vui-accent);}
-.vui-linkAction:hover::after{background:var(--vui-accent);}
-.vui-linkAction:focus-visible{outline:2px solid var(--vui-accent);outline-offset:2px;}
+.vui-linkAction{cursor:pointer;color:var(--vui-accent);text-decoration:none;display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:6px;box-shadow:0 0 0 1px rgba(76,155,255,.35);transition:color .2s ease,box-shadow .2s ease,background .2s ease;}
+.vui-linkAction:hover{color:#fff;box-shadow:0 0 0 1px rgba(76,155,255,.7);background:rgba(76,155,255,.12);}
+.vui-linkAction:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(76,155,255,.9);background:rgba(76,155,255,.18);color:#fff;}
+.vui-muted.vui-linkAction{color:var(--vui-accent);opacity:.9;}
 .vui-badge{padding:.15rem .4rem;border:1px solid #2a2a2a;border-radius:8px;color:var(--vui-text);}
 .vui-badge.ip{cursor:pointer;}
 .vui-copyable.vui-isCopied{color:var(--vui-accent);text-shadow:0 0 10px rgba(76,155,255,.4);}
@@ -964,6 +1068,214 @@ body.vui-lightboxOpen{overflow:hidden;}
       event.stopPropagation();
     };
     box.addEventListener('touchmove', touchHandler, { passive: false });
+  }
+
+  function setupReviewEditor(wrap, reviewData = {}) {
+    const card = wrap?.querySelector('[data-review-card]');
+    if (!card) return;
+    const userId = card.getAttribute('data-review-user-id') || '';
+    const reviewId = card.getAttribute('data-review-id') || '';
+    const reviewLink = card.getAttribute('data-review-link') || '';
+    const viewBlock = card.querySelector('[data-review-view]');
+    const statusLine = card.querySelector('[data-review-status-line]');
+    const statusValue = card.querySelector('[data-review-status-value]');
+    const ratingLine = card.querySelector('[data-review-rating-line]');
+    const ratingValue = card.querySelector('[data-review-rating]');
+    const textEl = card.querySelector('[data-review-text]');
+    const emptyEl = card.querySelector('[data-review-empty]');
+    const form = card.querySelector('[data-review-form]');
+    const textarea = card.querySelector('[data-review-input-text]');
+    const scoreInput = card.querySelector('[data-review-input-score]');
+    const statusSelect = card.querySelector('[data-review-input-status]');
+    const messageEl = card.querySelector('[data-review-message]');
+    const editBtn = card.querySelector('[data-review-edit]');
+    const cancelBtn = card.querySelector('[data-review-cancel]');
+    const saveBtn = card.querySelector('[data-review-save]');
+
+    if (!userId || !reviewId || !form || !editBtn || !textarea || !scoreInput || !statusSelect || !saveBtn) {
+      return;
+    }
+
+    const normalizeScore = (value) => {
+      if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+      const match = String(value || '').match(/-?\d+(?:[.,]\d+)?/);
+      return match ? match[0].replace(',', '.') : '';
+    };
+    const toDisplayScore = (value) => {
+      const normalized = normalizeScore(value);
+      return normalized ? `${normalized}★` : '';
+    };
+    const cleanTextValue = (value) => cleanMultiline(value || '');
+    const ensureStatusOption = (value) => {
+      if (!statusSelect || !value) return;
+      const exists = Array.from(statusSelect.options || []).some(opt => opt.value === value);
+      if (!exists) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        statusSelect.appendChild(option);
+      }
+    };
+
+    let currentText = cleanTextValue(reviewData?.text || textarea.value || '');
+    let currentScore = normalizeScore(card.getAttribute('data-review-initial-score') || reviewData?.rating || scoreInput.value || '');
+    let currentStatus = '';
+    let isSubmitting = false;
+
+    const setSubmittingState = (state) => {
+      isSubmitting = state;
+      if (saveBtn) saveBtn.disabled = state;
+      if (cancelBtn) cancelBtn.disabled = state;
+    };
+
+    const setMessage = (value, type) => {
+      if (!messageEl) return;
+      messageEl.textContent = value || '';
+      messageEl.classList.remove('is-error', 'is-success');
+      if (!value) return;
+      if (type === 'error') messageEl.classList.add('is-error');
+      else if (type === 'success') messageEl.classList.add('is-success');
+    };
+    const clearMessage = () => setMessage('');
+
+    const updateView = ({ text, score, status } = {}) => {
+      if (typeof text === 'string') currentText = cleanTextValue(text);
+      if (typeof score !== 'undefined') currentScore = normalizeScore(score);
+      if (typeof status === 'string') currentStatus = status.trim();
+
+      if (statusLine && statusValue) {
+        if (currentStatus) {
+          statusLine.style.display = '';
+          statusValue.textContent = currentStatus;
+        } else {
+          statusLine.style.display = 'none';
+          statusValue.textContent = '';
+        }
+      }
+      if (ratingLine && ratingValue) {
+        const displayScore = toDisplayScore(currentScore);
+        if (displayScore) {
+          ratingLine.style.display = '';
+          ratingValue.textContent = displayScore;
+        } else {
+          ratingLine.style.display = 'none';
+          ratingValue.textContent = '';
+        }
+      }
+      if (textEl) {
+        if (currentText) {
+          textEl.style.display = '';
+          textEl.textContent = currentText;
+        } else {
+          textEl.textContent = '';
+          textEl.style.display = 'none';
+        }
+      }
+      if (emptyEl) {
+        const hasMeaningful = Boolean(currentText || toDisplayScore(currentScore) || currentStatus);
+        emptyEl.style.display = hasMeaningful ? 'none' : '';
+      }
+      if (viewBlock) {
+        viewBlock.style.display = '';
+      }
+    };
+
+    const fillFormFromCurrent = () => {
+      textarea.value = currentText;
+      scoreInput.value = currentScore;
+      ensureStatusOption(currentStatus);
+      statusSelect.value = currentStatus;
+    };
+
+    const toggleForm = (show) => {
+      if (!form) return;
+      if (show) {
+        if (viewBlock) viewBlock.style.display = 'none';
+        if (emptyEl) emptyEl.style.display = 'none';
+        form.style.display = '';
+      } else {
+        if (viewBlock) viewBlock.style.display = '';
+        form.style.display = 'none';
+        updateView();
+      }
+    };
+
+    const ensureDetails = async (showLoadingMessage = false) => {
+      if (card.dataset.reviewLoaded === '1') return;
+      try {
+        if (showLoadingMessage) setMessage('Загружаем данные отзыва…');
+        const details = await fetchReviewDetails({ userId, reviewId, link: reviewLink });
+        card.dataset.reviewLoaded = '1';
+        currentStatus = details.status || '';
+        currentScore = normalizeScore(details.score || currentScore);
+        currentText = cleanTextValue(details.text || currentText);
+        ensureStatusOption(currentStatus);
+        fillFormFromCurrent();
+        updateView();
+        clearMessage();
+      } catch (error) {
+        setMessage(error && error.message ? error.message : 'Не удалось загрузить отзыв', 'error');
+        throw error;
+      }
+    };
+
+    const handleSubmit = async (event) => {
+      event.preventDefault();
+      if (isSubmitting) return;
+      setSubmittingState(true);
+      clearMessage();
+      setMessage('Сохраняем…');
+      const nextText = cleanTextValue(textarea.value);
+      const nextScore = normalizeScore(scoreInput.value);
+      const nextStatus = statusSelect.value.trim();
+      try {
+        await patchReview({
+          userId,
+          reviewId,
+          text: nextText,
+          score: nextScore,
+          status: nextStatus,
+        });
+        currentText = nextText;
+        currentScore = nextScore;
+        currentStatus = nextStatus;
+        reviewData.text = nextText;
+        reviewData.rating = nextScore;
+        reviewData.status = nextStatus;
+        fillFormFromCurrent();
+        updateView();
+        toggleForm(false);
+        setMessage('Отзыв обновлён', 'success');
+      } catch (error) {
+        setMessage(error && error.message ? error.message : 'Не удалось обновить отзыв', 'error');
+      } finally {
+        setSubmittingState(false);
+      }
+    };
+
+    editBtn.addEventListener('click', () => {
+      clearMessage();
+      fillFormFromCurrent();
+      toggleForm(true);
+      ensureDetails(true).catch(() => {});
+      requestAnimationFrame(() => {
+        textarea.focus();
+      });
+    });
+
+    cancelBtn?.addEventListener('click', () => {
+      clearMessage();
+      fillFormFromCurrent();
+      toggleForm(false);
+    });
+
+    form.addEventListener('submit', handleSubmit);
+
+    if (userId && reviewId) {
+      ensureDetails().catch(() => {});
+    }
+
+    updateView();
   }
 
   function loadProfileSections(data, wrap) {
@@ -1538,16 +1850,69 @@ body.vui-lightboxOpen{overflow:hidden;}
     const reviewTitleMarkup = hasReviewLink
       ? `<a class="vui-linkAction" href="${esc(data.review.link)}" target="_blank" rel="noopener noreferrer">Отзывы</a>`
       : 'Отзывы';
-    const reviewBodyMarkup = data.reviewExists
+    const initialReviewScore = (() => {
+      if (isEmptyVal(data.review?.rating)) return '';
+      const match = String(data.review.rating).match(/-?\d+(?:[.,]\d+)?/);
+      return match ? match[0].replace(',', '.') : '';
+    })();
+    const reviewButtonsMarkup = (hasReviewLink || (data.review.userId && data.review.reviewId))
+      ? `<div class="vui-reviewButtons">
+          ${hasReviewLink ? `<a class="vui-btn vui-btn--ghost" data-review-open href="${esc(data.review.link)}" target="_blank" rel="noopener noreferrer">Отзыв</a>` : ''}
+          ${(data.review.userId && data.review.reviewId) ? '<button class="vui-btn vui-btn--ghost" type="button" data-review-edit>Редактировать</button>' : ''}
+        </div>`
+      : '';
+    const reviewViewMarkup = `
+          <div class="vui-reviewView" data-review-view>
+            ${safe(data.review.rating) ? `<div class="vui-line" data-review-rating-line><span>Оценка</span><b data-review-rating>${esc(data.review.rating)}</b></div>` : ''}
+            <div class="vui-line" data-review-status-line style="display:none;"><span>Статус</span><b data-review-status-value></b></div>
+            ${safe(data.review.text) ? `<p class="vui-reviewText" data-review-text>${esc(data.review.text)}</p>` : ''}
+            ${safe(data.review.date) ? `<div class="vui-muted vui-reviewDate" data-review-date>${esc(data.review.date)}</div>` : ''}
+          </div>
+          ${data.reviewExists ? '' : '<div class="vui-empty" data-review-empty>Отзыв отсутствует.</div>'}`;
+    const reviewFormMarkup = (data.review.userId && data.review.reviewId)
       ? `
-          ${safe(data.review.rating) ? `<div class="vui-line"><span>Оценка</span><b>${data.review.rating}★</b></div>` : ''}
-          ${safe(data.review.text) ? `<p style="margin:6px 0 0">${data.review.text}</p>` : ''}
-          ${safe(data.review.date) ? `<div class="vui-muted" style="margin-top:6px">${data.review.date}</div>` : ''}`
-      : '<div class="vui-empty">Отзыв отсутствует.</div>';
-    const reviewCardMarkup = (data.reviewExists || hasReviewLink)
+          <form class="vui-reviewForm" data-review-form style="display:none;">
+            <label class="vui-field">
+              <span class="vui-fieldLabel">Текст</span>
+              <textarea class="vui-fieldControl" rows="5" data-review-input-text>${safe(data.review.text) ? esc(cleanMultiline(data.review.text)) : ''}</textarea>
+            </label>
+            <div class="vui-reviewFormGrid">
+              <label class="vui-field">
+                <span class="vui-fieldLabel">Оценка</span>
+                <input class="vui-fieldControl" type="number" min="0" max="5" step="1" data-review-input-score value="${esc(initialReviewScore)}">
+              </label>
+              <label class="vui-field">
+                <span class="vui-fieldLabel">Статус</span>
+                <select class="vui-fieldControl" data-review-input-status>
+                  <option value="">—</option>
+                  <option value="hidden">hidden</option>
+                  <option value="published">published</option>
+                </select>
+              </label>
+            </div>
+            <div class="vui-reviewFormActions">
+              <button class="vui-btn vui-btn--primary" type="submit" data-review-save>Сохранить</button>
+              <button class="vui-btn vui-btn--ghost" type="button" data-review-cancel>Отмена</button>
+            </div>
+            <div class="vui-reviewMessage" data-review-message role="status" aria-live="polite"></div>
+          </form>`
+      : '';
+    const reviewBodyMarkup = `${reviewViewMarkup}${reviewFormMarkup}`;
+    const reviewCardAttrs = [
+      'class="vui-card vui-card--review"',
+      'data-review-card',
+      `data-review-user-id="${esc(data.review.userId || '')}"`,
+      `data-review-id="${esc(data.review.reviewId || '')}"`,
+      `data-review-link="${esc(data.review.link || '')}"`,
+      `data-review-initial-score="${esc(initialReviewScore)}"`
+    ].join(' ');
+    const reviewCardMarkup = (data.reviewExists || hasReviewLink || (data.review.userId && data.review.reviewId))
       ? `
-          <article class="vui-card">
-            <header class="vui-card__head"><div class="vui-title">${reviewTitleMarkup}</div></header>
+          <article ${reviewCardAttrs}>
+            <header class="vui-card__head">
+              <div class="vui-title">${reviewTitleMarkup}</div>
+              ${reviewButtonsMarkup}
+            </header>
             <div class="vui-card__body">${reviewBodyMarkup}</div>
           </article>`
       : '';
@@ -1671,6 +2036,7 @@ body.vui-lightboxOpen{overflow:hidden;}
 
     setupProfileToggles(wrap);
     setupChatScrollLock(wrap);
+    setupReviewEditor(wrap, data.review || {});
     // copy handlers
     const ipBadge = wrap.querySelector('.vui-badge.ip');
     if (ipBadge) {
